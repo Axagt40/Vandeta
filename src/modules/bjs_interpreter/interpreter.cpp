@@ -10,6 +10,8 @@ extern "C" {
 
 #include "display_js.h"
 #include "globals_js.h"
+#include "net_spoof_js.h"
+#include "script_folder_js.h"
 
 char *script = NULL;
 char *scriptDirpath = NULL;
@@ -107,6 +109,12 @@ void interpreterHandler(void *pvParameters) {
     js_timers_deinit(ctx);
     JS_FreeContext(ctx);
     free(mem_buf);
+
+    // Background scriptFolder jobs first (they may still be driving the MITM
+    // engine), then the engine itself so the ARP tables are restored before
+    // the interpreter disappears.
+    scriptfolder_cleanup();
+    netspoof_js_cleanup();
 
     // Drop any promiscuous capture state a script left behind.
     wifi_js_cleanup();

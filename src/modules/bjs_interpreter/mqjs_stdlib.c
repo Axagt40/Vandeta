@@ -558,6 +558,62 @@ static const JSPropDef js_wifi[] = {
 
 const JSClassDef js_wifi_obj = JS_OBJECT_DEF("WiFi", js_wifi);
 
+/* ARP spoofing (custom): two-way poison between a target and the gateway. */
+static const JSPropDef js_arpSpoof[] = {
+    JS_CFUNC_DEF("start", 2, native_arpSpoofStart),
+    JS_CFUNC_DEF("stop", 0, native_arpSpoofStop),
+    JS_CFUNC_DEF("getStatus", 0, native_arpSpoofGetStatus),
+    JS_CFUNC_DEF("getTargets", 1, native_arpSpoofGetTargets),
+    JS_PROP_END,
+};
+
+const JSClassDef js_arpSpoof_obj = JS_OBJECT_DEF("ArpSpoof", js_arpSpoof);
+
+/* DNS spoofing (custom): answers the intercepted queries from a rule table. */
+static const JSPropDef js_dnsSpoof[] = {
+    JS_CFUNC_DEF("start", 2, native_dnsSpoofStart),
+    JS_CFUNC_DEF("startAll", 2, native_dnsSpoofStartAll),
+    JS_CFUNC_DEF("stop", 0, native_dnsSpoofStop),
+    JS_CFUNC_DEF("getStatus", 0, native_dnsSpoofGetStatus),
+    JS_CFUNC_DEF("clearRules", 0, native_dnsSpoofClearRules),
+    JS_PROP_END,
+};
+
+const JSClassDef js_dnsSpoof_obj = JS_OBJECT_DEF("DnsSpoof", js_dnsSpoof);
+
+/* Plain HTTP interception / modification (custom). */
+static const JSPropDef js_httpInterceptor[] = {
+    JS_CFUNC_DEF("start", 0, native_httpInterceptorStart),
+    JS_CFUNC_DEF("stop", 0, native_httpInterceptorStop),
+    JS_CFUNC_DEF("addRedirect", 2, native_httpInterceptorAddRedirect),
+    JS_CFUNC_DEF("addInjection", 2, native_httpInterceptorAddInjection),
+    JS_CFUNC_DEF("clearRules", 0, native_httpInterceptorClearRules),
+    JS_CFUNC_DEF("getInterceptedData", 1, native_httpInterceptorGetInterceptedData),
+    JS_PROP_END,
+};
+
+const JSClassDef js_httpInterceptor_obj = JS_OBJECT_DEF("HttpInterceptor", js_httpInterceptor);
+
+/* Script folder management + background scripts (custom). */
+static const JSPropDef js_scriptFolder[] = {
+    JS_CFUNC_DEF("create", 1, native_scriptFolderCreate),
+    JS_CFUNC_DEF("list", 1, native_scriptFolderList),
+    JS_CFUNC_DEF("load", 1, native_scriptFolderLoad),
+    JS_CFUNC_DEF("run", 2, native_scriptFolderRun),
+    JS_CFUNC_DEF("close", 1, native_scriptFolderClose),
+    JS_CFUNC_DEF("isRunning", 1, native_scriptFolderIsRunning),
+    JS_CFUNC_DEF("getAllScripts", 0, native_scriptFolderGetAllScripts),
+    JS_CFUNC_DEF("stop", 1, native_scriptFolderStop),
+    JS_CFUNC_DEF("kill", 1, native_scriptFolderKill),
+    /* extras: shared state so split scripts in separate contexts can exchange data */
+    JS_CFUNC_DEF("setShared", 2, native_scriptFolderSetShared),
+    JS_CFUNC_DEF("getShared", 1, native_scriptFolderGetShared),
+    JS_CFUNC_DEF("clearShared", 0, native_scriptFolderClearShared),
+    JS_PROP_END,
+};
+
+const JSClassDef js_scriptFolder_obj = JS_OBJECT_DEF("ScriptFolder", js_scriptFolder);
+
 /* Mic module */
 static const JSPropDef js_mic[] = {
     JS_CFUNC_DEF("recordWav", 2, native_micRecordWav),
@@ -892,6 +948,10 @@ static const JSPropDef js_global_object[] = {
     JS_PROP_CLASS_DEF("nrf24", &js_nrf24_obj),
     JS_PROP_CLASS_DEF("led", &js_led_obj),
     JS_PROP_CLASS_DEF("menu", &js_menu_obj),
+    JS_PROP_CLASS_DEF("arpSpoof", &js_arpSpoof_obj),
+    JS_PROP_CLASS_DEF("dnsSpoof", &js_dnsSpoof_obj),
+    JS_PROP_CLASS_DEF("httpInterceptor", &js_httpInterceptor_obj),
+    JS_PROP_CLASS_DEF("scriptFolder", &js_scriptFolder_obj),
 
     // MUST BE IN THE SAME ORDER AS IN THE user_classes_js FILE they cannot be guarded by #ifdef LITE_VERSION
     JS_PROP_CLASS_DEF("TimersState", &js_timers_state_class),

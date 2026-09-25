@@ -1,23 +1,24 @@
 ![Bruce-Modded on the LilyGo T-Embed CC1101](./media/pictures/bruce_banner.jpg)
 
-# Bruce-Modded — Dev 1.0
+# Bruce-Modded — Dev 1.1
 
 **Stock Bruce, with the WiFi radio handed to JavaScript.**
 
 Scriptable deauth & beacon-spam · raw 802.11 frame injection · promiscuous
-packet capture · captive-portal (evil-twin) engine · headless BLE spam — all
-driven from the on-device JavaScript interpreter.
+packet capture · captive-portal (evil-twin) engine · headless BLE spam · **ARP
+spoofing, DNS spoofing and HTTP interception that work on WPA2** · split scripts
+and background jobs — all driven from the on-device JavaScript interpreter.
 
 Built and tested on the **LilyGo T-Embed CC1101** (ESP32-S3, 16 MB flash /
 8 MB PSRAM).
 
-![firmware](https://img.shields.io/badge/firmware-Dev%201.0-blue)
+![firmware](https://img.shields.io/badge/firmware-Dev%201.1-blue)
 ![board](https://img.shields.io/badge/board-LilyGo%20T--Embed%20CC1101-informational)
 ![mcu](https://img.shields.io/badge/MCU-ESP32--S3-success)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-orange)
 
 [Flash it](#flashing-the-release-image) ·
-[What's new](#whats-new-in-dev-10) ·
+[What's new](#whats-new-in-dev-11) ·
 [JavaScript API](#javascript-api) ·
 [Build it](#building-from-source) ·
 [Limitations](#known-limitations)
@@ -35,8 +36,38 @@ as **functions a script calls**, adds a raw 802.11 transmit path, a promiscuous
 capture engine and a captive-portal engine, and then makes the interpreter safe
 against the JS engine's moving garbage collector.
 
-> **Status:** Dev 1.0, based on upstream `main` @ `a59213f3` (2026-09-24).
+> **Status:** Dev 1.1, based on upstream `main` @ `a59213f3` (2026-09-24).
 > Only the LilyGo T-Embed CC1101 target is built and tested.
+
+---
+
+## What's new in Dev 1.1
+
+### Protected networks, at last
+
+Dev 1.0 could only forge frames onto open networks — a WPA2 client drops a data
+frame it cannot verify with its pairwise key. Dev 1.1 sends its frames on the
+**associated station interface** instead, so the hardware encrypts them with the
+association key on the way out. That is the same path Bruce's own NetCut menu
+already used, and it is what makes the interception below work on WPA2/WPA3.
+
+| # | Change | Detail |
+|---|--------|--------|
+| 11 | **ARP spoofing** | `arpSpoof.*` — two-way poison pairs re-sent every 250 ms by a service task, plus ARP-scan target discovery |
+| 12 | **DNS spoofing** | `dnsSpoof.*` — a rule table matched against intercepted UDP/53 A-record queries and answered from the board with the client's own transaction id and ports |
+| 13 | **HTTP interception** | `httpInterceptor.*` — captures plain-HTTP requests (ports 80/8080) and answers them with a forged 302 or an injected page; `getInterceptedData()` returns the request ring |
+| 14 | **Script folders and background scripts** | `scriptFolder.*` — create/list/load/run/close, split a script into parts that share globals, run jobs in their own context and FreeRTOS task (`stop`/`kill`), plus a string shared store |
+| 15 | **Boot version** | The splash screen now reads **Bruce / dev 1.1** |
+
+Verified on the device against a real client on a real WPA2/WPA3 network: the
+board joined the network as a station, poisoned the target, answered its DNS
+lookups from the board and replaced its plain-HTTP pages — the target's browser
+rendered the forged page.
+
+> The interception is **not** transparent. The ESP32 cannot forward or NAT, so a
+> poisoned target loses its real internet path while the attack runs, and only
+traffic that ends at this board can be intercepted. Read
+> [known limitations](#known-limitations) first.
 
 ---
 
@@ -66,10 +97,10 @@ stock Bruce already exposed. Signatures: [JavaScript API](#javascript-api).
 
 ## Flashing the release image
 
-**Download:** the prebuilt image is attached to the
-[**Dev 1.0 release**](https://github.com/Axagt40/Bruce-Modded/releases/tag/dev-1.0)
-(`Bruce-modded.bin` + `Bruce-modded.bin.sha256`) and is also committed at the
-repository root.
+**Download:** `Bruce-modded.bin` + `Bruce-modded.bin.sha256` are committed at the
+repository root (4,362,480 bytes, sha256 `a68e5e9f…cc2f4`). The previous image is
+still attached to the
+[**Dev 1.0 release**](https://github.com/Axagt40/Bruce-Modded/releases/tag/dev-1.0).
 
 The image is **merged** (bootloader + partition table + app) and **must be
 flashed at offset `0x0`**.
@@ -92,7 +123,7 @@ esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 921600 \
 * To go back to stock Bruce or a Launcher install, flash that project's merged
   image at `0x0` the same way, after an `erase_flash`.
 
-First boot shows **Bruce** with **Dev 1.0** underneath.
+First boot shows **Bruce** with **dev 1.1** underneath.
 
 ---
 
@@ -131,6 +162,10 @@ wifi.injectPacket("80000000ffffffffffffaabbccddeeffaabbccddeeff0000", 6);
 | `wifi.portal(ssid, channel?, options?)` | `object` |
 | `wifi.packetInfo(hex)` | `object` |
 | `wifi.injectDns(...)` `wifi.injectHttp(...)` `wifi.injectHttpRedirect(...)` `wifi.injectHtml(...)` | `object` |
+| `arpSpoof.start(targetIP, gatewayIP?)` / `stop()` / `getStatus()` / `getTargets(rescan?)` | `object` |
+| `dnsSpoof.start(domain, ip)` / `startAll(pattern, ip)` / `stop()` / `getStatus()` / `clearRules()` | `object` |
+| `httpInterceptor.start()` / `stop()` / `addRedirect(pattern, url)` / `addInjection(pattern, html)` / `clearRules()` / `getInterceptedData(clear?)` | `object` |
+| `scriptFolder.create/list/load/run/close/isRunning/getAllScripts/stop/kill` + `setShared/getShared/clearShared` | `object` |
 | `ble.spam(type?, seconds?)` / `ble.spamModes()` | `number` / `array` |
 | `ir.transmitRaw(frequency, rawData)` | `boolean` |
 | `subghz.scan(startFreq?, stopFreq?, maxLoops?)` | `string` |
@@ -140,6 +175,25 @@ wifi.injectPacket("80000000ffffffffffffaabbccddeeffaabbccddeeff0000", 6);
 `test.js` in the repository root is a smoke test for the raw-injection and
 capture bindings: it prints one `PASS`/`FAIL` line per binding to the serial
 console, and its header doubles as a worked example.
+
+### Intercepting a client on a WPA2/WPA3 network
+
+```js
+wifi.connect("MyNetwork", 20, "password");
+arpSpoof.start("192.168.1.50");                 // two-way poison, re-sent every 250 ms
+dnsSpoof.startAll("*", wifi.getIPAddress());    // answer every lookup with this board
+httpInterceptor.addInjection("*", "<h1>Intercepted</h1>");
+httpInterceptor.start();
+delay(60000);                                   // the browse window
+httpInterceptor.stop(); dnsSpoof.stop(); arpSpoof.stop();
+```
+
+The client has to reach *this* board for there to be anything to answer: the
+poisoned DNS answer is what points it here, and something must be listening on
+the port it uses — start Bruce's own web UI from the serial console with `webui`
+while the script runs. Plain HTTP only: a browser that upgrades an `http://`
+address to HTTPS fails (there is no TLS listener), and a client with Private DNS
+(DoT) on never reaches the spoofer at all.
 
 ### Running a script
 
@@ -161,6 +215,24 @@ be fixed. Read them before filing an issue.
 * **Application-layer injection only lands on OPEN / WEP networks.** On
   WPA2/WPA3 the client's radio requires the frame to be encrypted with its
   pairwise key, so a forged plaintext data frame is dropped at the radio.
+  Dev 1.1's `arpSpoof`/`dnsSpoof`/`httpInterceptor` are the exception: they
+  transmit on the associated station interface, so they work on WPA2/WPA3.
+* **The interception cannot forward.** A poisoned target loses its real path to
+  the internet while the attack runs - its traffic arrives at the board and is
+  answered (or dropped) there. There is no NAT and no relaying.
+* **Only traffic that ends at the board can be intercepted.** There is no TCP
+  handshake handling and no routing, so a request to any other address is
+  dropped unanswered and the client never sends anything to intercept. Poison
+  the pair, answer DNS with the board's own address, and keep a listener on the
+  port the client uses (Bruce's web UI on port 80 is enough).
+* **Plain HTTP only** (ports 80/8080) and **DNS A records over UDP/53 only**. A
+  client using Private DNS (DoT/DoH) bypasses the DNS spoofer completely, and a
+  browser that upgrades `http://` to HTTPS shows nothing — test with an
+  IP-literal `http://` URL to see the injection.
+* **The interception lives inside a single script run**: the engine is torn down
+  and the ARP tables restored when the script ends.
+* **An injected page must fit one ethernet frame** (roughly 1300 bytes of body);
+  longer content is trimmed so `Content-Length` stays truthful.
 * **Forged TCP/DNS must match the live conversation** (ports, TCP seq/ack, DNS
   transaction id) or the victim's stack discards it silently. Capture →
   `wifi.packetInfo()` → inject with the captured values.
