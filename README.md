@@ -97,10 +97,11 @@ stock Bruce already exposed. Signatures: [JavaScript API](#javascript-api).
 
 ## Flashing the release image
 
-**Download:** `Bruce-modded.bin` + `Bruce-modded.bin.sha256` are committed at the
-repository root (4,362,480 bytes, sha256 `a68e5e9f…cc2f4`). The previous image is
-still attached to the
-[**Dev 1.0 release**](https://github.com/Axagt40/Bruce-Modded/releases/tag/dev-1.0).
+**Download:** the prebuilt image is attached to the
+[**Dev 1.1 release**](https://github.com/Axagt40/Bruce-Modded/releases/tag/dev-1.1)
+(`Bruce-modded.bin` — 4,362,480 bytes, sha256 `a68e5e9f…cc2f4` — plus its
+`.sha256`) and is also committed at the repository root. The Dev 1.0 image stays
+available on the [Dev 1.0 release](https://github.com/Axagt40/Bruce-Modded/releases/tag/dev-1.0).
 
 The image is **merged** (bootloader + partition table + app) and **must be
 flashed at offset `0x0`**.
