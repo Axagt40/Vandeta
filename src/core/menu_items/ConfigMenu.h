@@ -22,6 +22,7 @@ private:
     void powerMenu(void);
     void pinsMenu(void);
     void devMenu(void);
+    void usbDebugMenu(void);
 
     // Helper methods for complex operations
     void switchToUSBSerial(void);

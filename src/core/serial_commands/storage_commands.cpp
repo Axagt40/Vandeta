@@ -1,5 +1,6 @@
 #include "storage_commands.h"
 #include "core/sd_functions.h"
+#include "core/usb_debug/usbdebug.h"
 #include "helpers.h"
 #include <globals.h>
 
@@ -13,7 +14,7 @@ uint32_t listCallback(cmd *c) {
     String filepath = arg.getValue();
     filepath.trim();
 
-    if (!filepath.startsWith("/")) filepath = "/" + filepath;
+    filepath = UsbDebug::resolve(filepath);
 
     FS *fs;
     if (!getFsStorage(fs) || !(*fs).exists(filepath)) return false;
@@ -61,7 +62,7 @@ uint32_t readCallback(cmd *c) {
 
     if (filepath.length() == 0) return false;
 
-    if (!filepath.startsWith("/")) filepath = "/" + filepath;
+    filepath = UsbDebug::resolve(filepath);
 
     FS *fs;
     if (!getFsStorage(fs) || !(*fs).exists(filepath)) return false;
@@ -79,7 +80,7 @@ uint32_t md5Callback(cmd *c) {
 
     if (filepath.length() == 0) return false;
 
-    if (!filepath.startsWith("/")) filepath = "/" + filepath;
+    filepath = UsbDebug::resolve(filepath);
 
     FS *fs;
     if (!getFsStorage(fs) || !(*fs).exists(filepath)) return false;
@@ -97,7 +98,7 @@ uint32_t crc32Callback(cmd *c) {
 
     if (filepath.length() == 0) return false;
 
-    if (!filepath.startsWith("/")) filepath = "/" + filepath;
+    filepath = UsbDebug::resolve(filepath);
 
     FS *fs;
     if (!getFsStorage(fs) || !(*fs).exists(filepath)) return false;
@@ -115,7 +116,7 @@ uint32_t removeCallback(cmd *c) {
 
     if (filepath.length() == 0) return false;
 
-    if (!filepath.startsWith("/")) filepath = "/" + filepath;
+    filepath = UsbDebug::resolve(filepath);
 
     FS *fs;
     if (!getFsStorage(fs)) return false;
@@ -145,7 +146,7 @@ uint32_t writeCallback(cmd *c) {
 
     if (filepath.length() == 0) return false;
 
-    if (!filepath.startsWith("/")) filepath = "/" + filepath;
+    filepath = UsbDebug::resolve(filepath);
 
     if (fileSize < SAFE_STACK_BUFFER_SIZE) fileSize = SAFE_STACK_BUFFER_SIZE;
 
@@ -222,7 +223,7 @@ uint32_t ymodemReceiveCallback(cmd *c) {
     filepath.trim();
 
     if (filepath.length() == 0) { return false; }
-    if (!filepath.startsWith("/")) filepath = "/" + filepath;
+    filepath = UsbDebug::resolve(filepath);
 
     FS *fs;
     if (!getFsStorage(fs)) { return false; }
@@ -701,8 +702,8 @@ uint32_t renameCallback(cmd *c) {
 
     if (filepath.length() == 0 || newName.length() == 0) return false;
 
-    if (!filepath.startsWith("/")) filepath = "/" + filepath;
-    if (!newName.startsWith("/")) newName = "/" + newName;
+    filepath = UsbDebug::resolve(filepath);
+    newName = UsbDebug::resolve(newName);
 
     FS *fs;
     if (!getFsStorage(fs)) return false;
@@ -732,8 +733,8 @@ uint32_t copyCallback(cmd *c) {
 
     if (filepath.length() == 0 || newName.length() == 0) return false;
 
-    if (!filepath.startsWith("/")) filepath = "/" + filepath;
-    if (!newName.startsWith("/")) newName = "/" + newName;
+    filepath = UsbDebug::resolve(filepath);
+    newName = UsbDebug::resolve(newName);
 
     FS *fs;
     if (!getFsStorage(fs)) return false;
@@ -765,7 +766,7 @@ uint32_t mkdirCallback(cmd *c) {
 
     if (filepath.length() == 0) return false;
 
-    if (!filepath.startsWith("/")) filepath = "/" + filepath;
+    filepath = UsbDebug::resolve(filepath);
 
     FS *fs;
     if (!getFsStorage(fs)) return false;
@@ -792,7 +793,7 @@ uint32_t rmdirCallback(cmd *c) {
 
     if (filepath.length() == 0) return false;
 
-    if (!filepath.startsWith("/")) filepath = "/" + filepath;
+    filepath = UsbDebug::resolve(filepath);
 
     FS *fs;
     if (!getFsStorage(fs)) return false;
@@ -819,7 +820,7 @@ uint32_t statCallback(cmd *c) {
 
     if (filepath.length() == 0) return false;
 
-    if (!filepath.startsWith("/")) filepath = "/" + filepath;
+    filepath = UsbDebug::resolve(filepath);
 
     FS *fs;
     if (!getFsStorage(fs) || !(*fs).exists(filepath)) return false;

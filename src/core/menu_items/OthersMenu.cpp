@@ -1,6 +1,7 @@
 #include "OthersMenu.h"
 
 #include "core/display.h"
+#include "core/settings.h"
 #include "core/utils.h"
 #include "modules/badusb_ble/ducky_typer.h"
 #include "modules/bjs_interpreter/interpreter.h"
@@ -40,8 +41,9 @@ void OthersMenu::optionsMenu() {
 void OthersMenu::badUsbHidMenu() {
     options = {
 #ifndef LITE_VERSION
-        {"BadUSB",       [=]() { ducky_setup(hid_usb, false); }   },
-        {"USB Keyboard", [=]() { ducky_keyboard(hid_usb, false); }},
+        {"BadUSB Config", [=]() { setBadUSBBLEMenu(); }             },
+        {"BadUSB",        [=]() { ducky_setup(hid_usb, false); }    },
+        {"USB Keyboard",  [=]() { ducky_keyboard(hid_usb, false); } },
 #endif
 
 #ifdef USB_as_HID

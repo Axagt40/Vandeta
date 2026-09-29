@@ -304,8 +304,13 @@ bool BLEStateManager::initBLE(const String &name, int powerLevel) {
         return false;
     }
 
-    std::string nameStr = name.c_str();
-    NimBLEDevice::init(nameStr);
+    // bleInit() reports whether the stack really came up and releases the
+    // controller's internal RAM again when it does not; a half-initialised
+    // stack here used to be recorded as success and then fail on first use.
+    if (!bleInit(name.c_str())) {
+        displayError("BLE init failed (low internal RAM)", true);
+        return false;
+    }
     NimBLEDevice::setPower((esp_power_level_t)powerLevel);
 
     currentDeviceName = name;

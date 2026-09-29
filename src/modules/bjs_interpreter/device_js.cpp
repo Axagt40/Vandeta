@@ -1,5 +1,6 @@
 #if !defined(LITE_VERSION) && !defined(DISABLE_INTERPRETER)
 #include "device_js.h"
+#include <esp_heap_caps.h>
 #include <globals.h>
 
 #include "helpers_js.h"
@@ -81,6 +82,13 @@ JSValue native_getFreeHeapSize(JSContext *ctx, JSValue *this_val, int argc, JSVa
     JS_SetPropertyStr(ctx, *obj, "psram_free", JS_NewInt32(ctx, ESP.getFreePsram()));
     JS_SetPropertyStr(ctx, *obj, "psram_size", JS_NewInt32(ctx, ESP.getPsramSize()));
     JS_SetPropertyStr(ctx, *obj, "psram_largest_free_block", JS_NewInt32(ctx, ESP.getMaxAllocPsram()));
+    // DMA-capable internal RAM is the gate for Wi-Fi/BLE bring-up: the HCI
+    // buffers cannot live in PSRAM. A script that wants to start BLE should
+    // check these before calling ble.init().
+    JS_SetPropertyStr(ctx, *obj, "dma_free", JS_NewInt32(ctx, (int)heap_caps_get_free_size(MALLOC_CAP_DMA)));
+    JS_SetPropertyStr(
+        ctx, *obj, "dma_largest_free_block", JS_NewInt32(ctx, (int)heap_caps_get_largest_free_block(MALLOC_CAP_DMA))
+    );
 
     return JS_PopGCRef(ctx, &obj_ref);
 }

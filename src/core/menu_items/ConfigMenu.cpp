@@ -1,6 +1,7 @@
 #include "ConfigMenu.h"
 #include "../mykeyboard.h"
 #include "core/display.h"
+#include "core/usb_debug/usbdebug.h"
 #include "core/i2c_finder.h"
 #include "core/main_menu.h"
 #include "core/settings.h"
@@ -174,6 +175,7 @@ void ConfigMenu::systemMenu() {
             {"Hide/Show Apps",                                                      [this]() { mainMenu.hideAppsMenu(); }},
             {"Clock",                                                               [this]() { setClock(); }             },
             {String("Keyboard Language: ") + bruceConfig.keyboardLang,              [this]() { setKeyboardLanguage(); }  },
+            {String("Developer Options: ") + (bruceConfig.usbDebug ? "ON" : "OFF"), [this]() { usbDebugMenu(); }        },
             {"Advanced",                                                            [this]() { advancedMenu(); }         },
             {"Back",                                                                []() {}                              },
         };
@@ -286,6 +288,54 @@ void ConfigMenu::devMenu() {
         // Exit to Config menu on Back or ESC
         if (selected == -1 || selected == localOptions.size() - 1) { return; }
         // Menu rebuilds after each action
+    }
+}
+
+/*********************************************************************
+**  Function: usbDebugMenu
+**  Developer Options page (the renamed USB Debugging mode): the master
+**  toggle plus developer mode, the serial protocol choice and the
+**  live-update / hot-reload entry points.
+**********************************************************************/
+void ConfigMenu::usbDebugMenu() {
+    while (true) {
+        std::vector<Option> localOptions = {
+            {String("Developer Options: ") + (bruceConfig.usbDebug ? "ON" : "OFF"),
+             [this]() {
+                 bruceConfig.setUsbDebug(bruceConfig.usbDebug ? 0 : 1);
+                 if (bruceConfig.usbDebug) {
+                     // Announce the new console surface right away; the
+                     // setting itself is already persisted by setUsbDebug().
+                     UsbDebug::begin();
+                 }
+             }                                                    },
+            {String("Developer Mode: ") + (bruceConfig.usbDebugDevMode ? "ON" : "OFF"),
+             [this]() {
+                 bool on = !bruceConfig.usbDebugDevMode;
+                 bruceConfig.setUsbDebugDevMode(on ? 1 : 0);
+                 UsbDebug::applyDevMode(on);
+             }                                                    },
+            {String("Protocol: ") + (UsbDebug::binaryMode() ? "BINARY" : "TEXT"),
+             [this]() { UsbDebug::setBinaryMode(!UsbDebug::binaryMode()); }},
+            {"Live Update: config",
+             [this]() { displayInfo(UsbDebug::liveUpdate("config")); }},
+            {"Live Update: assets",
+             [this]() { displayInfo(UsbDebug::liveUpdate("assets")); }},
+            {"Hot Reload: ON/OFF",
+             [this]() { UsbDebug::setHotReload(!UsbDebug::hotReload()); }},
+            {"Show Log Ring",
+             [this]() {
+                 UsbDebug::printErrors(false);
+                 displayInfo("Log ring dumped to USB serial");
+             }                                                    },
+            {"Back",                                               []() {}},
+        };
+
+        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Developer Options");
+
+        // Exit to System Config menu
+        if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        // Menu rebuilds so the toggle labels stay accurate
     }
 }
 

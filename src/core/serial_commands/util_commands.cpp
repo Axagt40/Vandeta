@@ -118,7 +118,7 @@ uint32_t infoCallback(cmd *c) {
     // serialDevice->printf("CPU Freq is %d\n", ESP.getCpuFreqMHz());
     // Features: WiFi, BLE, Embedded Flash 8MB (GD)
     // Crystal is 40MHz
-    // MAC: 24:58:7c:5b:24:5c
+    // MAC: AA:BB:CC:DD:EE:FF
 
     if (wifiConnected) {
         serialDevice->println("Wifi: connected");
@@ -200,6 +200,20 @@ uint32_t helpCallback(cmd *c) {
         "management commands."
     );
     serialDevice->println("  ls - Same as storage list");
+
+    serialDevice->println("\nDeveloper Options (enable in Config > System Config, or 'usbdebug on'):");
+    serialDevice->println("  usbdebug on|off|status  - Toggle/query the persisted Developer Options mode.");
+    serialDevice->println("  usbdebug dev on|off     - Developer mode (speed over stability).");
+    serialDevice->println("  usbdebug proto text|binary - Switch the serial protocol for this session.");
+    serialDevice->println("  cd <path> / pwd         - Move the working directory; other file commands follow it.");
+    serialDevice->println("  queue <command>         - Queue a command; 'batch on|run|status|clear' drains it.");
+    serialDevice->println("  history [n]             - Command history; recall with !! or !<n>.");
+    serialDevice->println("  complete <prefix>       - Autocomplete a command name.");
+    serialDevice->println("  hotreload on|off|add <path.js>|remove <path>|list - Reload a JS file when it changes.");
+    serialDevice->println("  liveupdate config|assets|script:<path>|status - Apply changes without a reflash.");
+    serialDevice->println("  errors [clear] / log on|off - Error ring buffer, optional live streaming.");
+    serialDevice->println("  proc / sys              - Task list and detailed system information.");
+    serialDevice->println("  mem                     - Heap/DMA/PSRAM report; tells you if a radio can still init.");
 
     serialDevice->println("\nSettings:");
     serialDevice->println("  settings                - View all the current settings.");
@@ -327,7 +341,16 @@ uint32_t displayCallback(cmd *c) {
         if (tft.getLogging()) serialDevice->println("Display: Logging tft is ACTIVATED");
         else serialDevice->println("Display: Logging tft is DEACTIVATED");
     } else if (opt == "dump") {
-        uint8_t binData[MAX_LOG_ENTRIES * MAX_LOG_SIZE];
+        // Heap, not stack: the ring is MAX_LOG_ENTRIES * MAX_LOG_SIZE (8 KB) and
+        // getBinLog() writes a header plus every entry into the buffer, which
+        // overflows the serial task's stack and panics the chip (observed: Guru
+        // Meditation a few bytes into the dump).
+        size_t cap = (size_t)MAX_LOG_ENTRIES * MAX_LOG_SIZE;
+        uint8_t *binData = (uint8_t *)(psramFound() ? ps_malloc(cap) : malloc(cap));
+        if (binData == nullptr) {
+            serialDevice->println("Display: dump buffer allocation failed");
+            return false;
+        }
         size_t binSize = 0;
         tft.getBinLog(binData, binSize);
 
@@ -338,6 +361,18 @@ uint32_t displayCallback(cmd *c) {
             serialDevice->printf("%02X ", binData[i]);
         }
         serialDevice->println("\n[End of Dump]");
+        free(binData);
+    } else if (opt == "ring") {
+        // Record what the screen draws in the text ring WITHOUT streaming
+        // frames: the async path pushes a frame for every draw, which wedges
+        // the USB CDC when a menu is repainted at the same time, so a scripted
+        // menu walk cannot be observed with `display start`. With the ring on
+        // (64 deduplicated entries) `display dump` returns the same text.
+        String state = cmd.getArgument("state").getValue();
+        state.trim();
+        bool on = !(state == "off" || state == "0" || state == "false");
+        tft.setLogging(on);
+        serialDevice->println(String("Display: text ring ") + (on ? "ON" : "OFF"));
     } else if (opt == "info") {
         serialDevice->println(TFT_WIDTH + String("x") + TFT_HEIGHT + String("x") + ROTATION);
     } else {
@@ -346,7 +381,8 @@ uint32_t displayCallback(cmd *c) {
             "display start : Start Logging\n"
             "display stop  : Stop Logging\n"
             "display status: Get Logging state\n"
-            "display dump  : Dumps binary log"
+            "display dump  : Dumps binary log\n"
+            "display ring on|off : Record drawn text without streaming frames\n"
             "display info  : Get display info"
         );
         return false;
@@ -422,6 +458,7 @@ void createUtilCommands(SimpleCLI *cli) {
     cli->addCommand("optionsJSON", optionsJsonCallback);
     Command display = cli->addCommand("display", displayCallback);
     display.addPosArg("option", "dump");
+    display.addPosArg("state", "");
 
     Command navigation = cli->addCommand("nav,navigate,navigation", navCallback);
     navigation.addPosArg("command");

@@ -405,10 +405,14 @@ size_t BleKeyboard::write(const uint8_t *buffer, size_t size) {
     size_t n = 0;
     while (size--) {
         if (*buffer != '\r') {
+            // Do not abandon the rest of the string when the active layout has
+            // no key for one character (the Nordic tables cannot express the
+            // dead keys ^, ` and ~): skip it and keep typing. See the same
+            // note in USBHIDKeyboard::write().
             if (write(*buffer)) {
                 n++;
             } else {
-                break;
+                setWriteError();
             }
         }
         buffer++;

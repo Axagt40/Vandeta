@@ -44,6 +44,22 @@ bool ble_scan_setup();
 void ble_scan();
 void stopBLEStack();
 
+/// Bring the NimBLE stack up and report whether it really came up.
+///
+/// `NimBLEDevice::init()` returns false when a late step fails. On this board
+/// the usual failure is `esp_nimble_hci_init()` with ESP_ERR_NO_MEM, because the
+/// HCI buffers have to live in DMA-capable internal RAM and a running script has
+/// little of it. What matters is what the failure leaves behind: the BT
+/// controller is already initialised AND enabled, and since NimBLEDevice only
+/// sets its `m_initialized` flag after a fully successful init, its own
+/// `deinit()` is a no-op in that state. Measured on a T-Embed CC1101, one failed
+/// attempt took internal free RAM from 47,007 to 12,675 bytes and it never came
+/// back - after which every later Wi-Fi/BLE bring-up failed with RAM errors too.
+/// This wrapper unwinds the controller so the memory is returned.
+///
+/// Safe to call when the stack is already up (returns true immediately).
+bool bleInit(const char *name = "");
+
 bool bleNotifyRetry(NimBLECharacteristic *chr, const uint8_t *value, size_t length, uint8_t retries = 8);
 bool bleNotifyRetry(NimBLECharacteristic *chr, uint8_t retries = 8);
 

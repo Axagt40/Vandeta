@@ -5,7 +5,9 @@
 
 class ScriptsMenu : public MenuItemInterface {
 public:
-    ScriptsMenu() : MenuItemInterface("JS Interpreter") {}
+    // Main menu label. The module behind it is still the JavaScript interpreter
+    // (scripts, App Store, Load...), so only the displayed name changed.
+    ScriptsMenu() : MenuItemInterface("Apps") {}
 
     void optionsMenu();
     void drawIcon(float scale);

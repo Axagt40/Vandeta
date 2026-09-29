@@ -6,6 +6,7 @@
 #if !defined(LITE_VERSION) && !defined(DISABLE_INTERPRETER)
 #include "modules/bjs_interpreter/interpreter.h"
 #endif
+#include "modules/badusb_ble/ducky_typer.h"
 #include "modules/ble_api/ble_api.hpp"
 #include "modules/others/qrcode_menu.h"
 #include "modules/rf/rf_utils.h" // for initRfModule
@@ -1351,82 +1352,315 @@ void setNetworkCredsMenu() {
     loopOptions(options);
 }
 
+#if !defined(LITE_VERSION)
 /*********************************************************************
-**  Function: setBadUSBBLEMenu
-**  Main Menu for setting Bad USB/BLE options
+**  BadUSB configuration
+**
+**  One place that owns every BadUSB setting: the USB identity it presents,
+**  the keyboard layout (moved here from the old Advanced > BadUSB/BLE menu),
+**  the HID device type, attack timing and payload storage. Reachable from
+**  Others > BadUSB & HID > "BadUSB Config" and from Advanced > BadUSB/BLE.
 **********************************************************************/
-void setBadUSBBLEMenu() {
-    options = {
-        {"Keyboard Layout", setBadUSBBLEKeyboardLayoutMenu},
-        {"Key Delay",       setBadUSBBLEKeyDelayMenu      },
-        {"Show Output",     setBadUSBBLEShowOutputMenu    },
-    };
-    addOptionToMainMenu();
 
-    loopOptions(options);
+static String badUsbHidTypeName(int t) {
+    switch (t) {
+        case 1: return "Keyboard + Mouse";
+        case 2: return "Mouse only";
+        default: return "Keyboard";
+    }
 }
 
-/*********************************************************************
-**  Function: setBadUSBBLEKeyboardLayoutMenu
-**  Main Menu for setting Bad USB/BLE Keyboard Layout
-**********************************************************************/
-void setBadUSBBLEKeyboardLayoutMenu() {
-    uint8_t opt = bruceConfig.badUSBBLEKeyboardLayout;
-
-    options.clear();
-    options = {
-        {"US International",      [&]() { opt = 0; } },
-        {"Danish",                [&]() { opt = 1; } },
-        {"English (UK)",          [&]() { opt = 2; } },
-        {"French (AZERTY)",       [&]() { opt = 3; } },
-        {"German",                [&]() { opt = 4; } },
-        {"Hungarian",             [&]() { opt = 5; } },
-        {"Italian",               [&]() { opt = 6; } },
-        {"Polish",                [&]() { opt = 7; } },
-        {"Portuguese (Brazil)",   [&]() { opt = 8; } },
-        {"Portuguese (Portugal)", [&]() { opt = 9; } },
-        {"Slovenian",             [&]() { opt = 10; }},
-        {"Spanish",               [&]() { opt = 11; }},
-        {"Swedish",               [&]() { opt = 12; }},
-        {"Turkish",               [&]() { opt = 13; }},
-    };
-    addOptionToMainMenu();
-
-    loopOptions(options, opt);
-
-    if (opt != bruceConfig.badUSBBLEKeyboardLayout) { bruceConfig.setBadUSBBLEKeyboardLayout(opt); }
+static void badUsbImportCustomLayout() {
+    FS *fs = setupSdCard() ? (FS *)&SD : (FS *)&LittleFS;
+    if (fs == nullptr) {
+        displayError("No storage available", true);
+        return;
+    }
+    String path = loopSD(*fs, true, "*", "/");
+    if (path.length() == 0 || path == "\x1B") return;
+    if (badusbLoadCustomLayoutFile(path)) {
+        bruceConfig.setBadUSBBLECustomLayoutFile(path);
+        bruceConfig.setBadUSBBLEKeyboardLayout(BADUSB_LAYOUT_CUSTOM_INDEX);
+        displayInfo("Custom layout imported", true);
+    } else {
+        displayError("Invalid layout file", true);
+    }
 }
 
-/*********************************************************************
-**  Function: setBadUSBBLEKeyDelayMenu
-**  Main Menu for setting Bad USB/BLE Keyboard Key Delay
-**********************************************************************/
-void setBadUSBBLEKeyDelayMenu() {
-    String delayStr = num_keyboard(String(bruceConfig.badUSBBLEKeyDelay), 3, "Key Delay (ms):");
-    if (delayStr != "\x1B") {
-        uint16_t delayVal = static_cast<uint16_t>(delayStr.toInt());
-        if (delayVal <= 500) {
-            bruceConfig.setBadUSBBLEKeyDelay(delayVal);
-        } else if (delayVal != 0) {
-            displayError("Invalid key delay value (0 to 500)", true);
-        }
+static void badUsbCreateCustomFromCurrent() {
+    int src = bruceConfig.badUSBBLEKeyboardLayout;
+    if (src == BADUSB_LAYOUT_CUSTOM_INDEX) src = 0;
+    if (!badusbSeedCustomLayoutFrom(src)) {
+        displayError("Cannot copy layout", true);
+        return;
+    }
+    if (badusbSaveCustomLayoutFile(bruceConfig.badUSBBLECustomLayoutFile)) {
+        bruceConfig.setBadUSBBLEKeyboardLayout(BADUSB_LAYOUT_CUSTOM_INDEX);
+        displayInfo("Custom layout created", true);
+    } else {
+        displayError("Cannot write layout file", true);
+    }
+}
+
+static void badUsbExportCustomLayout() {
+    if (badusbSaveCustomLayoutFile(bruceConfig.badUSBBLECustomLayoutFile)) {
+        displayInfo("Saved " + bruceConfig.badUSBBLECustomLayoutFile, true);
+    } else {
+        displayError("Cannot write layout file", true);
     }
 }
 
 /*********************************************************************
-**  Function: setBadUSBBLEShowOutputMenu
-**  Main Menu for setting Bad USB/BLE Show Output
+**  Function: badUsbFootprintMenu
+**  USB identity (VID/PID/manufacturer/product/serial) presented by BadUSB
 **********************************************************************/
-void setBadUSBBLEShowOutputMenu() {
+static void badUsbFootprintMenu() {
+    while (true) {
+        char vidStr[8];
+        char pidStr[8];
+        snprintf(vidStr, sizeof(vidStr), "%04X", bruceConfig.badUSBBLEVid);
+        snprintf(pidStr, sizeof(pidStr), "%04X", bruceConfig.badUSBBLEPid);
+
+        // Built into the global `options` rather than a local vector: the
+        // serial `option <n>` verb reads that vector to drive a menu headlessly.
+        options.clear();
+        options = {
+            {String("Vendor ID: 0x") + vidStr,
+             [vidStr]() {
+                 String v = hex_keyboard(String(vidStr), 4, "Vendor ID (hex):");
+                 if (v.length() > 0 && v != "\x1B")
+                     bruceConfig.setBadUSBBLEVid((uint16_t)strtol(v.c_str(), nullptr, 16));
+             }                                                                               },
+            {String("Product ID: 0x") + pidStr,
+             [pidStr]() {
+                 String v = hex_keyboard(String(pidStr), 4, "Product ID (hex):");
+                 if (v.length() > 0 && v != "\x1B")
+                     bruceConfig.setBadUSBBLEPid((uint16_t)strtol(v.c_str(), nullptr, 16));
+             }                                                                               },
+            {String("Manufacturer: ") + bruceConfig.badUSBBLEManufacturer,
+             []() {
+                 String v = keyboard(bruceConfig.badUSBBLEManufacturer, 32, "Manufacturer:");
+                 if (v.length() > 0 && v != "\x1B") bruceConfig.setBadUSBBLEManufacturer(v);
+             }                                                                               },
+            {String("Product: ") + bruceConfig.badUSBBLEProduct,
+             []() {
+                 String v = keyboard(bruceConfig.badUSBBLEProduct, 32, "Product name:");
+                 if (v.length() > 0 && v != "\x1B") bruceConfig.setBadUSBBLEProduct(v);
+             }                                                                               },
+            {String("Serial: ") + (bruceConfig.badUSBBLESerial.length() ? bruceConfig.badUSBBLESerial : "(default)"),
+             []() {
+                 String v = keyboard(bruceConfig.badUSBBLESerial, 24, "Serial (empty=default):");
+                 if (v != "\x1B") bruceConfig.setBadUSBBLESerial(v);
+             }                                                                               },
+            {"Reset USB identity",
+             []() {
+                 bruceConfig.setBadUSBBLEVid(0x303A);
+                 bruceConfig.setBadUSBBLEPid(0x4004);
+                 bruceConfig.setBadUSBBLEManufacturer("Bruce");
+                 bruceConfig.setBadUSBBLEProduct("Bruce BadUSB");
+                 bruceConfig.setBadUSBBLESerial("");
+                 displayInfo("USB identity reset", true);
+             }                                                                               },
+            {"Back", []() {}},
+        };
+
+        int sel = loopOptions(options, MENU_TYPE_SUBMENU, "USB Footprint");
+        if (sel == -1 || sel == (int)options.size() - 1) return;
+    }
+}
+
+/*********************************************************************
+**  Function: badUsbKeyboardLayoutMenu
+**  Keyboard layout selection (moved out of Advanced > BadUSB/BLE), including
+**  Finland and user-supplied custom layouts.
+**********************************************************************/
+static void badUsbKeyboardLayoutMenu() {
+    while (true) {
+        int cur = bruceConfig.badUSBBLEKeyboardLayout;
+        options.clear();
+        for (int i = 0; i < badusbLayoutCount(); i++) {
+            int idx = i;
+            options.push_back(Option(badusbLayoutName(i), [idx]() {
+                bruceConfig.setBadUSBBLEKeyboardLayout(idx);
+            }, idx == cur));
+        }
+        options.push_back({"Import custom layout",         badUsbImportCustomLayout      });
+        options.push_back({"Create custom from current",   badUsbCreateCustomFromCurrent });
+        options.push_back({"Export custom layout",         badUsbExportCustomLayout      });
+        options.push_back({String("Layout file: ") + bruceConfig.badUSBBLECustomLayoutFile,
+            []() {
+                String v = keyboard(bruceConfig.badUSBBLECustomLayoutFile, 64, "Custom layout file:");
+                if (v.length() > 0 && v != "\x1B") {
+                    if (!v.startsWith("/")) v = "/" + v;
+                    bruceConfig.setBadUSBBLECustomLayoutFile(v);
+                }
+            }});
+        options.push_back({"Back", []() {}});
+
+        int sel = loopOptions(options, MENU_TYPE_SUBMENU, "Keyboard Layout");
+        if (sel == -1 || sel == (int)options.size() - 1) return;
+    }
+}
+
+/*********************************************************************
+**  Function: badUsbHidTypeMenu
+**  Select which HID device(s) BadUSB presents to the host
+**********************************************************************/
+static void badUsbHidTypeMenu() {
+    int cur = bruceConfig.badUSBBLEHidType;
     options.clear();
     options = {
-        {"Enable",  [&]() { bruceConfig.setBadUSBBLEShowOutput(true); } },
-        {"Disable", [&]() { bruceConfig.setBadUSBBLEShowOutput(false); }},
+        {"Keyboard",        []() { bruceConfig.setBadUSBBLEHidType(0); }, cur == 0},
+        {"Keyboard + Mouse", []() { bruceConfig.setBadUSBBLEHidType(1); }, cur == 1},
+        {"Mouse only",      []() { bruceConfig.setBadUSBBLEHidType(2); }, cur == 2},
+        {"Back",            []() {}}                                         ,
     };
-    addOptionToMainMenu();
-
-    loopOptions(options, bruceConfig.badUSBBLEShowOutput ? 0 : 1);
+    loopOptions(options, MENU_TYPE_SUBMENU, "HID Device Type");
 }
+
+/*********************************************************************
+**  Function: badUsbTimingMenu
+**  Attack speed / timing (key delay, string delay and presets)
+**********************************************************************/
+static void badUsbTimingMenu() {
+    while (true) {
+        options.clear();
+        options = {
+            {String("Key Delay: ") + String(bruceConfig.badUSBBLEKeyDelay) + " ms",
+             []() {
+                 String v = num_keyboard(String(bruceConfig.badUSBBLEKeyDelay), 3, "Key Delay (ms):");
+                 if (v.length() > 0 && v != "\x1B") bruceConfig.setBadUSBBLEKeyDelay((uint16_t)v.toInt());
+             }                                                                                  },
+            {String("String Delay: ") +
+                 (bruceConfig.badUSBBLEStringDelay ? String(bruceConfig.badUSBBLEStringDelay) + " ms" : String("same as key")),
+             []() {
+                 String v = num_keyboard(String(bruceConfig.badUSBBLEStringDelay), 3, "String Delay (0=key):");
+                 if (v.length() > 0 && v != "\x1B")
+                     bruceConfig.setBadUSBBLEStringDelay((uint16_t)v.toInt());
+             }                                                                                  },
+            {"Preset: Fast",
+             []() {
+                 bruceConfig.setBadUSBBLEKeyDelay(5);
+                 bruceConfig.setBadUSBBLEStringDelay(5);
+             }                                                                                  },
+            {"Preset: Balanced",
+             []() {
+                 bruceConfig.setBadUSBBLEKeyDelay(10);
+                 bruceConfig.setBadUSBBLEStringDelay(15);
+             }                                                                                  },
+            {"Preset: Stealth",
+             []() {
+                 bruceConfig.setBadUSBBLEKeyDelay(60);
+                 bruceConfig.setBadUSBBLEStringDelay(120);
+             }                                                                                  },
+            {String("Show Output: ") + (bruceConfig.badUSBBLEShowOutput ? "ON" : "OFF"),
+             []() { bruceConfig.setBadUSBBLEShowOutput(!bruceConfig.badUSBBLEShowOutput); }      },
+            {"Back", []() {}},
+        };
+
+        int sel = loopOptions(options, MENU_TYPE_SUBMENU, "BadUSB Timing");
+        if (sel == -1 || sel == (int)options.size() - 1) return;
+    }
+}
+
+/*********************************************************************
+**  Function: badUsbPayloadMenu
+**  Payload storage and management (folder, default payload, run)
+**********************************************************************/
+static void badUsbPayloadMenu() {
+    while (true) {
+        options.clear();
+        options = {
+            {"Run payload...",
+             []() {
+                 FS *fs = setupSdCard() ? (FS *)&SD : (FS *)&LittleFS;
+                 if (fs == nullptr) return;
+                 if (bruceConfig.badUSBBLEPayloadDir.length() && !fs->exists(bruceConfig.badUSBBLEPayloadDir))
+                     fs->mkdir(bruceConfig.badUSBBLEPayloadDir);
+                 String path = loopSD(*fs, true, "*", bruceConfig.badUSBBLEPayloadDir);
+                 if (path.length() == 0 || path == "\x1B") return;
+                 if (!badusbRunPayload(path)) displayError("Payload failed", true);
+             }                                                                          },
+            {"Run default payload",
+             []() {
+                 if (bruceConfig.badUSBBLEDefaultPayload.length() == 0) {
+                     displayError("No default payload set", true);
+                     return;
+                 }
+                 if (!badusbRunPayload(bruceConfig.badUSBBLEDefaultPayload)) displayError("Payload failed", true);
+             }                                                                          },
+            {"Set default payload",
+             []() {
+                 FS *fs = setupSdCard() ? (FS *)&SD : (FS *)&LittleFS;
+                 if (fs == nullptr) return;
+                 if (bruceConfig.badUSBBLEPayloadDir.length() && !fs->exists(bruceConfig.badUSBBLEPayloadDir))
+                     fs->mkdir(bruceConfig.badUSBBLEPayloadDir);
+                 String path = loopSD(*fs, true, "*", bruceConfig.badUSBBLEPayloadDir);
+                 if (path.length() > 0 && path != "\x1B") bruceConfig.setBadUSBBLEDefaultPayload(path);
+             }                                                                          },
+            {String("Payload folder: ") + bruceConfig.badUSBBLEPayloadDir,
+             []() {
+                 String v = keyboard(bruceConfig.badUSBBLEPayloadDir, 48, "Payload folder:");
+                 if (v.length() > 0 && v != "\x1B") {
+                     if (!v.startsWith("/")) v = "/" + v;
+                     bruceConfig.setBadUSBBLEPayloadDir(v);
+                 }
+             }                                                                          },
+            {String("Default: ") + (bruceConfig.badUSBBLEDefaultPayload.length() ? bruceConfig.badUSBBLEDefaultPayload : "(none)"),
+             []() {}}, // informational only
+            {"Back", []() {}},
+        };
+
+        int sel = loopOptions(options, MENU_TYPE_SUBMENU, "Payload Manager");
+        if (sel == -1 || sel == (int)options.size() - 1) return;
+    }
+}
+
+/*********************************************************************
+**  Function: badUsbConfigMenu
+**  Main BadUSB configuration menu
+**********************************************************************/
+static void badUsbConfigMenu() {
+    while (true) {
+        options.clear();
+        options = {
+            {"USB Footprint",
+             []() { badUsbFootprintMenu(); }},
+            {String("Keyboard Layout: ") + badusbLayoutName(bruceConfig.badUSBBLEKeyboardLayout),
+             []() { badUsbKeyboardLayoutMenu(); }},
+            {String("HID Device Type: ") + badUsbHidTypeName(bruceConfig.badUSBBLEHidType),
+             []() { badUsbHidTypeMenu(); }},
+            {"Attack Timing",
+             []() { badUsbTimingMenu(); }},
+            {"Payload Manager",
+             []() { badUsbPayloadMenu(); }},
+            {String("Show Output: ") + (bruceConfig.badUSBBLEShowOutput ? "ON" : "OFF"),
+             []() { bruceConfig.setBadUSBBLEShowOutput(!bruceConfig.badUSBBLEShowOutput); }},
+            {"Back", []() {}},
+        };
+
+        int sel = loopOptions(options, MENU_TYPE_SUBMENU, "BadUSB Config");
+        if (sel == -1 || sel == (int)options.size() - 1) return;
+    }
+}
+
+/*********************************************************************
+**  Function: setBadUSBBLEMenu
+**  Entry point kept for the Advanced > BadUSB/BLE item; now opens the
+**  unified BadUSB configuration menu.
+**********************************************************************/
+void setBadUSBBLEMenu() { badUsbConfigMenu(); }
+
+// Thin compatibility wrappers (declared in settings.h).
+void setBadUSBBLEKeyboardLayoutMenu() { badUsbKeyboardLayoutMenu(); }
+void setBadUSBBLEKeyDelayMenu() { badUsbTimingMenu(); }
+void setBadUSBBLEShowOutputMenu() { bruceConfig.setBadUSBBLEShowOutput(!bruceConfig.badUSBBLEShowOutput); }
+#else  // LITE_VERSION: no BadUSB/HID on the light builds
+void setBadUSBBLEMenu() {}
+void setBadUSBBLEKeyboardLayoutMenu() {}
+void setBadUSBBLEKeyDelayMenu() {}
+void setBadUSBBLEShowOutputMenu() {}
+#endif
 
 /*********************************************************************
 **  Function: setMacAddressMenu - @IncursioHack

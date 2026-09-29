@@ -174,10 +174,12 @@ size_t CH9329_Keyboard_::write(const uint8_t *buffer, size_t size) {
     size_t n = 0;
     while (size--) {
         if (*buffer != '\r') {
+            // Skip a character the active layout cannot produce instead of
+            // abandoning the rest of the string (see USBHIDKeyboard::write()).
             if (write(*buffer)) {
                 n++;
             } else {
-                break;
+                setWriteError();
             }
         }
         buffer++;

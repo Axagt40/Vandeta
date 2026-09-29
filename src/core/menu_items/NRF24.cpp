@@ -1,27 +1,36 @@
 #include "NRF24.h"
 #include "core/display.h"
 #include "core/utils.h"
+#include "modules/NRF24/nrf_capture.h"
 #include "modules/NRF24/nrf_common.h"
 #include "modules/NRF24/nrf_jammer.h"
 #include "modules/NRF24/nrf_mousejack.h"
 #include "modules/NRF24/nrf_spectrum.h"
 
 void NRF24Menu::optionsMenu() {
-    options.clear();
-    options.push_back({"Information", nrf_info});
-    options.push_back({"Spectrum", nrf_spectrum});
-    #if !defined(LITE_VERSION)
-    options.push_back({"MouseJack", nrf_mousejack});
-    #endif
-    options.push_back({"NRF Jammer", nrf_jammer});
+    // Rebuild this submenu after an entry returns, and leave it when the user
+    // presses Back: without this the newly added pages (Raw Capture) would drop
+    // straight to the main menu instead of back to NRF24.
+    while (true) {
+        options.clear();
+        options.push_back({"Information", nrf_info});
+        options.push_back({"Spectrum", nrf_spectrum});
+        #if !defined(LITE_VERSION)
+        options.push_back({"MouseJack", nrf_mousejack});
+        #endif
+        options.push_back({"NRF Jammer", nrf_jammer});
+        options.push_back({"Raw Capture", nrfRawCaptureMenu});
 
 #if defined(ARDUINO_M5STICK_C_PLUS) || defined(ARDUINO_M5STICK_C_PLUS2)
-    options.push_back({"Config pins", [this]() { configMenu(); }});
+        options.push_back({"Config pins", [this]() { configMenu(); }});
 #endif
 
-    addOptionToMainMenu();
+        addOptionToMainMenu();
 
-    loopOptions(options, MENU_TYPE_SUBMENU, "NRF24");
+        int selected = loopOptions(options, MENU_TYPE_SUBMENU, "NRF24");
+        if (selected < 0) return; // physical Back -> main menu
+        if (returnToMenu) return; // "Main Menu" entry
+    }
 }
 
 void NRF24Menu::configMenu() {

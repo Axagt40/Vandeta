@@ -67,11 +67,24 @@ JsonDocument BruceConfig::toJson() const {
     setting["wigleBasicToken"] = wigleBasicToken;
     setting["wdgwarsApiKey"] = wdgwarsApiKey;
     setting["devMode"] = devMode;
+    setting["usbDebug"] = usbDebug;
+    setting["usbDebugDevMode"] = usbDebugDevMode;
+    setting["usbDebugBinary"] = usbDebugBinary;
     setting["colorInverted"] = colorInverted;
 
     setting["badUSBBLEKeyboardLayout"] = badUSBBLEKeyboardLayout;
     setting["badUSBBLEKeyDelay"] = badUSBBLEKeyDelay;
     setting["badUSBBLEShowOutput"] = badUSBBLEShowOutput;
+    setting["badUSBBLEHidType"] = badUSBBLEHidType;
+    setting["badUSBBLEVid"] = badUSBBLEVid;
+    setting["badUSBBLEPid"] = badUSBBLEPid;
+    setting["badUSBBLEManufacturer"] = badUSBBLEManufacturer;
+    setting["badUSBBLEProduct"] = badUSBBLEProduct;
+    setting["badUSBBLESerial"] = badUSBBLESerial;
+    setting["badUSBBLEStringDelay"] = badUSBBLEStringDelay;
+    setting["badUSBBLEPayloadDir"] = badUSBBLEPayloadDir;
+    setting["badUSBBLEDefaultPayload"] = badUSBBLEDefaultPayload;
+    setting["badUSBBLECustomLayoutFile"] = badUSBBLECustomLayoutFile;
 
     JsonArray dm = setting["disabledMenus"].to<JsonArray>();
     for (int i = 0; i < disabledMenus.size(); i++) { dm.add(disabledMenus[i]); }
@@ -380,6 +393,27 @@ void BruceConfig::fromFile(bool checkFS) {
         count++;
         log_e("Fail");
     }
+
+    if (!setting["usbDebug"].isNull()) {
+        usbDebug = setting["usbDebug"].as<int>();
+    } else {
+        count++;
+        log_e("Fail");
+    }
+
+    if (!setting["usbDebugDevMode"].isNull()) {
+        usbDebugDevMode = setting["usbDebugDevMode"].as<int>();
+    } else {
+        count++;
+        log_e("Fail");
+    }
+
+    if (!setting["usbDebugBinary"].isNull()) {
+        usbDebugBinary = setting["usbDebugBinary"].as<int>();
+    } else {
+        count++;
+        log_e("Fail");
+    }
     if (!setting["colorInverted"].isNull()) {
         colorInverted = setting["colorInverted"].as<int>();
     } else {
@@ -408,10 +442,68 @@ void BruceConfig::fromFile(bool checkFS) {
         log_e("Fail");
     }
 
+    if (!setting["badUSBBLEHidType"].isNull()) {
+        badUSBBLEHidType = setting["badUSBBLEHidType"].as<int>();
+    } else {
+        count++;
+    }
+    if (!setting["badUSBBLEVid"].isNull()) {
+        badUSBBLEVid = (uint16_t)setting["badUSBBLEVid"].as<int>();
+    } else {
+        count++;
+    }
+    if (!setting["badUSBBLEPid"].isNull()) {
+        badUSBBLEPid = (uint16_t)setting["badUSBBLEPid"].as<int>();
+    } else {
+        count++;
+    }
+    if (!setting["badUSBBLEManufacturer"].isNull()) {
+        badUSBBLEManufacturer = setting["badUSBBLEManufacturer"].as<String>();
+    } else {
+        count++;
+    }
+    if (!setting["badUSBBLEProduct"].isNull()) {
+        badUSBBLEProduct = setting["badUSBBLEProduct"].as<String>();
+    } else {
+        count++;
+    }
+    if (!setting["badUSBBLESerial"].isNull()) {
+        badUSBBLESerial = setting["badUSBBLESerial"].as<String>();
+    } else {
+        count++;
+    }
+    if (!setting["badUSBBLEStringDelay"].isNull()) {
+        badUSBBLEStringDelay = (uint16_t)setting["badUSBBLEStringDelay"].as<int>();
+    } else {
+        count++;
+    }
+    if (!setting["badUSBBLEPayloadDir"].isNull()) {
+        badUSBBLEPayloadDir = setting["badUSBBLEPayloadDir"].as<String>();
+    } else {
+        count++;
+    }
+    if (!setting["badUSBBLEDefaultPayload"].isNull()) {
+        badUSBBLEDefaultPayload = setting["badUSBBLEDefaultPayload"].as<String>();
+    } else {
+        count++;
+    }
+    if (!setting["badUSBBLECustomLayoutFile"].isNull()) {
+        badUSBBLECustomLayoutFile = setting["badUSBBLECustomLayoutFile"].as<String>();
+    } else {
+        count++;
+    }
+
     if (!setting["disabledMenus"].isNull()) {
         disabledMenus.clear();
         JsonArray dm = setting["disabledMenus"].as<JsonArray>();
-        for (JsonVariant e : dm) { disabledMenus.push_back(e.as<String>()); }
+        for (JsonVariant e : dm) {
+            String name = e.as<String>();
+            // The main menu entry was renamed "JS Interpreter" -> "Apps"; carry
+            // a previously hidden menu over to the new label so it does not
+            // reappear. Internal identifiers keep the old name on purpose.
+            if (name == "JS Interpreter") name = "Apps";
+            disabledMenus.push_back(name);
+        }
     } else {
         count++;
         log_e("Fail");
@@ -448,8 +540,9 @@ void BruceConfig::saveFile() {
         return;
     };
 
-    // Serialize JSON to file
-    serializeJsonPretty(jsonDoc, Serial);
+    // Serialize JSON to file. (Upstream also dumped the whole document to
+    // Serial here; that floods the Developer Options console on every setting
+    // change, including each row the new menus save, so it is gone.)
     if (serializeJsonPretty(jsonDoc, file) < 5) log_e("Failed to write config file");
     else log_i("config file written successfully");
 
@@ -482,9 +575,14 @@ void BruceConfig::validateConfig() {
 #endif
     validateMifareKeysItems();
     validateDevModeValue();
+    validateUsbDebugValue();
+    validateUsbDebugDevModeValue();
+    validateUsbDebugBinaryValue();
     validateColorInverted();
     validateBadUSBBLEKeyboardLayout();
     validateBadUSBBLEKeyDelay();
+    validateBadUSBBLEHidType();
+    validateBadUSBBLEStringDelay();
     validateEvilEndpointCreds();
     validateEvilEndpointSsid();
     validateEvilPasswordMode();
@@ -773,6 +871,39 @@ void BruceConfig::validateDevModeValue() {
     if (devMode > 1) devMode = 1;
 }
 
+void BruceConfig::setUsbDebug(int value) {
+    usbDebug = value;
+    validateUsbDebugValue();
+    saveFile();
+}
+
+void BruceConfig::validateUsbDebugValue() {
+    if (usbDebug > 1) usbDebug = 1;
+    if (usbDebug < 0) usbDebug = 0;
+}
+
+void BruceConfig::setUsbDebugDevMode(int value) {
+    usbDebugDevMode = value;
+    validateUsbDebugDevModeValue();
+    saveFile();
+}
+
+void BruceConfig::validateUsbDebugDevModeValue() {
+    if (usbDebugDevMode > 1) usbDebugDevMode = 1;
+    if (usbDebugDevMode < 0) usbDebugDevMode = 0;
+}
+
+void BruceConfig::setUsbDebugBinary(int value) {
+    usbDebugBinary = value;
+    validateUsbDebugBinaryValue();
+    saveFile();
+}
+
+void BruceConfig::validateUsbDebugBinaryValue() {
+    if (usbDebugBinary > 1) usbDebugBinary = 1;
+    if (usbDebugBinary < 0) usbDebugBinary = 0;
+}
+
 void BruceConfig::setColorInverted(int value) {
     colorInverted = value;
     validateColorInverted();
@@ -790,7 +921,8 @@ void BruceConfig::setBadUSBBLEKeyboardLayout(int value) {
 }
 
 void BruceConfig::validateBadUSBBLEKeyboardLayout() {
-    if (badUSBBLEKeyboardLayout < 0 || badUSBBLEKeyboardLayout > 13) badUSBBLEKeyboardLayout = 0;
+    // 0..14 are on-flash layouts, 15 is the user supplied custom layout.
+    if (badUSBBLEKeyboardLayout < 0 || badUSBBLEKeyboardLayout > 15) badUSBBLEKeyboardLayout = 0;
 }
 
 void BruceConfig::setBadUSBBLEKeyDelay(uint16_t value) {
@@ -806,6 +938,67 @@ void BruceConfig::validateBadUSBBLEKeyDelay() {
 
 void BruceConfig::setBadUSBBLEShowOutput(bool value) {
     badUSBBLEShowOutput = value;
+    saveFile();
+}
+
+void BruceConfig::setBadUSBBLEHidType(int value) {
+    badUSBBLEHidType = value;
+    validateBadUSBBLEHidType();
+    saveFile();
+}
+
+void BruceConfig::validateBadUSBBLEHidType() {
+    if (badUSBBLEHidType < 0) badUSBBLEHidType = 0;
+    if (badUSBBLEHidType > 2) badUSBBLEHidType = 2;
+}
+
+void BruceConfig::setBadUSBBLEVid(uint16_t value) {
+    badUSBBLEVid = value;
+    saveFile();
+}
+
+void BruceConfig::setBadUSBBLEPid(uint16_t value) {
+    badUSBBLEPid = value;
+    saveFile();
+}
+
+void BruceConfig::setBadUSBBLEManufacturer(const String &value) {
+    badUSBBLEManufacturer = value;
+    saveFile();
+}
+
+void BruceConfig::setBadUSBBLEProduct(const String &value) {
+    badUSBBLEProduct = value;
+    saveFile();
+}
+
+void BruceConfig::setBadUSBBLESerial(const String &value) {
+    badUSBBLESerial = value;
+    saveFile();
+}
+
+void BruceConfig::setBadUSBBLEStringDelay(uint16_t value) {
+    badUSBBLEStringDelay = value;
+    validateBadUSBBLEStringDelay();
+    saveFile();
+}
+
+void BruceConfig::validateBadUSBBLEStringDelay() {
+    if (badUSBBLEStringDelay > 500) badUSBBLEStringDelay = 500;
+}
+
+void BruceConfig::setBadUSBBLEPayloadDir(const String &value) {
+    badUSBBLEPayloadDir = value;
+    saveFile();
+}
+
+void BruceConfig::setBadUSBBLEDefaultPayload(const String &value) {
+    badUSBBLEDefaultPayload = value;
+    saveFile();
+}
+
+void BruceConfig::setBadUSBBLECustomLayoutFile(const String &value) {
+    badUSBBLECustomLayoutFile = value;
     saveFile();
 }
 void BruceConfig::ensureMifareKeysLoaded() {

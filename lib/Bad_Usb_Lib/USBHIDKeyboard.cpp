@@ -231,10 +231,18 @@ size_t USBHIDKeyboard::write(const uint8_t *buffer, size_t size) {
     size_t n = 0;
     while (size--) {
         if (*buffer != '\r') {
+            // NOTE: this used to `break` on the first character the active
+            // layout cannot express. Every non-US layout leaves at least one
+            // printable character unmapped (the Nordic tables cannot express
+            // the dead keys ^, ` and ~), so a single such character used to
+            // throw away the REST OF THE PAYLOAD - which looks exactly like
+            // the keyboard having stopped emulating HID at all. Skip the
+            // character and keep going; callers that care can check the
+            // return value against the input length and substitute.
             if (write(*buffer)) {
                 n++;
             } else {
-                break;
+                setWriteError(); // record the gap, but do not abandon the rest
             }
         }
         buffer++;

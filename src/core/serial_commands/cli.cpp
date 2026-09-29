@@ -2,9 +2,12 @@
 #include "badusb_commands.h"
 #include "core/sd_functions.h"
 #include "crypto_commands.h"
+#include "debug_commands.h"
+#include "more_atk_commands.h"
 #include "gpio_commands.h"
 #include "interpreter_commands.h"
 #include "ir_commands.h"
+#include "nrf_commands.h"
 #include "power_commands.h"
 #include "rf_commands.h"
 #include "rfid_commands.h"
@@ -44,13 +47,16 @@ void SerialCli::setup() {
     createStorageCommands(&_cli);
     createUtilCommands(&_cli);
     createWifiCommands(&_cli);
+    createDebugCommands(&_cli); // Developer Options verbs (gated on bruceConfig.usbDebug)
 
 #ifdef USB_as_HID
     createBadUsbCommands(&_cli);
 #endif
 #ifndef LITE_VERSION
     createInterpreterCommands(&_cli);
+    createMoreCommands(&_cli); // More-style WiFi attacks (console driver)
 #endif
+    createNrfCommands(&_cli); // NRF24 capture/replay console driver
 #ifdef HAS_SCREEN
     createScreenCommands(&_cli);
 #endif

@@ -4,6 +4,8 @@
 #include "core/ram_profile.h"
 #include "core/utils.h"
 #include "core/wifi/wifi_common.h"
+#include "esp_bt.h"
+#include "esp_heap_caps.h"
 #include "esp_mac.h"
 #include "modules/badusb_ble/ducky_typer.h"
 #if !defined(LITE_VERSION)
@@ -16,6 +18,29 @@
 
 BLEScan *pBLEScan = nullptr;
 int scanTime = SCANTIME;
+
+// ---------------------------------------------------------------------------
+// BLE bring-up that does not leak the controller's internal RAM on failure
+// ---------------------------------------------------------------------------
+// See the long note on bleInit() in ble_common.h. The short version: a failed
+// NimBLEDevice::init() leaves the BT controller initialised and enabled, and
+// NimBLEDevice::deinit() cannot clean that up (it returns immediately while
+// m_initialized is false), so the memory has to be unwound at the IDF level.
+bool bleInit(const char *name) {
+    if (NimBLEDevice::isInitialized()) return true;
+
+    if (NimBLEDevice::init(name == nullptr ? "" : name)) return true;
+
+    esp_bt_controller_disable();
+    esp_bt_controller_deinit();
+
+    Serial.printf(
+        "[BLE] init failed; controller released, internal free=%u dma free=%u\n",
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA)
+    );
+    return false;
+}
 
 bool bleNotifyRetry(NimBLECharacteristic *chr, const uint8_t *value, size_t length, uint8_t retries) {
     if (chr == nullptr) return false;
@@ -120,6 +145,11 @@ void stopBLEStack() {
         hid_ble = nullptr;
     }
 #endif
+
+    // Proof that the teardown actually gave the RAM back. BLE bring-up costs
+    // ~56 KB of internal DRAM (see radio_mem.h), so this line should read close
+    // to the `ble-scan pre-init` value that preceded it.
+    RAM_LOG("ble-stack teardown");
 }
 
 bool ble_scan_setup() {
@@ -142,7 +172,13 @@ bool ble_scan_setup() {
         return false;
     }
 
-    BLEDevice::init("");
+    if (!bleInit("")) {
+        // A half-initialised stack is worse than no stack: the next call would
+        // hit ESP_ERR_INVALID_STATE or trip a NimBLE assert.
+        displayError("BLE init failed (low internal RAM)", true);
+        returnToMenu = true;
+        return false;
+    }
     is_ble_inited = true;
 
     RAM_LOG("ble-scan post-init");
@@ -254,7 +290,10 @@ bool initBLEServer() {
     String blename = "Bruce-" + String((uint8_t)(chipid >> 32), HEX);
 
     if (!is_ble_inited) {
-        BLEDevice::init(blename.c_str());
+        if (!bleInit(blename.c_str())) {
+            displayError("BLE init failed (low internal RAM)", true);
+            return false;
+        }
         is_ble_inited = true;
     }
 

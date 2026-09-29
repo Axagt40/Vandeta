@@ -9,7 +9,11 @@ public:
     size_t println(const String &s) override { return out->println(s); }
     size_t print(const String &s) override { return out->print(s); }
     size_t print(const int n, int format) override { return out->print(n, format); }
-    void vprintf(const char *fmt, va_list args) override { out->printf(fmt, args); }
+    // NOTE: this used to be out->printf(fmt, args), which passes the va_list
+    // itself as a single vararg into a variadic printf - so every %d/%s in a
+    // serialDevice->printf() call printed garbage. vprintf() is the function
+    // that actually takes a va_list.
+    void vprintf(const char *fmt, va_list args) override { out->vprintf(fmt, args); }
     size_t println() override { return out->println(); }
     size_t println(size_t n) override { return out->println(n); }
     size_t println(const uint32_t n) override { return out->println(n); }

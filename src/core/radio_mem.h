@@ -29,7 +29,27 @@ static inline size_t radioLargestDmaBlock() { return heap_caps_get_largest_free_
 constexpr size_t RADIO_WIFI_MIN_DMA_BLOCK = 15 * 1024;
 
 // Minimum contiguous DMA block required before bringing the BLE stack up.
+// NimBLE still has single DMA allocations, so this stays a necessary condition
+// - but on its own it is NOT sufficient (see below).
 constexpr size_t RADIO_BLE_MIN_DMA_BLOCK = 15 * 1024;
+
+// TOTAL free internal DRAM NimBLE needs before its bring-up can succeed.
+//
+// Measured on a T-Embed CC1101 with `RAM_LOG()` around `bleInit()` in
+// ble_common.cpp: the scan menu reported heap free 73819 before the call and
+// 16459 after it, i.e. controller + host + HCI buffers consume ~56 KB. Note that
+// the largest *contiguous* block was only 31732 in that same successful run, so
+// the old "15 KB contiguous DMA" test was testing the wrong quantity: it said
+// "yes" in states (a running script leaves ~54 KB free internal) where the
+// bring-up can never fit, and the user only found out from a generic failure.
+//
+// The number below is deliberately below the measured 56 KB: a borderline
+// attempt that still fails is now cheap, because `bleInit()` (ble_common.cpp)
+// unwinds a failed controller bring-up and returns its RAM instead of leaking
+// it. Guessing high here would refuse BLE where it would have worked.
+constexpr size_t RADIO_BLE_MIN_INTERNAL_FREE = 60 * 1024;
+
+static inline size_t radioFreeInternal() { return heap_caps_get_free_size(MALLOC_CAP_INTERNAL); }
 
 static inline bool radioHasMemForWifi() {
     // return true; // uncomment to disable it
@@ -38,14 +58,20 @@ static inline bool radioHasMemForWifi() {
 
 static inline bool radioHasMemForBle() {
     // return true; // uncomment to disable it
-    
-    // First check if we have enough DMA memory
-    if (radioLargestDmaBlock() >= RADIO_BLE_MIN_DMA_BLOCK) {
+
+    // BOTH conditions matter: total free internal DRAM (NimBLE's many buffers)
+    // and one contiguous DMA block for its largest single allocation.
+    if (radioFreeInternal() >= RADIO_BLE_MIN_INTERNAL_FREE &&
+        radioLargestDmaBlock() >= RADIO_BLE_MIN_DMA_BLOCK) {
         return true;
     }
     
-    // Not enough DMA memory - try to free WiFi
-    Serial.println("[RAM] Low contiguous DMA memory for BLE, attempting to free WiFi...");
+    // Not enough memory - try to free WiFi
+    Serial.printf(
+        "[RAM] Low memory for BLE (free internal %u, DMA block %u), attempting to free WiFi...\n",
+        (unsigned)radioFreeInternal(),
+        (unsigned)radioLargestDmaBlock()
+    );
     
     // Disconnect WiFi if active
     if (WiFi.getMode() != WIFI_MODE_NULL || wifiConnected) {
@@ -58,14 +84,24 @@ static inline bool radioHasMemForBle() {
     }
     
     // Recheck after freeing WiFi
-    if (radioLargestDmaBlock() >= RADIO_BLE_MIN_DMA_BLOCK) {
-        Serial.printf("[RAM] WiFi freed, DMA block: %d bytes\n", radioLargestDmaBlock());
+    if (radioFreeInternal() >= RADIO_BLE_MIN_INTERNAL_FREE &&
+        radioLargestDmaBlock() >= RADIO_BLE_MIN_DMA_BLOCK) {
+        Serial.printf(
+            "[RAM] WiFi freed, free internal %u, DMA block %u\n",
+            (unsigned)radioFreeInternal(),
+            (unsigned)radioLargestDmaBlock()
+        );
         return true;
     }
     
     // Still not enough - return false, caller shows error
-    Serial.printf("[RAM] Still only %d bytes DMA block, minimum %d needed\n", 
-                  radioLargestDmaBlock(), RADIO_BLE_MIN_DMA_BLOCK);
+    Serial.printf(
+        "[RAM] Still not enough for BLE: free internal %u (need %u), DMA block %u (need %u)\n",
+        (unsigned)radioFreeInternal(),
+        (unsigned)RADIO_BLE_MIN_INTERNAL_FREE,
+        (unsigned)radioLargestDmaBlock(),
+        (unsigned)RADIO_BLE_MIN_DMA_BLOCK
+    );
     return false;
 }
 

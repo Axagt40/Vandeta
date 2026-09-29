@@ -15,6 +15,7 @@
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "evil_portal.h"
+#include "more_atks.h"
 #include "karma_attack.h"
 #include "sniffer.h"
 #include "vector"
@@ -255,6 +256,7 @@ void wifi_atk_menu() {
         {"Beacon SPAM",     [=]() { beaconAttack(); }      },
         {"Deauth Flood",    [=]() { deauthFloodAttack(); } },
         {"Enhanced Deauth", [=]() { enhancedDeauthMenu(); }},
+        {"More Attacks",    [=]() { moreAtkMenu(); }       },
     };
     addOptionToMainMenu();
     loopOptions(options);
@@ -646,14 +648,18 @@ AGAIN:
 #ifndef LITE_VERSION
         {"Capture Handshake",   [=]() { capture_handshake(tssid, mac, channel); }  },
 #endif
+        {"More Attacks",        [=]() { moreTargetAtkMenu(tssid, mac, channel); } },
         {"Clone Portal",        [=]() { EvilPortal(tssid, channel, false, false); }},
         {"Deauth+Clone",        [=]() { EvilPortal(tssid, channel, true, false); } },
         {"Deauth+Clone+Verify", [=]() { EvilPortal(tssid, channel, true, true); }  },
     };
     addOptionToMainMenu();
 
-    loopOptions(options);
-    if (!returnToMenu) goto AGAIN;
+    int selected = loopOptions(options);
+    // Physical Back leaves the page instead of re-rendering it.
+    if (selected < 0) return;
+    if (returnToMenu) return; // "Main Menu" entry
+    goto AGAIN;
 }
 
 void target_atk(const String &tssid, const String &mac, uint8_t channel) {

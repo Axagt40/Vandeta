@@ -1,4 +1,5 @@
 #include "serialcmds.h"
+#include "core/usb_debug/usbdebug.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -44,9 +45,26 @@ void handleSerialCommands(SerialCli &serialCli) {
             Serial.printf("[CLI] Result: %s\n", result ? "TRUE" : "FALSE");
         }
     }
+    // Developer Options in binary protocol mode owns the port for this pass, so
+    // the text CLI must not read it (that would split the framed stream).
+    if (UsbDebug::pollSerial()) return;
+
     if (!serialDevice->available()) return;
 
     String cmd_str = serialDevice->readStringUntil('\n');
+
+    // Debug layer: history (!, !!, !n) and the history ring. Inert unless the
+    // Developer Options setting is on.
+    if (UsbDebug::enabled()) {
+        String typed = cmd_str;
+        typed.trim();
+        if (typed.length() > 0) {
+            String expanded = UsbDebug::expandHistory(typed);
+            if (expanded != typed) cmd_str = expanded;
+            UsbDebug::remember(typed);
+        }
+    }
+
     Serial.println("COMMAND: " + cmd_str);
     serialCli.parse(cmd_str);
     serialDevice->print("# "); // prompt
@@ -63,6 +81,7 @@ void _serialCmdsTaskLoop(void *pvParameters) {
     Serial.begin(115200);
     while (1) {
         handleSerialCommands(serialCli);
+        UsbDebug::loop(); // batch queue drain + hot reload polling + error stream
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }

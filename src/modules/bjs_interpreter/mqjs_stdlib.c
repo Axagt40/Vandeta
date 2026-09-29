@@ -665,6 +665,37 @@ static const JSPropDef js_ble[] = {
     /* spam (headless, time-bounded) */
     JS_CFUNC_DEF("spam", 2, native_bleSpam),
     JS_CFUNC_DEF("spamModes", 0, native_bleSpamModes),
+
+    /* GATT client */
+    JS_CFUNC_DEF("init", 1, native_bleInit),
+    JS_CFUNC_DEF("setAddress", 2, native_bleSetAddress),
+    JS_CFUNC_DEF("connect", 2, native_bleConnect),
+    JS_CFUNC_DEF("disconnect", 0, native_bleDisconnect),
+    JS_CFUNC_DEF("isConnected", 0, native_bleIsConnected),
+    JS_CFUNC_DEF("address", 0, native_bleAddress),
+    JS_CFUNC_DEF("services", 0, native_bleServices),
+    JS_CFUNC_DEF("getService", 1, native_bleGetService),
+    JS_CFUNC_DEF("characteristics", 1, native_bleCharacteristics),
+    JS_CFUNC_DEF("getCharacteristic", 2, native_bleGetCharacteristic),
+    JS_CFUNC_DEF("read", 2, native_bleRead),
+    JS_CFUNC_DEF("write", 4, native_bleWrite),
+    JS_CFUNC_DEF("notify", 3, native_bleNotify),
+    JS_CFUNC_DEF("pollEvents", 0, native_blePollEvents),
+
+    /* raw advertisement capture / replay (same engine as the BLE menu) */
+    JS_CFUNC_DEF("captureStart", 1, native_bleCaptureStart),
+    JS_CFUNC_DEF("captureStop", 0, native_bleCaptureStop),
+    JS_CFUNC_DEF("captureRunning", 0, native_bleCaptureRunning),
+    JS_CFUNC_DEF("captureCount", 0, native_bleCaptureCount),
+    JS_CFUNC_DEF("captureClear", 0, native_bleCaptureClear),
+    JS_CFUNC_DEF("captureList", 2, native_bleCaptureList),
+    JS_CFUNC_DEF("captureReplay", 2, native_bleCaptureReplay),
+    JS_CFUNC_DEF("captureSave", 2, native_bleCaptureSave),
+    JS_CFUNC_DEF("captureLoad", 1, native_bleCaptureLoad),
+    JS_CFUNC_DEF("captureAnalyze", 1, native_bleCaptureAnalyze),
+    JS_CFUNC_DEF("remoteTypes", 0, native_bleRemoteTypes),
+    JS_CFUNC_DEF("setRemoteType", 1, native_bleSetRemoteType),
+    JS_CFUNC_DEF("scanDetailed", 2, native_bleScanDetailed),
     JS_PROP_END,
 };
 
@@ -673,10 +704,31 @@ const JSClassDef js_ble_obj = JS_OBJECT_DEF("BLE", js_ble);
 /* NRF24 module */
 static const JSPropDef js_nrf24[] = {
     JS_CFUNC_DEF("begin", 1, native_nrf24Begin),
+    JS_CFUNC_DEF("init", 1, native_nrf24Init),
     JS_CFUNC_DEF("send", 2, native_nrf24Send),
     JS_CFUNC_DEF("receive", 1, native_nrf24Receive),
     JS_CFUNC_DEF("setChannel", 1, native_nrf24SetChannel),
+    JS_CFUNC_DEF("setDataRate", 1, native_nrf24SetDataRate),
+    JS_CFUNC_DEF("setPowerLevel", 1, native_nrf24SetPowerLevel),
+    JS_CFUNC_DEF("setAddress", 1, native_nrf24SetAddress),
+    JS_CFUNC_DEF("startListening", 0, native_nrf24StartListening),
+    JS_CFUNC_DEF("stopListening", 0, native_nrf24StopListening),
+    JS_CFUNC_DEF("available", 0, native_nrf24Available),
+    JS_CFUNC_DEF("read", 0, native_nrf24Read),
     JS_CFUNC_DEF("isConnected", 0, native_nrf24IsConnected),
+
+    /* advanced: pseudo-promiscuous mode, raw capture/replay, analysis */
+    JS_CFUNC_DEF("setPromiscuousMode", 1, native_nrf24SetPromiscuousMode),
+    JS_CFUNC_DEF("setFrequencyHopMode", 1, native_nrf24SetFrequencyHopMode),
+    JS_CFUNC_DEF("scanAllChannels", 1, native_nrf24ScanAllChannels),
+    JS_CFUNC_DEF("captureRaw", 1, native_nrf24CaptureRaw),
+    JS_CFUNC_DEF("captureMultiFreq", 1, native_nrf24CaptureMultiFreq),
+    JS_CFUNC_DEF("replayRaw", 3, native_nrf24ReplayRaw),
+    JS_CFUNC_DEF("saveSignal", 2, native_nrf24SaveSignal),
+    JS_CFUNC_DEF("loadSignal", 1, native_nrf24LoadSignal),
+    JS_CFUNC_DEF("analyzeSignal", 1, native_nrf24AnalyzeSignal),
+    JS_CFUNC_DEF("setFrequencyRange", 2, native_nrf24SetFrequencyRange),
+    JS_CFUNC_DEF("detectMultiFreqSignals", 1, native_nrf24DetectMultiFreqSignals),
     JS_PROP_END,
 };
 

@@ -1,6 +1,6 @@
 ![Bruce-Modded on the LilyGo T-Embed CC1101](./media/pictures/bruce_banner.jpg)
 
-# Bruce-Modded — Dev 1.1
+# Bruce-Modded — Dev 1.2
 
 **Stock Bruce, with the WiFi radio handed to JavaScript.**
 
@@ -12,13 +12,13 @@ and background jobs — all driven from the on-device JavaScript interpreter.
 Built and tested on the **LilyGo T-Embed CC1101** (ESP32-S3, 16 MB flash /
 8 MB PSRAM).
 
-![firmware](https://img.shields.io/badge/firmware-Dev%201.1-blue)
+![firmware](https://img.shields.io/badge/firmware-Dev%201.2-blue)
 ![board](https://img.shields.io/badge/board-LilyGo%20T--Embed%20CC1101-informational)
 ![mcu](https://img.shields.io/badge/MCU-ESP32--S3-success)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-orange)
 
 [Flash it](#flashing-the-release-image) ·
-[What's new](#whats-new-in-dev-11) ·
+[What's new](#whats-new-in-dev-12) ·
 [JavaScript API](#javascript-api) ·
 [Build it](#building-from-source) ·
 [Limitations](#known-limitations)
@@ -36,8 +36,31 @@ as **functions a script calls**, adds a raw 802.11 transmit path, a promiscuous
 capture engine and a captive-portal engine, and then makes the interpreter safe
 against the JS engine's moving garbage collector.
 
-> **Status:** Dev 1.1, based on upstream `main` @ `a59213f3` (2026-09-24).
+> **Status:** Dev 1.2, based on upstream `main` @ `a59213f3` (2026-09-24).
 > Only the LilyGo T-Embed CC1101 target is built and tested.
+
+---
+
+## What's new in Dev 1.2
+
+A scriptable debug console, three more of the board's radios exposed to
+JavaScript together with the on-device menus that go with them, a full BadUSB
+configuration menu, an extra set of WiFi attacks, and two fixes that hand back
+internal RAM and make a non-US keyboard layout actually type.
+
+| # | Change | Detail |
+|---|--------|--------|
+| 16 | **Developer Options mode** | A console over USB-Serial-JTAG (Config → System Config → Developer Options): file and directory verbs, navigation, transfers, JS execution, an error stream, process/system info, command queueing and history. A framed binary protocol (`A5 5A`, CRC-16/CCITT) moves files byte-identically at ~18 KB/s and backs the host-side `tools/usb_debug.py` client |
+| 17 | **BadUSB configuration menu** | BadUSB gained a config menu: USB footprint (VID/PID, manufacturer, product, serial), keyboard layout selection, a built-in **Finland (fi-FI)** layout plus import/export/copy of custom layout files, HID device type (keyboard / composite / mouse), attack speed and string delay, and payload folder management |
+| 18 | **More Attacks** | WiFi → WiFi Atks → **More Attacks** (and Target Atks → **More Attacks**): EAPOL Logoff, Channel Switch, Bad Message, Auth Flood, Probe Request Flood, Authentication Attack, EAPOL Start Attack and Disassociation Attack, all deadline-bounded and stopped with Back, so they can run from a menu or the console. Beacon Flood is the existing beacon-spam engine |
+| 19 | **BLE: GATT client and capture/replay in JS** | `ble.init/setAddress/scan/scanDetailed/connect/disconnect/getService/getCharacteristic/read/write/notify/pollEvents` plus `ble.captureStart/captureStop/captureList/captureReplay/captureSave/captureLoad/captureAnalyze/setRemoteType`, backed by the same engine as the new **BLE → Capture & Replay** menu |
+| 20 | **NRF24: raw capture, analysis and replay in JS** | The full `nrf24.*` set, plus pseudo-promiscuous mode (CRC off, auto-ack off, minimum address width), `setPromiscuousMode`, `scanAllChannels`, `setFrequencyHopMode`, `captureRaw`, `captureMultiFreq`, `replayRaw`, `saveSignal`/`loadSignal`, `analyzeSignal`, `setFrequencyRange` and `detectMultiFreqSignals` |
+| 21 | **On-device capture menus** | NRF24 → **Raw Capture** (capture, hop capture, channel scan, multi-frequency detection, frequency analysis, list, save/load, replay, analyse) and BLE → **Capture & Replay** (start/stop, filter, save/load, replay, analyse, remote type, detailed scan), all over the same engines the scripts drive. Both show a live counter while they run, **only Back interrupts** a running capture (the screen says so) and Back returns to the previous menu |
+| 22 | **Apps** | The main menu's **JS Interpreter** entry is now **Apps**, with a new app-drawer icon to match the other menu icons. The page behind it (scripts, App Store, Load…) is unchanged, and a menu entry hidden under the old name stays hidden |
+| 23 | **BLE memory fix** | A BLE bring-up that failed left the controller initialised and enabled, keeping ~34 KB of internal RAM gone for the rest of the boot and making every later Wi-Fi/BLE attempt fail on RAM. It is now unwound on failure. The BLE memory guard also checked the wrong quantity — only the largest contiguous DMA block (15 KB) instead of the ~56 KB of internal DRAM a bring-up needs — so it refused nothing and reported nothing; it now checks both and says which one is short |
+| 24 | **BadUSB typing fix** | The keyboard-layout table had one entry fewer than the layout index range that can be selected and persisted, so the last layout handed HID a garbage table and typing stopped working entirely; there is now a real Finnish (Nordic) table and every index is clamped. A character the active layout cannot express (the Nordic dead keys) no longer throws away the rest of the payload |
+| 25 | **Script teardown** | `interpreter.cpp` also calls `ble_js_cleanup()`, stopping a background BLE capture and dropping the GATT client when a script ends |
+| 26 | **Boot version** | The splash screen now reads **Bruce / dev 1.2** |
 
 ---
 
@@ -69,8 +92,6 @@ rendered the forged page.
 traffic that ends at this board can be intercepted. Read
 > [known limitations](#known-limitations) first.
 
----
-
 ## What's new in Dev 1.0
 
 ### Firmware engine
@@ -98,10 +119,11 @@ stock Bruce already exposed. Signatures: [JavaScript API](#javascript-api).
 ## Flashing the release image
 
 **Download:** the prebuilt image is attached to the
-[**Dev 1.1 release**](https://github.com/Axagt40/Bruce-Modded/releases/tag/dev-1.1)
-(`Bruce-modded.bin` — 4,362,480 bytes, sha256 `a68e5e9f…cc2f4` — plus its
-`.sha256`) and is also committed at the repository root. The Dev 1.0 image stays
-available on the [Dev 1.0 release](https://github.com/Axagt40/Bruce-Modded/releases/tag/dev-1.0).
+[**Dev 1.2 release**](https://github.com/Axagt40/Bruce-Modded/releases/tag/dev-1.2)
+(`Bruce-modded.bin` — 4,489,696 bytes, sha256 `dfa1b36d…5ce6d` — plus its
+`.sha256`) and is also committed at the repository root. The older images stay
+available on the [Dev 1.1 release](https://github.com/Axagt40/Bruce-Modded/releases/tag/dev-1.1)
+and the [Dev 1.0 release](https://github.com/Axagt40/Bruce-Modded/releases/tag/dev-1.0).
 
 The image is **merged** (bootloader + partition table + app) and **must be
 flashed at offset `0x0`**.
@@ -124,7 +146,7 @@ esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 921600 \
 * To go back to stock Bruce or a Launcher install, flash that project's merged
   image at `0x0` the same way, after an `erase_flash`.
 
-First boot shows **Bruce** with **dev 1.1** underneath.
+First boot shows **Bruce** with **dev 1.2** underneath.
 
 ---
 
@@ -168,6 +190,22 @@ wifi.injectPacket("80000000ffffffffffffaabbccddeeffaabbccddeeff0000", 6);
 | `httpInterceptor.start()` / `stop()` / `addRedirect(pattern, url)` / `addInjection(pattern, html)` / `clearRules()` / `getInterceptedData(clear?)` | `object` |
 | `scriptFolder.create/list/load/run/close/isRunning/getAllScripts/stop/kill` + `setShared/getShared/clearShared` | `object` |
 | `ble.spam(type?, seconds?)` / `ble.spamModes()` | `number` / `array` |
+| `ble.init(name?)` / `ble.address()` / `ble.setAddress(addr, type?)` | `boolean` / `string` / `boolean` |
+| `ble.scan(seconds?)` / `ble.scanDetailed(seconds?, max?)` | `array` |
+| `ble.connect(addr, timeoutMs?, addrType?)` / `ble.disconnect()` / `ble.isConnected()` | `boolean` |
+| `ble.services()` / `ble.getService(uuid)` / `ble.characteristics(service)` / `ble.getCharacteristic(service, uuid)` | `array` / `number` |
+| `ble.read(charIndex, asText?)` / `ble.write(charIndex, data, asText?, withResponse?)` | `string` / `boolean` |
+| `ble.notify(charIndex, enable?, callback?)` / `ble.pollEvents()` | `boolean` / `number` |
+| `ble.captureStart(maxSeconds?)` / `ble.captureStop()` / `ble.captureRunning()` / `ble.captureCount()` / `ble.captureClear()` | `boolean` / `number` |
+| `ble.captureList(filter?, max?)` / `ble.captureAnalyze(index?)` | `array` / `object` |
+| `ble.captureReplay(seconds?, spoofAddress?)` / `ble.captureSave(name, label?)` / `ble.captureLoad(name)` | `boolean` / `number` |
+| `ble.remoteTypes()` / `ble.setRemoteType(index or name)` | `array` / `number` |
+| `nrf24.init()` / `setChannel(ch)` / `setDataRate(rate)` / `setPowerLevel(level)` / `setAddress(hex)` | `boolean` |
+| `nrf24.startListening()` / `stopListening()` / `available()` / `read()` / `send(data)` / `receive(timeoutMs?)` | `boolean` / `string` |
+| `nrf24.setPromiscuousMode(enable)` / `setFrequencyHopMode(enable)` / `setFrequencyRange(startMhz, endMhz)` | `boolean` |
+| `nrf24.scanAllChannels(dwellMs?)` / `captureRaw(ms)` / `captureMultiFreq(ms)` / `loadSignal(name)` | `array` |
+| `nrf24.replayRaw(data, channel?, repeat?)` / `saveSignal(name, data)` | `boolean` |
+| `nrf24.analyzeSignal(data)` / `detectMultiFreqSignals(ms?)` | `object` |
 | `ir.transmitRaw(frequency, rawData)` | `boolean` |
 | `subghz.scan(startFreq?, stopFreq?, maxLoops?)` | `string` |
 | `serial.available()` / `serial.read(maxBytes?, timeoutMs?)` | `number` / `string` |
@@ -196,10 +234,59 @@ while the script runs. Plain HTTP only: a browser that upgrades an `http://`
 address to HTTPS fails (there is no TLS listener), and a client with Private DNS
 (DoT) on never reaches the spoofer at all.
 
+### Cloning a BLE or 2.4 GHz remote
+
+Both radios are scriptable, and the scripts share their capture state with the
+**BLE → Capture & Replay** and **NRF24 → Raw Capture** menus, so a capture taken
+on screen can be replayed from a script and the other way round.
+
+```js
+// BLE: record the advertisements a remote broadcasts, then replay them.
+ble.captureStart(5);                       // background scan, up to 5 seconds
+while (ble.captureRunning()) { delay(250); }
+var pkts = ble.captureList("", 10);        // [{index, description, address, hex, ...}]
+console.log(pkts.length + " adverts, first " + pkts[0].hex);
+ble.captureSave("living_room", "ble");
+ble.captureReplay(3, true);                // 3 s, spoof the original address
+
+// NRF24: pseudo-promiscuous capture of a 2.4 GHz remote on two frequencies.
+nrf24.init();
+nrf24.setPromiscuousMode(true);
+nrf24.setFrequencyRange(2400, 2483);
+nrf24.setFrequencyHopMode(true);
+var hits = nrf24.captureRaw(3000);
+if (hits.length > 0) {
+    var a = nrf24.analyzeSignal(hits[0].data);
+    console.log(a.kind + " len=" + a.len + " repeats=" + a.repeats);
+    nrf24.saveSignal("remote_btn_a", hits[0].data);
+    nrf24.replayRaw(hits[0].data, hits[0].channel, 3);
+}
+```
+
+A GATT connection works the same way as the phone apps: scan, connect with the
+`addrType` the scan reported (most devices are random, not public), then walk
+services and characteristics.
+
+```js
+var dev = ble.scanDetailed(4, 10);
+for (var i = 0; i < dev.length; i++) {
+    if (dev[i].name.indexOf("MyDevice") != -1) {
+        ble.connect(dev[i].address, 5000, dev[i].addrType);
+        var ch = ble.getCharacteristic("2a19");        // battery level
+        console.log("battery " + parseInt(ble.read(ch), 16));
+        ble.disconnect();
+    }
+}
+```
+
+> `nrf24.captureRaw()` and `ble.captureStart()` block or run in the background
+> respectively; both need the radio, so do not run a capture while another radio
+> feature is active. See [known limitations](#known-limitations).
+
 ### Running a script
 
 Put the script on the SD card under `/scripts`, `/BruceScripts` or `/BruceJS`
-(LittleFS works as a fallback), then open **Scripts** in the main menu, or load
+(LittleFS works as a fallback), then open **Apps** in the main menu, or load
 it from another script:
 
 ```js
@@ -247,6 +334,24 @@ be fixed. Read them before filing an issue.
   boxes.
 * **The panel is 320x170 landscape**, so lay out from `display.width()` /
   `display.height()` rather than hardcoded geometry.
+* **Pseudo-promiscuous nRF24 receive is not true promiscuous mode.** The
+  nRF24L01 filters by address in hardware: `setPromiscuousMode(true)` disables
+  the CRC and shortens the address to three bytes, which catches most 2.4 GHz
+  traffic and a lot of noise, but a packet whose leading address bytes differ is
+  still dropped by the chip.
+* **A 2.4 GHz capture is not a demodulation.** `captureRaw` stores the on-air
+  bytes; a remote that transmits at 250 kbps or uses a proprietary framing may
+  capture as noise. Try the data rates in `nrf24.setDataRate()` before replaying.
+* **Only one radio feature at a time.** nRF24, BLE and WiFi share the antenna and
+  their own SPI buses; a capture while another radio is running gives garbage.
+* **BLE replay is an advertisement replay.** It re-broadcasts the recorded
+  advertisement bytes (and can spoof the address), which is what vendor remotes
+  respond to. It cannot inject into an existing GATT connection.
+* **`ble.connect()` needs the right address type.** Modern devices use a random
+  address; pass the `addrType` that `ble.scan()`/`ble.scanDetailed()` reported or
+  the connection is attempted against the wrong address and fails.
+* **GATT calls block the script** while the peer answers, and a background
+  `ble.captureStart()` still owns the radio until `ble.captureStop()` returns.
 * **Long native calls block the script** - the UI freezes until they return.
 
 ---
@@ -338,6 +443,15 @@ Also, [read our FAQ](https://wiki.bruce.computer/faq/)
     - [x] Target Deauth
     - [x] EvilPortal + Deauth
   - [x] Deauth Flood (More than one target)
+  - [x] Additional attacks (menu page: "More Attacks")
+    - [x] EAPOL Logoff
+    - [x] Channel Switch
+    - [x] Bad Message
+    - [x] Auth Flood
+    - [x] Probe Request Flood
+    - [x] Authentication Attack
+    - [x] EAPOL Start Attack
+    - [x] Disassociation Attack
 - [x] [Wardriving](https://wiki.bruce.computer/features/gps/#wardriving)
 - [x] [TelNet](https://wiki.bruce.computer/features/wifi/#telnet)
 - [x] [SSH](https://wiki.bruce.computer/features/wifi/#ssh)
@@ -367,6 +481,7 @@ Also, [read our FAQ](https://wiki.bruce.computer/faq/)
 - [x] iOS Spam
 - [x] Windows Spam
 - [x] Samsung Spam
+- [x] Capture & Replay (record, filter, analyse, save/load and replay raw advertisements, with per-vendor remote types)
 - [x] Android Spam
 - [x] Spam All
 </details>
@@ -434,11 +549,12 @@ Also, [read our FAQ](https://wiki.bruce.computer/faq/)
 
 - [x] [NRF24 Jammer](https://wiki.bruce.computer/features/nrf24/)
 - [x] 2.4G Spectrum
+- [x] Raw Capture (pseudo-promiscuous listen, channel scan, multi-frequency detect, analyse, save/load, replay)
 - [ ] Mousejack
 </details>
 
 <details>
-  <summary><h2>Scripts</h2></summary>
+  <summary><h2>Apps</h2></summary>
 
 - [x] [JavaScript Interpreter](https://wiki.bruce.computer/features/js-interpreter/) [Credits to justinknight93](https://github.com/justinknight93/Doolittle)
 </details>
@@ -464,6 +580,8 @@ Also, [read our FAQ](https://wiki.bruce.computer/faq/)
   - [x] Spiffs Mngr
 - [x] Megalodon
 - [x] [BADUsb (New features, LittleFS and SDCard)](https://wiki.bruce.computer/features/others/#badusb)
+  - [x] BadUSB config menu: USB footprint (VID/PID/manufacturer/product/serial), keyboard layout, HID device type, attack speed and timing, payload folder
+  - [x] Finland (fi-FI) layout, plus import/export/copy of custom layout files
 - [x] USB Keyboard - Cardputer and T-Deck Only
 - [x] [iButton](https://wiki.bruce.computer/features/others/#ibutton)
 - [x] LED Control

@@ -25,71 +25,32 @@ void ScriptsMenu::optionsMenu() {
 void ScriptsMenu::drawIcon(float scale) {
     clearIconArea();
 
-    int iconW = scale * 40;
-    int iconH = scale * 60;
+    // App drawer: a rounded card holding a 3x3 grid of tiles, so the entry reads
+    // as "applications" while keeping the same line-art look (primary colour on
+    // background) as the other main menu icons. Purely a visual change - the
+    // entry still opens the JavaScript interpreter / App Store page.
+    int iconW = scale * 56;
+    int iconH = scale * 56;
 
     if (iconW % 2 != 0) iconW++;
     if (iconH % 2 != 0) iconH++;
 
-    int foldSize = iconH / 4;
-    int arrowSize = iconW / 10;
-    int arrowPadX = 2 * arrowSize;
-    int arrowPadBottom = 3 * arrowPadX;
-    int slashSize = 2 * arrowSize;
+    int x = iconCenterX - iconW / 2;
+    int y = iconCenterY - iconH / 2;
+    int inner = scale * 9;
+    int corner = scale * 10;
 
-    // File
-    tft.drawRect(iconCenterX - iconW / 2, iconCenterY - iconH / 2, iconW, iconH, bruceConfig.priColor);
-    tft.fillRect(
-        iconCenterX + iconW / 2 - foldSize, iconCenterY - iconH / 2, foldSize, foldSize, bruceConfig.bgColor
-    );
-    tft.drawTriangle(
-        (iconCenterX + iconW / 2 - foldSize),
-        (iconCenterY - iconH / 2),
-        (iconCenterX + iconW / 2 - foldSize),
-        (iconCenterY - iconH / 2 + foldSize - 1),
-        (iconCenterX + iconW / 2 - 1),
-        (iconCenterY - iconH / 2 + foldSize - 1),
-        bruceConfig.priColor
-    );
+    tft.drawRoundRect(x, y, iconW, iconH, corner, bruceConfig.priColor);
 
-    // Left Arrow
-    tft.drawLine(
-        iconCenterX - iconW / 2 + arrowPadX,
-        iconCenterY + iconH / 2 - arrowPadBottom,
-        iconCenterX - iconW / 2 + arrowPadX + arrowSize,
-        iconCenterY + iconH / 2 - arrowPadBottom + arrowSize,
-        bruceConfig.priColor
-    );
-    tft.drawLine(
-        iconCenterX - iconW / 2 + arrowPadX,
-        iconCenterY + iconH / 2 - arrowPadBottom,
-        iconCenterX - iconW / 2 + arrowPadX + arrowSize,
-        iconCenterY + iconH / 2 - arrowPadBottom - arrowSize,
-        bruceConfig.priColor
-    );
-
-    // Slash
-    tft.drawLine(
-        iconCenterX - slashSize / 2,
-        iconCenterY + iconH / 2 - arrowPadBottom + arrowSize,
-        iconCenterX + slashSize / 2,
-        iconCenterY + iconH / 2 - arrowPadBottom - arrowSize,
-        bruceConfig.priColor
-    );
-
-    // Right Arrow
-    tft.drawLine(
-        iconCenterX + iconW / 2 - arrowPadX,
-        iconCenterY + iconH / 2 - arrowPadBottom,
-        iconCenterX + iconW / 2 - arrowPadX - arrowSize,
-        iconCenterY + iconH / 2 - arrowPadBottom + arrowSize,
-        bruceConfig.priColor
-    );
-    tft.drawLine(
-        iconCenterX + iconW / 2 - arrowPadX,
-        iconCenterY + iconH / 2 - arrowPadBottom,
-        iconCenterX + iconW / 2 - arrowPadX - arrowSize,
-        iconCenterY + iconH / 2 - arrowPadBottom - arrowSize,
-        bruceConfig.priColor
-    );
+    int cell = (iconW - 2 * inner) / 3;
+    int tile = cell * 2 / 3;
+    if (tile < 3) tile = 3;
+    int tileRadius = tile / 3;
+    for (int row = 0; row < 3; row++) {
+        for (int col = 0; col < 3; col++) {
+            int tx = x + inner + col * cell + (cell - tile) / 2;
+            int ty = y + inner + row * cell + (cell - tile) / 2;
+            tft.fillRoundRect(tx, ty, tile, tile, tileRadius, bruceConfig.priColor);
+        }
+    }
 }

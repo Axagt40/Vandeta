@@ -8,6 +8,7 @@ extern "C" {
 #include "mqjs_stdlib.h"
 }
 
+#include "ble_js.h"
 #include "display_js.h"
 #include "globals_js.h"
 #include "net_spoof_js.h"
@@ -118,6 +119,9 @@ void interpreterHandler(void *pvParameters) {
 
     // Drop any promiscuous capture state a script left behind.
     wifi_js_cleanup();
+
+    // Close the BLE GATT client and stop a background BLE capture.
+    ble_js_cleanup();
 
     printMemoryUsage("deinit interpreter");
 

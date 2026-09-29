@@ -61,6 +61,41 @@ void PresenterMode(HIDInterface *&hid, bool ble = true);
 // Shared cleanup for ducky_typer BLE functions - cleans a specific instance
 void cleanupDuckyBLE(HIDInterface *&hid);
 
+// ---------------------------------------------------------------------------
+// BadUSB keyboard layout management (backs the BadUSB Config menu and the
+// badusb.setLayout console/JS helpers).
+//   indices 0..14  on-flash layouts (0 US, 1 Danish, 2 UK, 3 FR, 4 DE, 5 HU,
+//                  6 IT, 7 US-alt, 8 PT-BR, 9 PT, 10 SI, 11 ES, 12 SV,
+//                  13 TR, 14 Finnish)
+//   index 15       user supplied custom layout held in RAM
+// ---------------------------------------------------------------------------
+#define BADUSB_LAYOUT_CUSTOM_INDEX 15
+#define BADUSB_LAYOUT_COUNT_TOTAL 16
+
+/// Human readable name for a layout index (never returns NULL).
+const char *badusbLayoutName(int idx);
+/// Number of selectable layout slots (16).
+int badusbLayoutCount();
+/// Byte table for a layout index; handles the custom layout and clamps.
+const uint8_t *badusbResolveLayout(int idx);
+/// Copy an on-flash layout into the custom buffer ("create from existing").
+bool badusbSeedCustomLayoutFrom(int idx);
+/// Import a custom layout from a text file of 128 hex bytes.
+bool badusbLoadCustomLayoutFile(const String &path);
+/// Export the current custom layout to a text file.
+bool badusbSaveCustomLayoutFile(const String &path);
+/// Run a payload file through the HID/BLE ducky engine (true when it ran).
+bool badusbRunPayload(const String &filepath);
+
+#if defined(USB_as_HID)
+/// Apply the configured USB VID/PID/manufacturer/product/serial before USB.begin().
+void badusbApplyUsbFootprint();
+/// Create the optional mouse HID endpoint for composite/mouse device types.
+void badusbStartHidExtraDevices();
+void badusbMouseMove(int8_t x, int8_t y, int8_t wheel);
+void badusbMouseClick(uint8_t button);
+#endif
+
 // Double cleanup with cooling delay
 void safeCleanupDuckyBLE(HIDInterface *&hid);
 

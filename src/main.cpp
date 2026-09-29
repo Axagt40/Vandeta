@@ -5,6 +5,7 @@
 #include "core/powerSave.h"
 #include "core/ram_profile.h"
 #include "core/serial_commands/cli.h"
+#include "core/usb_debug/usbdebug.h"
 #include "core/utils.h"
 #include "current_year.h"
 #include "esp32-hal-psram.h"
@@ -566,6 +567,9 @@ void setup() {
 #endif
     //  start a task to handle serial commands while the webui is running
     startSerialCommandsHandlerTask(true);
+    // Developer Options: prints the boot banner and installs the log hook when the
+    // persisted setting is on. Always starts in text protocol mode (safety).
+    UsbDebug::begin();
 
     wakeUpScreen();
     if (bruceConfig.startupApp != "" && !startupApp.startApp(bruceConfig.startupApp)) {

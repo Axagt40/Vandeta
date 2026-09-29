@@ -1,6 +1,7 @@
 #include "utils.h"
 #include "core/wifi/wifi_common.h" //to return MAC addr
 #include "scrollableTextArea.h"
+#include <esp_heap_caps.h>
 #include <Preferences.h>
 #include <globals.h>
 
@@ -332,12 +333,16 @@ String formatTimeDecimal(uint32_t totalMillis) {
 void printMemoryUsage(const char *msg) {
     Serial.printf(
         "%s:\nPSRAM: [Free: %lu, max alloc: %lu],\nRAM: [Free: %lu, "
-        "max alloc: %lu]\n\n",
+        "max alloc: %lu],\nDMA: [Free: %u, max alloc: %u]\n\n",
         msg,
         ESP.getFreePsram(),
         ESP.getMaxAllocPsram(),
         ESP.getFreeHeap(),
-        ESP.getMaxAllocHeap()
+        ESP.getMaxAllocHeap(),
+        // BLE allocates its HCI buffers from DMA-capable internal RAM, so these
+        // decide whether ble.init() can succeed while a script is running.
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+        (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA)
     );
 }
 

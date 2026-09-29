@@ -86,10 +86,29 @@ public:
     String wigleBasicToken = "";
     String wdgwarsApiKey = "your 64-char hex key from wdgwars.pl/profile";
     int devMode = 0;
+
+    // Developer Options (the renamed USB Debugging page)
+    // Persisted in bruce.conf so the mode survives reboots.
+    int usbDebug = 0;        // master toggle for the USB debugging console
+    int usbDebugDevMode = 0; // developer mode: prioritises speed over stability
+    int usbDebugBinary = 0;  // 0 = text CLI, 1 = framed binary protocol
+
     int colorInverted = 1;
     int badUSBBLEKeyboardLayout = 0;
     uint16_t badUSBBLEKeyDelay = 10;
     bool badUSBBLEShowOutput = true;
+
+    // BadUSB extended configuration (menu: Others > BadUSB & HID > BadUSB Config)
+    int badUSBBLEHidType = 0;                 // 0 keyboard, 1 keyboard+mouse, 2 mouse
+    uint16_t badUSBBLEVid = 0x303A;           // USB vendor id presented by BadUSB
+    uint16_t badUSBBLEPid = 0x4004;           // USB product id presented by BadUSB
+    String badUSBBLEManufacturer = "Bruce";   // USB manufacturer string
+    String badUSBBLEProduct = "Bruce BadUSB"; // USB product string
+    String badUSBBLESerial = "";              // USB serial string (empty = framework default)
+    uint16_t badUSBBLEStringDelay = 0;        // STRING delay in ms (0 = use Key Delay)
+    String badUSBBLEPayloadDir = "/BruceBadUSB";                  // payload storage folder
+    String badUSBBLEDefaultPayload = "";                          // payload run by one-touch actions
+    String badUSBBLECustomLayoutFile = "/BruceBadUSB/custom.lay"; // custom layout import/export path
 
     std::vector<String> disabledMenus = {};
 
@@ -190,6 +209,14 @@ public:
     void setWdgwarsApiKey(String value);
     void setDevMode(int value);
     void validateDevModeValue();
+
+    // Developer Options
+    void setUsbDebug(int value);
+    void validateUsbDebugValue();
+    void setUsbDebugDevMode(int value);
+    void validateUsbDebugDevModeValue();
+    void setUsbDebugBinary(int value);
+    void validateUsbDebugBinaryValue();
     void setColorInverted(int value);
     void validateColorInverted();
     void setBadUSBBLEKeyboardLayout(int value);
@@ -197,6 +224,18 @@ public:
     void setBadUSBBLEKeyDelay(uint16_t value);
     void validateBadUSBBLEKeyDelay();
     void setBadUSBBLEShowOutput(bool value);
+    void setBadUSBBLEHidType(int value);
+    void validateBadUSBBLEHidType();
+    void setBadUSBBLEVid(uint16_t value);
+    void setBadUSBBLEPid(uint16_t value);
+    void setBadUSBBLEManufacturer(const String &value);
+    void setBadUSBBLEProduct(const String &value);
+    void setBadUSBBLESerial(const String &value);
+    void setBadUSBBLEStringDelay(uint16_t value);
+    void validateBadUSBBLEStringDelay();
+    void setBadUSBBLEPayloadDir(const String &value);
+    void setBadUSBBLEDefaultPayload(const String &value);
+    void setBadUSBBLECustomLayoutFile(const String &value);
     void addDisabledMenu(String value);
     void removeDisabledMenu(String value);
 

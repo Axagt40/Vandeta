@@ -10,6 +10,8 @@
 #include <NimBLEDevice.h>
 #if defined(USB_as_HID)
 #include "tusb.h"
+#include "USB.h"
+#include "USBHIDMouse.h"
 #endif
 
 #define DEF_DELAY 100
@@ -278,21 +280,204 @@ const DuckyCommandLookup duckyCmds[] PROGMEM = {
 };
 
 const uint8_t *keyboardLayouts[] PROGMEM = {
-    KeyboardLayout_en_US, // 0
-    KeyboardLayout_da_DK, // 1
-    KeyboardLayout_en_UK, // 2
-    KeyboardLayout_fr_FR, // 3
-    KeyboardLayout_de_DE, // 4
-    KeyboardLayout_hu_HU, // 5
-    KeyboardLayout_it_IT, // 6
-    KeyboardLayout_en_US, // 7
-    KeyboardLayout_pt_BR, // 8
-    KeyboardLayout_pt_PT, // 9
-    KeyboardLayout_si_SI, // 10
-    KeyboardLayout_es_ES, // 11
-    KeyboardLayout_sv_SE, // 12
-    KeyboardLayout_tr_TR  // 13
+    KeyboardLayout_en_US, // 0  US International
+    KeyboardLayout_da_DK, // 1  Danish
+    KeyboardLayout_en_UK, // 2  English (UK)
+    KeyboardLayout_fr_FR, // 3  French (AZERTY)
+    KeyboardLayout_de_DE, // 4  German
+    KeyboardLayout_hu_HU, // 5  Hungarian
+    KeyboardLayout_it_IT, // 6  Italian
+    KeyboardLayout_en_US, // 7  (reserved; was Polish)
+    KeyboardLayout_pt_BR, // 8  Portuguese (Brazil)
+    KeyboardLayout_pt_PT, // 9  Portuguese (Portugal)
+    KeyboardLayout_si_SI, // 10 Slovenian
+    KeyboardLayout_es_ES, // 11 Spanish
+    KeyboardLayout_sv_SE, // 12 Swedish
+    KeyboardLayout_tr_TR, // 13 Turkish
+    KeyboardLayout_fi_FI  // 14 Finnish
 };
+
+// Layout index space used by bruceConfig.badUSBBLEKeyboardLayout. Indices 0..14
+// are the on-flash layouts above; index 15 is a user-supplied layout held in
+// RAM (see badusbLoadCustomLayoutFile).
+#define BADUSB_LAYOUT_CUSTOM 15
+#define BADUSB_LAYOUT_LAST_ONFLASH 14
+#define BADUSB_LAYOUT_COUNT 16
+
+// Custom layout storage. Lives in RAM because the host library keeps the
+// pointer it is handed, so the buffer must outlive setLayout()/begin().
+static uint8_t badusbCustomLayout[128];
+static bool badusbCustomLayoutReady = false;
+
+const char *badusbLayoutName(int idx) {
+    switch (idx) {
+        case 0: return "US International";
+        case 1: return "Danish";
+        case 2: return "English (UK)";
+        case 3: return "French (AZERTY)";
+        case 4: return "German";
+        case 5: return "Hungarian";
+        case 6: return "Italian";
+        case 7: return "US International (alt)";
+        case 8: return "Portuguese (Brazil)";
+        case 9: return "Portuguese (Portugal)";
+        case 10: return "Slovenian";
+        case 11: return "Spanish";
+        case 12: return "Swedish";
+        case 13: return "Turkish";
+        case 14: return "Finnish";
+        case BADUSB_LAYOUT_CUSTOM: return "Custom";
+        default: return "US International";
+    }
+}
+
+int badusbLayoutCount() { return BADUSB_LAYOUT_COUNT; }
+
+/// Point the custom layout buffer at an on-flash layout so a custom layout can
+/// be "created" by copying an existing one and then edited on the SD card.
+bool badusbSeedCustomLayoutFrom(int idx) {
+    if (idx < 0 || idx > BADUSB_LAYOUT_LAST_ONFLASH) return false;
+    const uint8_t *src = (const uint8_t *)pgm_read_ptr(&keyboardLayouts[idx]);
+    if (!src) return false;
+    for (int i = 0; i < 128; i++) badusbCustomLayout[i] = src[i];
+    badusbCustomLayoutReady = true;
+    return true;
+}
+
+/// Parse a text file of 128 hex bytes (one per line, '#' comments allowed,
+/// missing lines default to 0x00) into the custom layout buffer.
+bool badusbLoadCustomLayoutFile(const String &path) {
+    if (path.length() == 0) return false;
+    FS *fs = nullptr;
+    if (!getFsStorage(fs) || fs == nullptr) return false;
+    File f = fs->open(path, FILE_READ);
+    if (!f) return false;
+
+    uint8_t tmp[128] = {0};
+    int slot = 0;
+    while (f.available() && slot < 128) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0 || line.startsWith("#")) continue;
+        int sep = line.indexOf(' ');
+        if (sep > 0) line = line.substring(0, sep);
+        long v = strtol(line.c_str(), nullptr, 16);
+        if (v < 0) v = 0;
+        if (v > 0xFF) v = 0xFF;
+        tmp[slot++] = (uint8_t)v;
+    }
+    f.close();
+
+    if (slot == 0) return false;
+    memcpy(badusbCustomLayout, tmp, sizeof(tmp));
+    badusbCustomLayoutReady = true;
+    return true;
+}
+
+/// Create the parent folder of `path`, if it has one. A first export must not
+/// fail just because the folder has not been created yet.
+static void badusbEnsureParentFolder(FS *fs, const String &path) {
+    int slash = path.lastIndexOf('/');
+    if (slash <= 0 || fs == nullptr) return;
+    String dir = path.substring(0, slash);
+    if (dir.length() == 0 || dir == "/" || fs->exists(dir)) return;
+    fs->mkdir(dir);
+}
+
+/// Write the custom layout buffer to `path` in the same text format.
+bool badusbSaveCustomLayoutFile(const String &path) {
+    if (path.length() == 0) return false;
+    FS *fs = nullptr;
+    if (!getFsStorage(fs) || fs == nullptr) return false;
+    if (!badusbCustomLayoutReady && !badusbSeedCustomLayoutFrom(0)) return false;
+
+    badusbEnsureParentFolder(fs, path);
+    File f = fs->open(path, FILE_WRITE);
+    if (!f) return false;
+    f.println("# Bruce BadUSB custom layout: 128 bytes in ASCII order.");
+    f.println("# Lines are hex scan codes; missing entries are 0x00.");
+    for (int i = 0; i < 128; i++) {
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%02X", badusbCustomLayout[i]);
+        f.println(buf);
+    }
+    f.close();
+    return true;
+}
+
+/// Resolve a layout index to the byte table to hand to setLayout()/begin().
+const uint8_t *badusbResolveLayout(int idx) {
+    if (idx == BADUSB_LAYOUT_CUSTOM) {
+        if (!badusbCustomLayoutReady) {
+            const String &path = bruceConfig.badUSBBLECustomLayoutFile;
+            if (path.length() == 0 || !badusbLoadCustomLayoutFile(path)) {
+                // Fall back to US so a missing/invalid file never bricks typing.
+                badusbSeedCustomLayoutFrom(0);
+            }
+        }
+        return badusbCustomLayout;
+    }
+    if (idx < 0 || idx > BADUSB_LAYOUT_LAST_ONFLASH) idx = 0;
+    return (const uint8_t *)pgm_read_ptr(&keyboardLayouts[idx]);
+}
+
+/// Run a BadUSB payload file through the normal HID/BLE engine. Used by the
+/// BadUSB Config > Payload Manager menu and by the badusb.runPayload binding.
+/// Returns false when the payload is missing or USB HID is unavailable.
+bool badusbRunPayload(const String &filepath) {
+#if defined(USB_as_HID)
+    FS *fs = nullptr;
+    if (!getFsStorage(fs) || fs == nullptr) return false;
+    if (!fs->exists(filepath)) return false;
+
+    if (hid_usb == nullptr) {
+        ducky_startKb(hid_usb, false, 2); // functionId 2 = BadUSB
+        if (hid_usb == nullptr || returnToMenu) {
+            returnToMenu = false;
+            return false;
+        }
+    }
+    key_input(*fs, filepath, hid_usb);
+    delete hid_usb;
+    hid_usb = nullptr;
+    return true;
+#else
+    (void)filepath;
+    return false;
+#endif
+}
+
+#if defined(USB_as_HID)
+// Tracked mouse endpoint, only created when the BadUSB HID device type asks
+// for it (composite = keyboard + mouse, mouse = mouse only).
+static USBHIDRelativeMouse *badusbMouse = nullptr;
+
+void badusbApplyUsbFootprint() {
+    // The USB descriptors can only be changed before TinyUSB is started, so
+    // this is called from ducky_startKb() just before USB.begin().
+    if (bruceConfig.badUSBBLEVid) USB.VID(bruceConfig.badUSBBLEVid);
+    if (bruceConfig.badUSBBLEPid) USB.PID(bruceConfig.badUSBBLEPid);
+    if (bruceConfig.badUSBBLEManufacturer.length())
+        USB.manufacturerName(bruceConfig.badUSBBLEManufacturer.c_str());
+    if (bruceConfig.badUSBBLEProduct.length()) USB.productName(bruceConfig.badUSBBLEProduct.c_str());
+    if (bruceConfig.badUSBBLESerial.length()) USB.serialNumber(bruceConfig.badUSBBLESerial.c_str());
+}
+
+void badusbStartHidExtraDevices() {
+    // 0 = keyboard, 1 = keyboard + mouse, 2 = mouse only.
+    if (bruceConfig.badUSBBLEHidType == 1 || bruceConfig.badUSBBLEHidType == 2) {
+        if (badusbMouse == nullptr) badusbMouse = new USBHIDRelativeMouse();
+    }
+}
+
+void badusbMouseMove(int8_t x, int8_t y, int8_t wheel) {
+    if (badusbMouse != nullptr) badusbMouse->move(x, y, wheel);
+}
+
+void badusbMouseClick(uint8_t button) {
+    if (badusbMouse != nullptr) badusbMouse->click(button);
+}
+#endif // USB_as_HID
 
 // ============================================================================
 // MENU KEY STRUCTURES - Stored in PROGMEM
@@ -635,8 +820,7 @@ void ducky_startKb(HIDInterface *&hid, bool ble, int functionId) {
             hid_ble = hid;
             Serial.printf("[ducky_startKb] hid_ble now points to instance %p\n", hid_ble);
 
-            const uint8_t *layout =
-                (const uint8_t *)pgm_read_ptr(&keyboardLayouts[bruceConfig.badUSBBLEKeyboardLayout]);
+            const uint8_t *layout = badusbResolveLayout(bruceConfig.badUSBBLEKeyboardLayout);
 
             // Start the HID service
             hid->begin(layout);
@@ -653,6 +837,8 @@ void ducky_startKb(HIDInterface *&hid, bool ble, int functionId) {
         } else {
 #if defined(USB_as_HID)
             hid = new USBHIDKeyboard();
+            badusbStartHidExtraDevices();
+            badusbApplyUsbFootprint();
             USB.begin();
 
             while (!tud_mounted()) {
@@ -672,29 +858,26 @@ void ducky_startKb(HIDInterface *&hid, bool ble, int functionId) {
     if (ble) {
         if (hid->isConnected()) {
             Serial.println("BLE Already connected, updating settings");
-            const uint8_t *layout =
-                (const uint8_t *)pgm_read_ptr(&keyboardLayouts[bruceConfig.badUSBBLEKeyboardLayout]);
+            const uint8_t *layout = badusbResolveLayout(bruceConfig.badUSBBLEKeyboardLayout);
             hid->setLayout(layout);
             hid->setDelay(bruceConfig.badUSBBLEKeyDelay);
             return;
         }
 
         Serial.println("Starting/restarting BLE advertising");
-        const uint8_t *layout =
-            (const uint8_t *)pgm_read_ptr(&keyboardLayouts[bruceConfig.badUSBBLEKeyboardLayout]);
+        const uint8_t *layout = badusbResolveLayout(bruceConfig.badUSBBLEKeyboardLayout);
         hid->begin(layout);
         hid->setDelay(bruceConfig.badUSBBLEKeyDelay);
     } else {
 #if defined(USB_as_HID)
-        const uint8_t *layout =
-            (const uint8_t *)pgm_read_ptr(&keyboardLayouts[bruceConfig.badUSBBLEKeyboardLayout]);
+        const uint8_t *layout = badusbResolveLayout(bruceConfig.badUSBBLEKeyboardLayout);
         hid->begin(layout);
         hid->setDelay(bruceConfig.badUSBBLEKeyDelay);
+        if (badusbMouse != nullptr) badusbMouse->begin();
 #else
         mySerial.begin(CH9329_DEFAULT_BAUDRATE, SERIAL_8N1, BAD_RX, BAD_TX);
         delay(100);
-        const uint8_t *layout =
-            (const uint8_t *)pgm_read_ptr(&keyboardLayouts[bruceConfig.badUSBBLEKeyboardLayout]);
+        const uint8_t *layout = badusbResolveLayout(bruceConfig.badUSBBLEKeyboardLayout);
         hid->begin(mySerial, layout);
         hid->setDelay(bruceConfig.badUSBBLEKeyDelay);
 #endif
@@ -805,6 +988,31 @@ EXIT:
 // KEY_INPUT - Main Ducky script parser
 // ============================================================================
 
+// Type one STRING through the HID layer, character by character.
+//
+// The keyboard layouts only express 7-bit ASCII, and the Nordic tables
+// deliberately leave `^`, `` ` `` and `~` unmapped because they are dead keys
+// on the physical keyboard. The stock HID `write()` stops at the first
+// character it cannot map, so with a layout other than US a single dead-key
+// character silently killed the REST OF THE PAYLOAD (which reads as "badUSB
+// stopped emulating HID at all"). Here a character the layout cannot produce
+// is sent as a Windows numpad Alt-code (sendAltChar) instead, and typing
+// continues either way.
+static void duckyTypeString(HIDInterface *hid, const String &text) {
+    bool warned = false;
+    for (unsigned int i = 0; i < text.length(); i++) {
+        uint8_t c = (uint8_t)text.charAt(i);
+        if (c == '\r') continue;
+        if (hid->write(c) == 0) {
+            if (!warned) {
+                printTFTBadUSBBLE("layout cannot type a char - using Alt-code", ALCOLOR, true);
+                warned = true;
+            }
+            sendAltChar(hid, c);
+        }
+    }
+}
+
 void key_input(FS fs, const String &bad_script, HIDInterface *_hid) {
     if (!fs.exists(bad_script) || bad_script == "") return;
     File payloadFile = fs.open(bad_script, "r");
@@ -816,7 +1024,9 @@ void key_input(FS fs, const String &bad_script, HIDInterface *_hid) {
     String RepeatTmp = "";
 
     static int nextStringDelay = -1;
-    static int defaultStringDelay = bruceConfig.badUSBBLEKeyDelay;
+    // STRING delay: explicit BadUSB string delay when configured, else the key delay.
+    static int defaultStringDelay = bruceConfig.badUSBBLEStringDelay > 0 ? bruceConfig.badUSBBLEStringDelay
+                                                                        : bruceConfig.badUSBBLEKeyDelay;
     currentOutputY = 0;
 
     _hid->releaseAll();
@@ -892,7 +1102,7 @@ void key_input(FS fs, const String &bad_script, HIDInterface *_hid) {
                     int currentDelay = (nextStringDelay >= 0) ? nextStringDelay : defaultStringDelay;
                     _hid->setDelay(currentDelay);
 
-                    _hid->print(Argument);
+                    duckyTypeString(_hid, Argument);
                     if (strcmp(PriCmd->command, "STRINGLN") == 0) _hid->println();
 
                     if (nextStringDelay >= 0) { nextStringDelay = -1; }

@@ -4,6 +4,7 @@
 #include "modules/badusb_ble/ducky_typer.h"
 #include "modules/ble/ble_common.h"
 #include "modules/ble/ble_ninebot.h"
+#include "modules/ble/ble_capture.h"
 #include "modules/ble/ble_spam.h"
 #if !defined(LITE_VERSION)
 #include "modules/ble/BLE_Suite.h"
@@ -34,6 +35,7 @@ void BleMenu::optionsMenu() {
     options.push_back({"BLE Keyboard", [=]() { ducky_keyboard(hid_ble, true); }});
 #endif
     options.push_back({"BLE Spam", [=]() { spamMenu(); }});
+    options.push_back({"Capture & Replay", [=]() { bleCaptureMenu(); }});
 
 #if !defined(LITE_VERSION)
     options.push_back({"BLE Suite", [=]() { BleSuiteMenu(); }});
