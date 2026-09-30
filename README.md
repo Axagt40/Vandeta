@@ -50,9 +50,9 @@ internal RAM and make a non-US keyboard layout actually type.
 
 | # | Change | Detail |
 |---|--------|--------|
-| 16 | **Developer Options mode** | A console over USB-Serial-JTAG (Config → System Config → Developer Options): file and directory verbs, navigation, transfers, JS execution, an error stream, process/system info, command queueing and history. A framed binary protocol (`A5 5A`, CRC-16/CCITT) moves files byte-identically at ~18 KB/s and backs the host-side `tools/usb_debug.py` client |
+| 16 | **Developer Options mode** | A console over USB-Serial-JTAG (Config → System Config → **Developer Options**, one `USB Debugging` toggle): file and directory verbs, navigation, transfers, JS execution, an error stream, process/system info, command queueing and history. Simple one-action verbs for a serial terminal or an AI: `move up|down`, `press ok|back`, `file read|write|list|delete|stat`, `js run <script>`/`js stop`, `log show|clear`, `livepatch`, `liveboot` and `help <command>`. A framed binary protocol (`A5 5A`, CRC-16/CCITT) moves files byte-identically at ~18 KB/s and backs the host-side `tools/usb_debug.py` client |
 | 17 | **BadUSB configuration menu** | BadUSB gained a config menu: USB footprint (VID/PID, manufacturer, product, serial), keyboard layout selection, a built-in **Finland (fi-FI)** layout plus import/export/copy of custom layout files, HID device type (keyboard / composite / mouse), attack speed and string delay, and payload folder management |
-| 18 | **More Attacks** | WiFi → WiFi Atks → **More Attacks** (and Target Atks → **More Attacks**): EAPOL Logoff, Channel Switch, Bad Message, Auth Flood, Probe Request Flood, Authentication Attack, EAPOL Start Attack and Disassociation Attack, all deadline-bounded and stopped with Back, so they can run from a menu or the console. Beacon Flood is the existing beacon-spam engine |
+| 18 | **WiFi attacks, one menu** | WiFi → **Wifi Atks** is a single flat menu: Target Atks, Karma Attack, Beacon SPAM, Deauth Flood, Enhanced Deauth, Auth Flood, Probe Request, EAPOL Attack. The nested **More Attacks** page is gone — its Beacon Flood was the same engine as Beacon SPAM and its Target Attacks duplicated the main one. Target-based attacks stay in **Target Atks → More Attacks** (EAPOL Logoff, Channel Switch, Bad Message, Authentication Attack, Disassociation Attack), all deadline-bounded and stopped with Back |
 | 19 | **BLE: GATT client and capture/replay in JS** | `ble.init/setAddress/scan/scanDetailed/connect/disconnect/getService/getCharacteristic/read/write/notify/pollEvents` plus `ble.captureStart/captureStop/captureList/captureReplay/captureSave/captureLoad/captureAnalyze/setRemoteType`, backed by the same engine as the new **BLE → Capture & Replay** menu |
 | 20 | **NRF24: raw capture, analysis and replay in JS** | The full `nrf24.*` set, plus pseudo-promiscuous mode (CRC off, auto-ack off, minimum address width), `setPromiscuousMode`, `scanAllChannels`, `setFrequencyHopMode`, `captureRaw`, `captureMultiFreq`, `replayRaw`, `saveSignal`/`loadSignal`, `analyzeSignal`, `setFrequencyRange` and `detectMultiFreqSignals` |
 | 21 | **On-device capture menus** | NRF24 → **Raw Capture** (capture, hop capture, channel scan, multi-frequency detection, frequency analysis, list, save/load, replay, analyse) and BLE → **Capture & Replay** (start/stop, filter, save/load, replay, analyse, remote type, detailed scan), all over the same engines the scripts drive. Both show a live counter while they run, **only Back interrupts** a running capture (the screen says so) and Back returns to the previous menu |
@@ -61,6 +61,7 @@ internal RAM and make a non-US keyboard layout actually type.
 | 24 | **BadUSB typing fix** | The keyboard-layout table had one entry fewer than the layout index range that can be selected and persisted, so the last layout handed HID a garbage table and typing stopped working entirely; there is now a real Finnish (Nordic) table and every index is clamped. A character the active layout cannot express (the Nordic dead keys) no longer throws away the rest of the payload |
 | 25 | **Script teardown** | `interpreter.cpp` also calls `ble_js_cleanup()`, stopping a background BLE capture and dropping the GATT client when a script ends |
 | 26 | **Boot version** | The splash screen now reads **Bruce / dev 1.2** |
+| 27 | **Live JS patching and boot scripts** | `livepatch apply <module> <code>` writes and reloads a JS module under `/BruceJS/livepatch` with no reflash (this board has a single app partition, so only the JS layer can change live — the command says so), with `reload`/`list`/`status`. `liveboot enable <script.js>` runs a script at boot through the existing Startup App mechanism, with `disable`/`status` |
 
 ---
 
@@ -120,7 +121,7 @@ stock Bruce already exposed. Signatures: [JavaScript API](#javascript-api).
 
 **Download:** the prebuilt image is attached to the
 [**Dev 1.2 release**](https://github.com/Axagt40/Bruce-Modded/releases/tag/dev-1.2)
-(`Bruce-modded.bin` — 4,489,696 bytes, sha256 `dfa1b36d…5ce6d` — plus its
+(`Bruce-modded.bin` — 4,504,896 bytes, sha256 `f637e299…abb18` — plus its
 `.sha256`) and is also committed at the repository root. The older images stay
 available on the [Dev 1.1 release](https://github.com/Axagt40/Bruce-Modded/releases/tag/dev-1.1)
 and the [Dev 1.0 release](https://github.com/Axagt40/Bruce-Modded/releases/tag/dev-1.0).
