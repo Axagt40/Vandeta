@@ -444,7 +444,7 @@ Also, [read our FAQ](https://wiki.bruce.computer/faq/)
     - [x] Target Deauth
     - [x] EvilPortal + Deauth
   - [x] Deauth Flood (More than one target)
-  - [x] Additional attacks (menu page: "More Attacks")
+  - [x] Additional attacks (in the flat **Wifi Atks** menu)
     - [x] EAPOL Logoff
     - [x] Channel Switch
     - [x] Bad Message
