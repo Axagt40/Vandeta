@@ -3,6 +3,7 @@
 #include "helpers.h"
 #include "modules/ir/custom_ir.h"
 #include "modules/ir/ir_read.h"
+#include "modules/ir/ir_universal.h"
 #include <ArduinoJson.h>
 #include <globals.h>
 
@@ -167,6 +168,113 @@ uint32_t irTxBufferCallback(cmd *c) {
 #endif
 }
 
+// --- universal remotes -----------------------------------------------------
+// The same library + sweep the IR > Universal Remote menu uses, exposed on the
+// console so a sweep can be measured instead of watched: `ir uni send tv Power 5`.
+
+static const IrUniversalCategory *irUniFind(const String &name) {
+    for (size_t i = 0; i < IR_UNIVERSAL_CATEGORY_COUNT; i++) {
+        const IrUniversalCategory &c = IR_UNIVERSAL_CATEGORIES[i];
+        if (name.equalsIgnoreCase(c.label) || name.equalsIgnoreCase(c.file)) return &c;
+    }
+    return nullptr;
+}
+
+uint32_t irUniversalListCallback(cmd *c) {
+    FS *fs = nullptr;
+    if (!getFsStorage(fs)) {
+        serialDevice->println("no storage");
+        return false;
+    }
+    serialDevice->println("universal libraries in " IR_UNIVERSAL_DIR ":");
+    for (size_t i = 0; i < IR_UNIVERSAL_CATEGORY_COUNT; i++) {
+        const IrUniversalCategory &cat = IR_UNIVERSAL_CATEGORIES[i];
+        String path = irUniversalPath(cat.file);
+        if (!irUniversalAvailable(fs, cat.file)) {
+            serialDevice->println("  " + String(cat.label) + "\t" + cat.file + "\tmissing");
+            continue;
+        }
+        std::vector<String> buttons = irUniversalButtons(fs, path);
+        serialDevice->println(
+            "  " + String(cat.label) + "\t" + cat.file + "\t" + String((int)buttons.size()) + " buttons"
+        );
+    }
+    return true;
+}
+
+uint32_t irUniversalButtonsCallback(cmd *c) {
+    Command cmd(c);
+    String name = cmd.getArgument("category").getValue();
+    const IrUniversalCategory *cat = irUniFind(name);
+    if (cat == nullptr) {
+        serialDevice->println("unknown category: " + name + " (tv, ac, fans, audio, projectors, leds)");
+        return false;
+    }
+    FS *fs = nullptr;
+    if (!getFsStorage(fs) || !irUniversalAvailable(fs, cat->file)) {
+        serialDevice->println(String(cat->label) + " library missing");
+        return false;
+    }
+    std::vector<String> buttons = irUniversalButtons(fs, irUniversalPath(cat->file));
+    serialDevice->println(String(cat->label) + ": " + String((int)buttons.size()) + " buttons");
+    for (const String &b : buttons) serialDevice->println("  " + b);
+    return true;
+}
+
+uint32_t irUniversalSendCallback(cmd *c) {
+    Command cmd(c);
+    String name = cmd.getArgument("category").getValue();
+    String button = cmd.getArgument("name").getValue();
+    int maxSends = cmd.getArgument("max").getValue().toInt();
+
+    const IrUniversalCategory *cat = irUniFind(name);
+    if (cat == nullptr) {
+        serialDevice->println("unknown category: " + name);
+        return false;
+    }
+    FS *fs = nullptr;
+    if (!getFsStorage(fs) || !irUniversalAvailable(fs, cat->file)) {
+        serialDevice->println(String(cat->label) + " library missing");
+        return false;
+    }
+    int sent = irUniversalSend(fs, irUniversalPath(cat->file), button, maxSends, false, nullptr);
+    if (sent == 0) {
+        serialDevice->println("no code named '" + button + "' in " + cat->file);
+        return false;
+    }
+    return true;
+}
+
+uint32_t irUniversalEncodeCallback(cmd *c) {
+    Command cmd(c);
+    String protocol = cmd.getArgument("protocol").getValue();
+    uint32_t address = strtoul(cmd.getArgument("address").getValue().c_str(), nullptr, 16);
+    uint32_t command = strtoul(cmd.getArgument("code").getValue().c_str(), nullptr, 16);
+
+    String frame = irUniversalRawFrame(protocol, address, command);
+    if (frame.length() == 0) {
+        serialDevice->println("no hand-written encoder for " + protocol + " (RCA, NEC42 only)");
+        return false;
+    }
+    serialDevice->println(frame);
+    return true;
+}
+
+void createIrUniversalCommands(Command *irCmd) {
+    Command uni = irCmd->addCompositeCmd("uni");
+    uni.addCommand("list", irUniversalListCallback);
+    Command encode = uni.addCommand("encode", irUniversalEncodeCallback);
+    encode.addPosArg("protocol");
+    encode.addPosArg("address");
+    encode.addPosArg("code");
+    Command buttons = uni.addCommand("buttons", irUniversalButtonsCallback);
+    buttons.addPosArg("category");
+    Command send = uni.addCommand("send", irUniversalSendCallback);
+    send.addPosArg("category");
+    send.addPosArg("name");
+    send.addPosArg("max", "0");
+}
+
 uint32_t irSendCallback(cmd *c) {
     // tasmota json command  https://tasmota.github.io/docs/Tasmota-IR/#sending-ir-commands
     // e.g. IRSend {\"Protocol\":\"NEC\",\"Bits\":32,\"Data\":\"0x20DF10EF\"}
@@ -243,6 +351,7 @@ void createIrCommands(SimpleCLI *cli) {
     createIrTxRawCommand(&cmd);
     createIrTxFileCommand(&cmd);
     createIrTxBufferCommand(&cmd);
+    createIrUniversalCommands(&cmd);
 
     cli->addSingleArgCmd("IRSend", irSendCallback);
 }

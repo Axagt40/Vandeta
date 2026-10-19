@@ -46,6 +46,10 @@ WiFi, no reflash and no extra hardware.
 * **Frequency Analyzer.** A Flipper Zero style analyser for the CC1101 —
   coarse hop, 20 kHz fine pass, held readout, hit log — drawn in the theme
   colours.
+* **Universal IR remotes.** TV, AC, fans, audio, projectors and LED libraries
+  from the Flipper IR database — 2,858 codes on the card. Pick a category, pick a
+  button, and it sends the candidates in turn until the device reacts, exactly
+  like the Flipper/Momentum flow, in Vandeta's own menus.
 * **More radio work from JavaScript.** Raw nRF24 capture (including the five
   documented 2.4 GHz LED-controller protocols, channel-lock capture and a repeat
   finder), BLE advertisement capture/replay and a GATT client, plus

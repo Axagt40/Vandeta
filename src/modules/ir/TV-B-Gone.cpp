@@ -153,6 +153,26 @@ void unlock_ir_tx() {
 }
 
 // Send parsed protocol codes (16-bit times)
+// Shared with IR > Universal Remote: the same pause/cancel policy, so a sweep
+// behaves identically whether it is TV-B-Gone or a universal remote button.
+bool irSweepPauseIfRequested() {
+    if (!check(SelPress)) return false;
+
+    while (check(SelPress)) vTaskDelay(10 / portTICK_PERIOD_MS);
+    displayTextLine("Paused");
+
+    bool cancelled = false;
+    while (!check(SelPress)) {
+        if (check(EscPress)) {
+            cancelled = true;
+            break;
+        }
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+    }
+    while (check(SelPress)) vTaskDelay(10 / portTICK_PERIOD_MS);
+    return cancelled;
+}
+
 void sendParsedCodeBatch(const IrCode *const *codes, uint8_t count, IRsend &irsend) {
     uint16_t rawData[300];
 
@@ -180,14 +200,9 @@ void sendParsedCodeBatch(const IrCode *const *codes, uint8_t count, IRsend &irse
         bitsleft_r = 0;
         delay_ten_us(20500);
 
-        if (check(SelPress)) {
-            while (check(SelPress)) vTaskDelay(10 / portTICK_PERIOD_MS);
-            displayTextLine("Paused");
-            while (!check(SelPress)) {
-                if (check(EscPress)) { returnToMenu = true; return; }
-                vTaskDelay(10 / portTICK_PERIOD_MS);
-            }
-            while (check(SelPress)) vTaskDelay(10 / portTICK_PERIOD_MS);
+        if (irSweepPauseIfRequested()) {
+            returnToMenu = true;
+            return;
         }
         if (returnToMenu) break;
     }
@@ -221,14 +236,9 @@ void sendRawCodeBatch(const RawIrCode *const *codes, uint8_t count, IRsend &irse
         bitsleft_r = 0;
         delay_ten_us(20500);
 
-        if (check(SelPress)) {
-            while (check(SelPress)) vTaskDelay(10 / portTICK_PERIOD_MS);
-            displayTextLine("Paused");
-            while (!check(SelPress)) {
-                if (check(EscPress)) { returnToMenu = true; return; }
-                vTaskDelay(10 / portTICK_PERIOD_MS);
-            }
-            while (check(SelPress)) vTaskDelay(10 / portTICK_PERIOD_MS);
+        if (irSweepPauseIfRequested()) {
+            returnToMenu = true;
+            return;
         }
         if (returnToMenu) break;
     }

@@ -219,3 +219,11 @@ trimmed or adapted. Each retains its original author's license.
   `platformio-espressif32-sunton` board support.
 - **`lib/mquickjs_headers`** — headers generated from the **mquickjs** fork
   above (see `gen_mqjs_headers.py`).
+- **`sd_files/infrared/Universal/*.ir` — universal IR remote libraries** — the
+  six category databases (`tv`, `ac`, `fans`, `audio`, `projectors`, `leds`) are
+  the Flipper ecosystem's IR signal data (Flipper-IRDB, **CC0-1.0 / public
+  domain**), taken from the Flipper-Zero-ESP32-Port's asset set. The sweep
+  behaviour follows Flipper's universal-remote scenes for compatibility; the
+  implementation in `src/modules/ir/ir_universal.cpp` (including the RCA and
+  NEC42 encoders) was written for this firmware from the published protocol
+  timings, not copied.

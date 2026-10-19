@@ -6,6 +6,7 @@
 #include "modules/ir/custom_ir.h"
 #include "modules/ir/ir_jammer.h"
 #include "modules/ir/ir_read.h"
+#include "modules/ir/ir_universal.h"
 
 void IRMenu::optionsMenu() {
 #if defined(ARDUINO_M5STICK_S3)
@@ -14,6 +15,7 @@ void IRMenu::optionsMenu() {
 #endif
     options = {
         {"TV-B-Gone", StartTvBGone              },
+        {"Universal Remote", irUniversalMenu     }, // TV / AC / Fans / Audio / Projectors / LEDs
         {"Custom IR", otherIRcodes              },
         {"IR Read",   [=]() { IrRead(); }       },
 #if !defined(LITE_VERSION)

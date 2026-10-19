@@ -93,4 +93,10 @@ void precise_delay_us(uint32_t us);
 void sendParsedCodeBatch(const IrCode *const *codes, uint8_t count, IRsend &irsend);
 void sendRawCodeBatch(const RawIrCode *const *codes, uint8_t count, IRsend &irsend);
 
+// --- shared sweep helpers ---------------------------------------------------
+// IR > Universal Remote walks a list of candidate codes exactly like TV-B-Gone
+// walks its power codes, so both use this: SEL pauses (SEL again resumes),
+// ESC cancels the sweep. Returns true when the user cancelled.
+bool irSweepPauseIfRequested();
+
 #endif
