@@ -56,6 +56,22 @@ private:
     int rssiThreshold = -65;
     uint64_t lastSavedKey = 0;
 
+    // Sweep state (see fast_scan()): a frame captured while hopping has to be
+    // handed to loop() instead of being dropped by the setup() that follows a
+    // frequency lock.
+    std::vector<int> pendingDurations;
+    bool hasPendingCapture = false;
+
+    // Running ambient noise floor, so the sweep threshold follows the
+    // environment instead of relying on a fixed -65 dBm forever.
+    int noiseFloor = 0;
+    bool noiseFloorValid = false;
+
+    // A frequency picked by the sweep is only a temporary parking spot: after
+    // this deadline the sweep resumes instead of staying there forever (and the
+    // user's Fixed/Range setting is never rewritten behind their back).
+    uint32_t holdUntilMs = 0;
+
     /////////////////////////////////////////////////////////////////////////////////////
     // State management
     /////////////////////////////////////////////////////////////////////////////////////

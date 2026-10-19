@@ -92,13 +92,26 @@ static BleCaptureCallbacks bleCapCallbacks;
 // instead and let bleCaptureStop() cancel it with NimBLEScan::stop(), which
 // aborts GAP discovery and releases the semaphore the scanning task waits on.
 static TaskHandle_t bleCapTask = nullptr;
+static volatile bool bleCapStopReq = false;
 
 static void bleCapTaskFn(void *arg) {
     uint32_t durationMs = (uint32_t)(uintptr_t)arg;
     NimBLEScan *scan = BLEDevice::getScan();
     if (scan != nullptr) {
         bleCapScanning = true;
-        scan->start(durationMs, false, false);
+        // NimBLEScan::start() is ASYNCHRONOUS in this NimBLE-Arduino: it arms
+        // discovery and returns immediately (getResults() is the blocking
+        // wrapper). The old code called start() and stop() back to back, which
+        // cancelled the scan in the same millisecond - every capture reported
+        // zero packets and the Packet Monitor's BLE tap stayed empty. So arm the
+        // scan, then sit on this task for the window; bleCaptureStop() sets
+        // bleCapStopReq (and calls scan->stop()) to end it early.
+        if (scan->start(durationMs, false, true)) {
+            uint32_t started = millis();
+            while (!bleCapStopReq && (millis() - started) < durationMs) {
+                vTaskDelay(pdMS_TO_TICKS(25));
+            }
+        }
         scan->stop();
         scan->clearResults();
         bleCapScanning = false;
@@ -125,6 +138,7 @@ bool bleCaptureStart(uint32_t maxMs) {
     if (maxMs < 200) maxMs = 200;
     if (maxMs > 600000) maxMs = 600000;
 
+    bleCapStopReq = false;
     bleCaptureClear();
     // init() must run at most once per boot, and a failed attempt has to be
     // remembered so a retry does not earn another ESP_ERR_INVALID_STATE (and a
@@ -159,6 +173,7 @@ bool bleCaptureStart(uint32_t maxMs) {
 
 int bleCaptureStop() {
     if (bleCapTask == nullptr) return bleCapCount;
+    bleCapStopReq = true;
     NimBLEScan *scan = BLEDevice::getScan();
     if (scan != nullptr) scan->stop();
     // The scan task needs a moment to unwind; 3 s is far more than it takes.

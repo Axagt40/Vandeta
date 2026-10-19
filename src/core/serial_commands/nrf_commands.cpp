@@ -420,20 +420,32 @@ uint32_t nrfCapCallback(cmd *c) {
             serialDevice->println("ERR nothing captured");
             return false;
         }
-        static NrfCapturedPacket pkts[NRF_CAP_MAX_PACKETS];
+        // Heap (PSRAM first), never a static 5 KB array: internal DRAM is what
+        // Wi-Fi/BLE need and every copy here used to cost the radios.
+        NrfCapturedPacket *pkts = nrfAllocPacketBuffer();
+        if (pkts == nullptr) {
+            serialDevice->println("ERR no memory for capture buffer");
+            return false;
+        }
         int got = 0;
         for (int i = 0; i < nrfCaptureCount() && got < NRF_CAP_MAX_PACKETS; i++)
             if (nrfCapturePacket(i, &pkts[got])) got++;
         bool ok = nrfSaveSignal(a, pkts, got, "nrfcap");
+        free(pkts);
         serialDevice->println(String("RESULT save ok=") + (ok ? "1" : "0") + " packets=" + String(got) + " name=" + a);
         return true;
     }
     if (mode == "load") {
-        static NrfCapturedPacket pkts[NRF_CAP_MAX_PACKETS];
+        NrfCapturedPacket *pkts = nrfAllocPacketBuffer();
+        if (pkts == nullptr) {
+            serialDevice->println("ERR no memory for capture buffer");
+            return false;
+        }
         int n = nrfLoadSignal(a, pkts, NRF_CAP_MAX_PACKETS, nullptr);
         int kept = nrfCaptureLoad(pkts, n);
         uint8_t chans[4];
         int nc = nrfChooseReplayChannels(pkts, kept, chans, 4);
+        free(pkts);
         serialDevice->println(String("RESULT load packets=") + String(kept) + " channels=" + String(nc));
         for (int i = 0; i < nc; i++) serialDevice->println(String("  ch=") + String(chans[i]) + " freq=" + String(2400 + chans[i]));
         return true;

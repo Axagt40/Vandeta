@@ -4,6 +4,15 @@
 #include "rf_utils.h"
 #include "structs.h"
 
+// map(i, 0, count - 1, ...) is only valid for two or more samples: with a single
+// sample the input range collapses to 0 and Arduino's map() logs an error and
+// returns -1, which used to draw a line at x=-1 on every capture (and made the
+// spectrum look broken). Plot that one sample in the middle of the screen.
+static int spectrum_x(size_t i, size_t count, int width) {
+    if (count < 2) return width / 2;
+    return (int)map((long)i, 0L, (long)(count - 1), 0L, (long)(width - 1));
+}
+
 static bool spectrum_rmt_rx_done_callback(
     rmt_channel_t *channel, const rmt_rx_done_event_data_t *edata, void *user_data
 ) {
@@ -43,8 +52,7 @@ void rf_spectrum() {
                 for (size_t i = 0; i < durations.size(); i++) {
                     int pulse = abs(durations[i]);
                     int lineHeight = map(pulse, 0, SIGNAL_STRENGTH_THRESHOLD, 0, tftHeight / 2);
-                    int lineX =
-                        map(i, 0, durations.size() > 1 ? durations.size() - 1 : 1, 0, tftWidth - 1);
+                    int lineX = spectrum_x(i, durations.size(), tftWidth);
                     int startY = constrain(20 + tftHeight / 2 - lineHeight / 2, 20, 20 + tftHeight);
                     int endY = constrain(20 + tftHeight / 2 + lineHeight / 2, 20, 20 + tftHeight);
                     tft.drawLine(lineX, startY, lineX, endY, bruceConfig.priColor);
@@ -69,7 +77,13 @@ void rf_spectrum() {
 
     rmt_channel_handle_t rx_ch = NULL;
     rx_ch = setup_rf_rx();
-    if (rx_ch == NULL) return;
+    if (rx_ch == NULL) {
+        // setup_rf_rx() already reported the CC1101 problem; just do not leave the
+        // radio powered up (the old code returned without deinitRfModule()).
+        Serial.println("Spectrum: RX channel setup failed");
+        deinitRfModule();
+        return;
+    }
     ESP_LOGI("RMT_SPECTRUM", "register RX done callback");
     QueueHandle_t receive_queue = xQueueCreate(1, sizeof(rmt_rx_done_event_data_t));
     assert(receive_queue);
@@ -104,7 +118,7 @@ void rf_spectrum() {
                         SIGNAL_STRENGTH_THRESHOLD,
                         0,
                         tftHeight / 2);
-                int lineX = map(i, 0, rx_size - 1, 0, tftWidth - 1); // Map i to within the display width
+                int lineX = spectrum_x(i, rx_size, tftWidth); // Map i to within the display width
                 int startY = constrain(20 + tftHeight / 2 - lineHeight / 2, 20, 20 + tftHeight);
                 int endY = constrain(20 + tftHeight / 2 + lineHeight / 2, 20, 20 + tftHeight);
                 tft.drawLine(lineX, startY, lineX, endY, bruceConfig.priColor);

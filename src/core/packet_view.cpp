@@ -5,11 +5,14 @@
 #include "core/sd_functions.h"
 #include "core/wifi/webInterface.h"
 #include "core/wifi/wifi_common.h"
+#include "core/radio_mem.h"
 #include "modules/NRF24/nrf_capture.h"
 #include "modules/ble/ble_capture.h"
 #include "modules/rf/rf_utils.h"
 
+#include <NimBLEDevice.h>
 #include <algorithm>
+#include <esp_event.h>
 #include <esp_heap_caps.h>
 #include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
@@ -301,6 +304,7 @@ static uint8_t pvWifiCh = 1;
 static uint8_t pvWifiChIdx = 0;
 static const uint8_t PV_WIFI_CHANNELS[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 static bool pvWifiUp = false;
+static bool pvWifiEventLoopOurs = false;
 
 static String pvWifiSsid(const uint8_t *frame, int len) {
     if (len < 36) return "";
@@ -375,21 +379,60 @@ static void pvWifiCb(void *buf, wifi_promiscuous_pkt_type_t type) {
 
 static bool pvWifiStart() {
     cleanlyStopWebUiForWiFiFeature();
-    ensureWifiPlatform();
+
+    // The driver allocates its RX/TX buffers from internal DRAM and fails with
+    // ESP_ERR_NO_MEM ("Expected to init 4 rx buffer, actual is 3") when another
+    // radio or a stale capture holds it. Release BLE / the Web UI first; this is
+    // the same guard every other Wi-Fi tool uses.
+    if (!wifiEnsureRadioMem()) {
+        Serial.printf(
+            "[PktMon] not enough internal RAM for the WiFi driver (free %u, largest DMA %u)\n",
+            (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+            (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA)
+        );
+        return false;
+    }
+
+    // Deliberately NOT ensureWifiPlatform(): raw promiscuous capture needs the
+    // WiFi driver, not the lwIP/event-loop stack, and creating that stack costs
+    // ~27 KB of internal DRAM that is never returned (esp_netif_init has no
+    // deinit path here). With it, leaving this screen left too little RAM for
+    // the BLE tap straight afterwards (measured: 83,775 -> 56,603 bytes free,
+    // NimBLE needs ~56 KB and failed by a few KB).
+    //
+    // The default event loop is different: the driver posts a HOME_CHANNEL_CHANGE
+    // event on every hop and logs "failed to post WiFi event=43" when no loop
+    // exists. Create one for the capture and delete it on the way out, so the
+    // log stays clean and the RAM goes back to the next radio.
+    if (esp_event_loop_create_default() == ESP_OK) pvWifiEventLoopOurs = true;
     nvs_flash_init();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_err_t e = esp_wifi_init(&cfg);
-    if (e != ESP_OK && e != ESP_ERR_WIFI_INIT_STATE) {
+    if (e == ESP_ERR_WIFI_INIT_STATE) e = ESP_OK; // already up: reuse it
+    if (e != ESP_OK) {
         Serial.printf("[PktMon] wifi_init: %s\n", esp_err_to_name(e));
+        if (pvWifiEventLoopOurs) {
+            esp_event_loop_delete_default();
+            pvWifiEventLoopOurs = false;
+        }
         return false;
     }
     esp_wifi_set_storage(WIFI_STORAGE_RAM);
-    esp_wifi_set_mode(WIFI_MODE_STA);
+    // Another feature may have started the driver in AP mode; a started driver
+    // refuses the mode change with ESP_ERR_WIFI_STATE, which is not fatal here.
+    esp_err_t modeErr = esp_wifi_set_mode(WIFI_MODE_STA);
     e = esp_wifi_start();
-    if (e != ESP_OK && e != ESP_ERR_WIFI_INIT_STATE) {
+    if (e != ESP_OK && e != ESP_ERR_WIFI_INIT_STATE && e != ESP_ERR_WIFI_STATE) {
         Serial.printf("[PktMon] wifi_start: %s\n", esp_err_to_name(e));
+        esp_wifi_deinit();
+        if (pvWifiEventLoopOurs) {
+            esp_event_loop_delete_default();
+            pvWifiEventLoopOurs = false;
+        }
         return false;
     }
+    if (modeErr != ESP_OK && modeErr != ESP_ERR_WIFI_STATE && modeErr != ESP_ERR_WIFI_INIT_STATE)
+        Serial.printf("[PktMon] wifi_mode: %s\n", esp_err_to_name(modeErr));
 
     if (!pvPcap) {
         pvPcap = (PvPcapSlot *)heap_caps_malloc(sizeof(PvPcapSlot) * PV_PCAP_MAX, MALLOC_CAP_SPIRAM);
@@ -405,7 +448,18 @@ static bool pvWifiStart() {
     pvWifiChIdx = 0;
     pvWifiCh = PV_WIFI_CHANNELS[0];
     esp_wifi_set_channel(pvWifiCh, WIFI_SECOND_CHAN_NONE);
-    esp_wifi_set_promiscuous(true);
+    e = esp_wifi_set_promiscuous(true);
+    if (e != ESP_OK) {
+        Serial.printf("[PktMon] promiscuous: %s\n", esp_err_to_name(e));
+        esp_wifi_set_promiscuous_rx_cb(NULL);
+        esp_wifi_stop();
+        esp_wifi_deinit();
+        if (pvWifiEventLoopOurs) {
+            esp_event_loop_delete_default();
+            pvWifiEventLoopOurs = false;
+        }
+        return false;
+    }
     pvWifiUp = true;
     return true;
 }
@@ -415,7 +469,19 @@ static void pvWifiStop() {
     esp_wifi_set_promiscuous(false);
     esp_wifi_set_promiscuous_rx_cb(NULL);
     esp_wifi_stop();
+    // The bring-up above used the raw esp_wifi_* API, so the Arduino WiFi
+    // object's own mode is still NULL and wifiDisconnect()'s WiFi.mode(WIFI_OFF)
+    // does nothing. Without an explicit deinit the driver kept ~60 KB of
+    // internal DRAM after leaving this screen (measured: 83,823 -> 23,779
+    // bytes free), and the next radio - the BLE tap - could never start.
     wifiDisconnect();
+    esp_err_t e = esp_wifi_deinit();
+    if (e != ESP_OK && e != ESP_ERR_WIFI_NOT_INIT)
+        Serial.printf("[PktMon] wifi_deinit: %s\n", esp_err_to_name(e));
+    if (pvWifiEventLoopOurs) {
+        esp_event_loop_delete_default();
+        pvWifiEventLoopOurs = false;
+    }
     pvWifiUp = false;
     if (pvPcap) {
         heap_caps_free(pvPcap);
@@ -461,6 +527,15 @@ static void pvBleName(const uint8_t *data, uint8_t len, char *out, size_t n) {
 
 static bool pvBleStart() {
     pvBleSeen = 0;
+    // NimBLE needs ~56 KB of free internal DRAM; radioHasMemForBle() also drops
+    // Wi-Fi first, because only one of the two radios can be up on this board.
+    if (!BLEDevice::isInitialized() && !radioHasMemForBle()) {
+        Serial.printf(
+            "[PktMon] not enough internal RAM for the BLE stack (free %u, largest DMA %u)\n",
+            (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+            (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA)
+        );
+    }
     pvBleInit = bleCaptureStart(30000);
     return pvBleInit;
 }
@@ -833,12 +908,18 @@ static void pvExportMenu(PacketSource s) {
 static int pvSel = 0; // index into the visible (newest-first) list
 static int pvWin = 0; // first visible list index drawn
 
+// Full repaint (clear the screen) is needed whenever something else has drawn
+// over the dashboard: opening the monitor, and every time a submenu closes.
+// It must not be a function-local static, or the second time the monitor is
+// opened the border/background are never cleared and the previous screen shows
+// through the live rows (unreadable overlay).
+static bool pvFullPaint = true;
+
 static void pvDrawDashboard(PacketSource source, int sel, int win, std::vector<int> &vis) {
-    // Clear only on the first paint; live repaints overwrite the same padded
-    // rows in place, which keeps the USB screen stream from flooding.
-    static bool firstPaint = true;
-    drawMainBorder(firstPaint);
-    firstPaint = false;
+    // Clear only on a full paint; live repaints overwrite the same padded rows
+    // in place, which keeps the USB screen stream from flooding.
+    drawMainBorder(pvFullPaint);
+    pvFullPaint = false;
 
     pvDrawLine("PACKET MONITOR", 10, 28, bruceConfig.priColor);
     tft.setTextSize(FP);
@@ -913,6 +994,7 @@ static void pvDashboardMenu(PacketSource &source, bool &paused, bool &needRestar
 }
 
 void packetMonitor(PacketSource source) {
+    pvFullPaint = true;
     pvFilter = PvFilter();
     pvPaused = false;
     pvSel = 0;
@@ -979,6 +1061,9 @@ void packetMonitor(PacketSource source) {
                 pvStartSource(source);
             }
             check(AnyKeyPress);
+            // loopOptions() painted the menu over the dashboard: without a full
+            // repaint the half-overwritten list rows stay on screen.
+            pvFullPaint = true;
             redraw = true;
         }
 

@@ -879,6 +879,14 @@ public:
     // Global variables
 #if !defined(TFT_PARALLEL_8_BIT) && !defined(RP2040_PIO_INTERFACE)
     static SPIClass &getSPIinstance(void); // Get SPI class handle
+    // Outer SPI-bus arbitration for code that drives the same SPIClass instance
+    // as the display from another task (the CC1101 on boards where it is wired
+    // to the TFT's pins). These take/release the same recursive mutex every
+    // draw uses, WITHOUT touching the transaction state, so a peripheral can
+    // never begin/end an SPI transaction the render task is in the middle of
+    // (that mismatch trips `xTaskPriorityDisinherit` inside SPIClass).
+    static void busLock(void);
+    static void busUnlock(void);
 #endif
     uint32_t textcolor, textbgcolor; // Text foreground and background colours
 

@@ -36,6 +36,13 @@
 #define NRF_CAP_MAX_PACKETS 128
 #define NRF_CAP_MAX_PAYLOAD 32
 
+// Interior DRAM is what Wi-Fi and BLE need, and it is the scarcest resource on
+// this board. Callers that only need a temporary packet array must NOT declare
+// `NrfCapturedPacket pkts[NRF_CAP_MAX_PACKETS]` as a static/local: that is 5 KB
+// of internal RAM each (the JS bindings plus the console verbs had seven of
+// them, ~35 KB) and it made esp_wifi_init and the NimBLE bring-up fail with
+// ESP_ERR_NO_MEM. Use nrfAllocPacketBuffer() instead - it prefers PSRAM.
+
 /// A single received raw packet.
 struct NrfCapturedPacket {
     uint32_t timestamp; // millis() when it arrived
@@ -194,6 +201,12 @@ int nrfCaptureCount();
 int nrfCaptureDropped();
 bool nrfCapturePacket(int index, NrfCapturedPacket *out);
 void nrfCaptureClear();
+
+/// A throwaway packet array for callers that need one only while they run.
+/// Allocated from PSRAM first, internal RAM only as a fallback. Returns nullptr
+/// if both fail. The caller normally caches the pointer in a function-local
+/// static, so the cost is paid once.
+NrfCapturedPacket *nrfAllocPacketBuffer(int count = NRF_CAP_MAX_PACKETS);
 /// Replace the capture buffer with packets loaded from a file (for replay).
 int nrfCaptureLoad(const NrfCapturedPacket *pkts, int count);
 

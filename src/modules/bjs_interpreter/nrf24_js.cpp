@@ -8,6 +8,16 @@
 // Helpers
 // ---------------------------------------------------------------------------
 
+// One throwaway capture buffer for every binding in this file, allocated from
+// PSRAM on first use. Five function-local `NrfCapturedPacket pkts[128]` arrays
+// used to sit in .bss here: 25 KB of internal DRAM that Wi-Fi and BLE needed,
+// and the reason their bring-up failed with ESP_ERR_NO_MEM on this board.
+static NrfCapturedPacket *nrfJsScratch() {
+    static NrfCapturedPacket *buf = nullptr;
+    if (buf == nullptr) buf = nrfAllocPacketBuffer();
+    return buf;
+}
+
 // Accepts "aabbcc", "AA:BB:CC", "aa bb cc" and "0xaabbcc".
 static int nrfJsParseHex(const char *s, uint8_t *out, int maxLen) {
     if (s == NULL) return 0;
@@ -428,7 +438,8 @@ JSValue native_nrf24CaptureRaw(JSContext *ctx, JSValue *this_val, int argc, JSVa
     // 40 ms per channel: the 20 ms default only gives a burst a handful of
     // samples per channel and misses the code almost every time (measured).
     int n = nrfCaptureRun((uint32_t)ms, nrfJsHopMode, 40);
-    static NrfCapturedPacket pkts[NRF_CAP_MAX_PACKETS];
+    NrfCapturedPacket *pkts = nrfJsScratch();
+    if (pkts == nullptr) return JS_NewArray(ctx, 0);
     int got = 0;
     for (int i = 0; i < n && got < NRF_CAP_MAX_PACKETS; i++) {
         if (nrfCapturePacket(i, &pkts[got])) got++;
@@ -444,7 +455,8 @@ JSValue native_nrf24CaptureMultiFreq(JSContext *ctx, JSValue *this_val, int argc
     if (ms < 200) ms = 200;
     if (ms > 60000) ms = 60000;
     int n = nrfCaptureRun((uint32_t)ms, true, 40);
-    static NrfCapturedPacket pkts[NRF_CAP_MAX_PACKETS];
+    NrfCapturedPacket *pkts = nrfJsScratch();
+    if (pkts == nullptr) return JS_NewArray(ctx, 0);
     int got = 0;
     for (int i = 0; i < n && got < NRF_CAP_MAX_PACKETS; i++) {
         if (nrfCapturePacket(i, &pkts[got])) got++;
@@ -477,7 +489,8 @@ JSValue native_nrf24SaveSignal(JSContext *ctx, JSValue *this_val, int argc, JSVa
     if (argc < 2) return JS_NewBool(false);
     String name = js_tocstring_copy(ctx, argv[0]);
 
-    static NrfCapturedPacket pkts[NRF_CAP_MAX_PACKETS];
+    NrfCapturedPacket *pkts = nrfJsScratch();
+    if (pkts == nullptr) return JS_NewBool(false);
     int count = nrfJsSignalToPackets(ctx, argv[1], nrfCaptureGetChannel(), pkts, NRF_CAP_MAX_PACKETS);
     if (count <= 0) return JS_NewBool(false);
     return JS_NewBool(nrfSaveSignal(name, pkts, count, "nrf24.js"));
@@ -487,7 +500,8 @@ JSValue native_nrf24LoadSignal(JSContext *ctx, JSValue *this_val, int argc, JSVa
     // usage: nrf24.loadSignal(name) -> [{channel,freq,len,timestamp,data}, ...]
     if (argc < 1) return JS_NewArray(ctx, 0);
     String name = js_tocstring_copy(ctx, argv[0]);
-    static NrfCapturedPacket pkts[NRF_CAP_MAX_PACKETS];
+    NrfCapturedPacket *pkts = nrfJsScratch();
+    if (pkts == nullptr) return JS_NewArray(ctx, 0);
     int n = nrfLoadSignal(name, pkts, NRF_CAP_MAX_PACKETS, nullptr);
     return nrfJsBuildCaptureArray(ctx, pkts, n);
 }
@@ -611,7 +625,8 @@ JSValue native_nrf24CaptureChannels(JSContext *ctx, JSValue *this_val, int argc,
 
     nrfCaptureRunChannels(chans, nc, (uint32_t)ms, (uint32_t)dwell);
 
-    static NrfCapturedPacket pkts[NRF_CAP_MAX_PACKETS];
+    NrfCapturedPacket *pkts = nrfJsScratch();
+    if (pkts == nullptr) return JS_NewArray(ctx, 0);
     int got = 0;
     for (int i = 0; i < nrfCaptureCount() && got < NRF_CAP_MAX_PACKETS; i++) {
         if (nrfCapturePacket(i, &pkts[got])) got++;

@@ -23,7 +23,27 @@ bool initRfModule(String mode = "", float frequency = 0);
 void deinitRfModule();
 void initCC1101once(SPIClass *SSPI);
 
+// Serializes CC1101 SPI traffic against the display's SPI transactions.
+//
+// On most boards the CC1101 is wired to the same pins as the TFT, so
+// acquireSPIBus() hands the RF layer the display's own SPIClass instance. The
+// SmartRC driver opens/closes a transaction around every register access
+// (SpiStart()/SpiEnd()), i.e. it calls beginTransaction()/endTransaction() on a
+// shared instance. If a console command (serial command task) does that while
+// the render task is in the middle of a draw, endTransaction() releases an SPI
+// parameter mutex that belongs to the OTHER task - FreeRTOS asserts
+// (xTaskPriorityDisinherit) and the board reboots. That is exactly what
+// `subghz scan` used to do. Every RF entry point wraps its CC1101 access in
+// these two helpers: the outermost lock also claims the display's transaction
+// (tft.startWrite()), so RF and rendering can never interleave. Nested calls are
+// cheap (recursive), so callers may lock coarsely.
+void rf_spi_lock();
+void rf_spi_unlock();
+
 void setMHZ(float frequency);
+// getRssi() is one SPI burst as well; go through this wrapper rather than
+// calling ELECHOUSE_cc1101.getRssi() directly from a non-render task.
+int rfGetRssi();
 int find_pulse_index(const std::vector<int> &indexed_durations, int duration);
 uint64_t crc64_ecma(const std::vector<int> &data);
 

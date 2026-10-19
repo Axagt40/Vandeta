@@ -2,6 +2,8 @@
 #include "core/bus_HAL.h"
 #include "core/sd_functions.h"
 #include "core/settings.h"
+#include <globals.h>
+#include <freertos/semphr.h>
 
 // CRC-64-ECMA constants
 const uint64_t CRC64_ECMA_POLY = 0x42F0E1EBA9EA3693; // Polynomial for CRC-64-ECMA
@@ -179,6 +181,55 @@ bool rmtInstalled = true;
 static bool cc1101_spi_ready = false;
 static uint8_t cc1101_mode_hint = 0;
 
+// See rf_spi_lock() in rf_utils.h for why this exists. The recursive mutex makes
+// nested locks free; the depth counter means only the outermost pair takes (and
+// releases) the display's SPI transaction, so a render task can never be inside
+// a draw while another task is talking to the CC1101.
+static SemaphoreHandle_t rf_spi_mutex = nullptr;
+static int rf_spi_depth = 0;
+
+void rf_spi_lock() {
+    if (rf_spi_mutex == nullptr) {
+        rf_spi_mutex = xSemaphoreCreateRecursiveMutex();
+        if (rf_spi_mutex == nullptr) return; // out of memory: behave as before
+    }
+    xSemaphoreTakeRecursive(rf_spi_mutex, portMAX_DELAY);
+    if (rf_spi_depth == 0) {
+#ifdef HAS_SCREEN
+        // Takes the display's SPI mutex only (no transaction, no CS change), so
+        // the render task finishes whatever it is drawing and cannot start a new
+        // transaction until rf_spi_unlock(). The CC1101 driver is then free to
+        // begin/end its own transactions on the shared instance: no display
+        // transaction is open, so `endTransaction()` inside the driver can no
+        // longer release a mutex owned by another task.
+        // Qualified call: `tft` is a tft_display that inherits TFT_eSPI privately,
+        // but the bus lock lives on the TFT_eSPI singleton's shared mutex.
+        TFT_eSPI::busLock();
+#endif
+    }
+    rf_spi_depth++;
+}
+
+void rf_spi_unlock() {
+    if (rf_spi_mutex == nullptr) return;
+    if (rf_spi_depth > 0) {
+        rf_spi_depth--;
+        if (rf_spi_depth == 0) {
+#ifdef HAS_SCREEN
+            TFT_eSPI::busUnlock();
+#endif
+        }
+    }
+    xSemaphoreGiveRecursive(rf_spi_mutex);
+}
+
+int rfGetRssi() {
+    rf_spi_lock();
+    int rssi = ELECHOUSE_cc1101.getRssi();
+    rf_spi_unlock();
+    return rssi;
+}
+
 bool RfCodes::keeloq_check_decrypt(uint32_t decrypt) {
     uint16_t end_serial = serial & 0xFF;
 
@@ -239,6 +290,10 @@ bool initRfModule(String mode, float frequency) {
     if (!frequency) frequency = bruceConfigPins.rfFreq;
 
     if (bruceConfigPins.rfModule == CC1101_SPI_MODULE) { // CC1101 in use
+        // Every register write below goes over the shared SPI instance; hold the
+        // RF lock for the whole configuration pass so the render task cannot slip
+        // a display transaction in between two CC1101 strobes.
+        rf_spi_lock();
         SPIClass *ccSpi = acquireSPIBus(
             bruceConfigPins.CC1101_bus.sck, bruceConfigPins.CC1101_bus.miso, bruceConfigPins.CC1101_bus.mosi
         );
@@ -257,6 +312,9 @@ bool initRfModule(String mode, float frequency) {
             Serial.println("cc1101 Connection OK");
 #endif
         } else {
+            // Release the RF lock before the (possibly blocking) banner, otherwise the
+            // render task stays locked out of SPI and the error screen never draws.
+            rf_spi_unlock();
             displayError("CC1101 not found");
             Serial.println("cc1101 Connection Error");
             return false;
@@ -329,6 +387,7 @@ bool initRfModule(String mode, float frequency) {
         }
         // else if mode is unspecified wont start TX/RX mode here -> done by the caller
         cc1101_spi_ready = true;
+        rf_spi_unlock();
     } else {
         // single-pinned module
         if (abs(frequency - bruceConfigPins.rfFreq) > 1) {
@@ -430,6 +489,11 @@ void setMHZ(float frequency) {
             preciseCalibration ? (previousMode != 0 ? previousMode : cc1101_mode_hint) : 0;
         const bool isTxProfile = (targetMode == 1);
 
+        // One CC1101 burst, serialized against the display's SPI transactions (see
+        // rf_spi_lock). Without this a scan driven from the console shared the
+        // display's SPI instance with the render task and tripped the FreeRTOS
+        // assert inside SPIClass::endTransaction().
+        rf_spi_lock();
         if (preciseCalibration && previousMode != 0) ELECHOUSE_cc1101.setSidle();
 
         ELECHOUSE_cc1101.setMHZ(frequency);
@@ -440,6 +504,7 @@ void setMHZ(float frequency) {
             if (previousMode == 1) ELECHOUSE_cc1101.SetTx();
             else if (previousMode == 2) ELECHOUSE_cc1101.SetRx();
         }
+        rf_spi_unlock();
     }
 }
 

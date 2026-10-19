@@ -7,6 +7,7 @@
 #include "nrf_common.h"
 
 #include <RF24.h>
+#include <esp_heap_caps.h>
 #include <globals.h>
 
 // ============================================================================
@@ -251,6 +252,14 @@ bool nrfCapturePacket(int index, NrfCapturedPacket *out) {
     if (index < 0 || index >= nrfBufCount || out == nullptr) return false;
     *out = nrfBuf[index];
     return true;
+}
+
+NrfCapturedPacket *nrfAllocPacketBuffer(int count) {
+    if (count <= 0 || count > NRF_CAP_MAX_PACKETS) count = NRF_CAP_MAX_PACKETS;
+    size_t bytes = sizeof(NrfCapturedPacket) * (size_t)count;
+    NrfCapturedPacket *p = (NrfCapturedPacket *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
+    if (p == nullptr) p = (NrfCapturedPacket *)heap_caps_malloc(bytes, MALLOC_CAP_8BIT);
+    return p;
 }
 
 static bool nrfLooksLikeNoise(const uint8_t *data, uint8_t len) {
@@ -969,11 +978,18 @@ static void nrfMenuSaveCapture() {
     }
     String name = keyboard("capture", 20, "Signal name:");
     if (name.length() == 0 || name == "\x1B") return;
-    NrfCapturedPacket pkts[NRF_CAP_MAX_PACKETS];
+    // Heap, not stack: this is 5 KB and the menu task cannot spare it.
+    NrfCapturedPacket *pkts = nrfAllocPacketBuffer();
+    if (pkts == nullptr) {
+        displayError("No memory for capture", true);
+        return;
+    }
     int got = 0;
     for (int i = 0; i < nrfCaptureCount() && got < NRF_CAP_MAX_PACKETS; i++)
         if (nrfCapturePacket(i, &pkts[got])) got++;
-    if (nrfSaveSignal(name, pkts, got, "nrf24 menu")) displayInfo("Saved " + name, true);
+    bool ok = nrfSaveSignal(name, pkts, got, "nrf24 menu");
+    free(pkts);
+    if (ok) displayInfo("Saved " + name, true);
     else displayError("Save failed", true);
 }
 
@@ -983,12 +999,17 @@ static void nrfMenuReplayCapture() {
         return;
     }
     uint8_t chans[4];
-    NrfCapturedPacket all[NRF_CAP_MAX_PACKETS];
+    NrfCapturedPacket *all = nrfAllocPacketBuffer();
+    if (all == nullptr) {
+        displayError("No memory for replay", true);
+        return;
+    }
     int got = 0;
     for (int i = 0; i < nrfCaptureCount() && got < NRF_CAP_MAX_PACKETS; i++)
         if (nrfCapturePacket(i, &all[got])) got++;
     int nc = nrfChooseReplayChannels(all, got, chans, 4);
     if (nc == 0) {
+        free(all);
         displayError("No channel to replay on", true);
         return;
     }
@@ -1012,6 +1033,8 @@ static void nrfMenuReplayCapture() {
             break;
         }
     }
+
+    free(all);
 
     String lines[2];
     lines[0] = String("Sent ") + String(sent) + " on " + String(nc) + " freq(s)";

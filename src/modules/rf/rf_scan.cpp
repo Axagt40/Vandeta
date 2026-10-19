@@ -44,6 +44,8 @@ void RFScan::setup() {
     rf_clear_nav_state();
     returnToMenu = false;
     exitRequested = false;
+    hasPendingCapture = false;
+    noiseFloorValid = false;
 
     if (!initRfModule("rx", bruceConfigPins.rfFreq)) { return; }
 
@@ -84,6 +86,15 @@ void RFScan::loop() {
         }
 
         if (bruceConfigPins.rfFxdFreq) frequency = bruceConfigPins.rfFreq;
+        // A parked frequency from the sweep is temporary: resume sweeping when
+        // its hold runs out (a real capture sets frequency back to 0 itself).
+        if (frequency <= 0) {
+            holdUntilMs = 0;
+        } else if (!bruceConfigPins.rfFxdFreq && holdUntilMs && (int32_t)(millis() - holdUntilMs) >= 0) {
+            frequency = 0;
+            holdUntilMs = 0;
+            noiseFloorValid = false;
+        }
         if (frequency <= 0) init_freqs();
 
         while (frequency <= 0) { // FastScan
@@ -103,11 +114,25 @@ void RFScan::loop() {
                 return setup();
             }
 
-            if (fast_scan()) return setup(); // frequency found, reset
+            if (fast_scan()) {
+                // Frequency found. If the sweep already captured a frame, process
+                // it right here: setup() re-inits the radio/receiver and would
+                // throw that frame away.
+                if (hasPendingCapture) break;
+                return setup();
+            }
         }
 
         std::vector<int> durations;
-        if (_rx.poll(durations)) {
+        bool gotDurations;
+        if (hasPendingCapture) {
+            hasPendingCapture = false;
+            durations.swap(pendingDurations);
+            gotDurations = !durations.empty();
+        } else {
+            gotDurations = _rx.poll(durations);
+        }
+        if (gotDurations) {
             bool captured = false;
             if (!ReadRAW) {
                 captured = decode_signal(durations);
@@ -149,20 +174,140 @@ void RFScan::init_freqs() {
     _try = 0;
 }
 
-bool RFScan::fast_scan() {
+// --- Sweep parameters (taken from Flipper's frequency analyzer) -------------
+// The reference implementation is Flipper's subghz_frequency_analyzer_worker:
+//
+//   coarse pass : 650 kHz RX filter, 2 ms receiver settle per frequency, and a
+//                 -93 dBm detection threshold (SUBGHZ_FREQUENCY_ANALYZER_THRESHOLD);
+//   fine pass   : only for a detected carrier - +-300 kHz in 20 kHz steps with
+//                 the 58 kHz filter, and the narrow result is what gets reported.
+//
+// This scan previously used the 256 kHz profile with a -65 dBm threshold and a
+// ~2 ms RSSI sample per hop, so a keyfob pressed at an unpredictable moment was
+// almost never seen. Same filters/threshold/step sizes as Flipper are used here,
+// plus a real listening window per hop so a frame is captured even when RSSI is
+// inconclusive (the RMT receiver does not need RSSI to catch an OOK edge).
+#define RF_SCAN_CARRIER_RSSI (-93)   // Flipper's analyzer threshold, dBm
+#define RF_SCAN_CARRIER_MARGIN 6     // ...and stay this far above the noise floor
+#define RF_SCAN_DWELL_MS 70          // listen per frequency: ~4 s for all 57
+#define RF_SCAN_CARRIER_DWELL_MS 400 // listen at a detected carrier
+#define RF_SCAN_COARSE_RXBW 650      // Flipper's Ook650 preset (58 kHz for fine)
+#define RF_SCAN_FINE_RXBW 58
+#define RF_SCAN_FINE_SPAN 0.30f // +-300 kHz around the coarse hit
+#define RF_SCAN_FINE_STEP 0.02f // 20 kHz
+#define RF_SCAN_HOLD_MS 15000   // listen at a sweep-found frequency this long
 
-    if (idx < range_limits[bruceConfigPins.rfScanRange][0] ||
-        idx > range_limits[bruceConfigPins.rfScanRange][1]) {
-        idx = range_limits[bruceConfigPins.rfScanRange][0];
+bool RFScan::fast_scan() {
+    const int lo = range_limits[bruceConfigPins.rfScanRange][0];
+    const int hi = range_limits[bruceConfigPins.rfScanRange][1];
+
+    bool newPass = false;
+    if (idx < lo || idx > hi) {
+        idx = lo;
+        newPass = true;
     }
     float checkFrequency = subghz_frequency_list[idx];
+
+    // First hop of a sweep: switch to Flipper's wide coarse filter.
+    if (!noiseFloorValid) ELECHOUSE_cc1101.setRxBW(RF_SCAN_COARSE_RXBW);
+
     setMHZ(checkFrequency);
     tft.drawPixel(0, 0, 0); // To make sure CC1101 shared with TFT works properly
-    vTaskDelay(5 / portTICK_PERIOD_MS);
-    rssi = ELECHOUSE_cc1101.getRssi();
-    if (rssi > rssiThreshold) {
-        _freqs[_try].freq = checkFrequency;
-        _freqs[_try].rssi = rssi;
+    // Flipper waits 2 ms in RX before the RSSI value is meaningful.
+    vTaskDelay(pdMS_TO_TICKS(2));
+    rfGetRssi(); // the first read after a retune is unsettled
+    rssi = rfGetRssi();
+
+    // Follow the ambient noise floor so a busy band does not look like a carrier
+    // everywhere, while still keeping Flipper's very permissive absolute floor.
+    if (!noiseFloorValid) {
+        noiseFloor = rssi;
+        noiseFloorValid = true;
+    } else {
+        noiseFloor += (rssi - noiseFloor) / 8;
+    }
+    int carrierThreshold = noiseFloor + RF_SCAN_CARRIER_MARGIN;
+    if (carrierThreshold < RF_SCAN_CARRIER_RSSI) carrierThreshold = RF_SCAN_CARRIER_RSSI;
+    bool carrier = rssi > carrierThreshold;
+
+    // One line per sweep pass keeps `log on` useful for checking the sweep is
+    // actually alive (and shows the ambient floor of the location).
+    if (newPass) Serial.printf("[RFSCAN] pass: noise floor %d dBm, threshold %d dBm\n", noiseFloor, carrierThreshold);
+
+    // Flipper's fine pass: pinpoint the carrier to 20 kHz before listening there.
+    float listenFreq = checkFrequency;
+    int listenRssi = rssi;
+    if (carrier) {
+        ELECHOUSE_cc1101.setRxBW(RF_SCAN_FINE_RXBW);
+        for (float f = checkFrequency - RF_SCAN_FINE_SPAN; f <= checkFrequency + RF_SCAN_FINE_SPAN + 1e-4f;
+             f += RF_SCAN_FINE_STEP) {
+            if (EscPress) return false;
+            setMHZ(f);
+            vTaskDelay(pdMS_TO_TICKS(2));
+            int r = rfGetRssi();
+            if (r > listenRssi) {
+                listenRssi = r;
+                listenFreq = f;
+            }
+        }
+        ELECHOUSE_cc1101.setRxBW(RF_SCAN_COARSE_RXBW);
+        setMHZ(listenFreq);
+        tft.drawPixel(0, 0, 0);
+        Serial.printf(
+            "Carrier: %.3f MHz (coarse %.2f, %d dBm)\n", listenFreq, checkFrequency, listenRssi
+        );
+    }
+
+    // Listen instead of only sampling RSSI: the RMT receiver captures an OOK
+    // frame whatever the RSSI reading said.
+    uint32_t start = millis();
+    const uint32_t dwell = carrier ? RF_SCAN_CARRIER_DWELL_MS : RF_SCAN_DWELL_MS;
+    while (millis() - start < dwell) {
+        if (EscPress) return false;
+        std::vector<int> d;
+        if (_rx.poll(d)) {
+            // The CC1101 OOK slicer also outputs hash when nothing is on the air,
+            // and the TFT's SPI clock shows up as periodic spurs, so a capture is
+            // only accepted when it looks like a real frame: a protocol match, or
+            // a repeated OOK pattern with a sane symbol count and pulse width.
+            // Without this a quiet band produced a phantom "RAW" capture on
+            // almost every hop.
+            String probeData;
+            std::vector<int> probeIndexed;
+            bool probeCrc = false;
+            uint64_t probeCrcVal = 0;
+            int probeBits = 0, probeTe = 0;
+            int probeEdges = rf_build_raw(d, probeData, probeCrc, probeCrcVal, probeIndexed, probeBits, probeTe);
+            RfCodes probe;
+            bool probeDecoded = rf_decode_ook(d, probe);
+            bool plausible = probeDecoded || (probeCrc && probeBits >= 24 && probeTe >= 150 && probeTe <= 1500);
+            if (!plausible) {
+                Serial.printf(
+                    "[RFSCAN] noise at %.2f MHz: %d edges, %d symbols, te=%d\n",
+                    checkFrequency,
+                    probeEdges,
+                    probeBits,
+                    probeTe
+                );
+                continue;
+            }
+            pendingDurations.swap(d);
+            hasPendingCapture = true;
+            frequency = listenFreq;
+            found_freq = listenFreq;
+            ELECHOUSE_cc1101.setRxBW(256); // back to the normal scanning profile
+            // Re-seed the sweep on the next hop: it has to re-apply the wide
+            // coarse filter and rebuild the noise floor after this detour.
+            noiseFloorValid = false;
+            Serial.println("Signal captured at " + String(listenFreq, 3) + " MHz");
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+
+    if (carrier) {
+        _freqs[_try].freq = listenFreq;
+        _freqs[_try].rssi = listenRssi;
         _try++;
         if (_try >= _MAX_TRIES) {
             int max_index = 0;
@@ -170,15 +315,17 @@ bool RFScan::fast_scan() {
                 if (_freqs[i].rssi > _freqs[max_index].rssi) { max_index = i; }
             }
 
-            bruceConfigPins.setRfFreq(_freqs[max_index].freq, 1); // change to fixed frequency
+            // Park on the winning frequency to listen for a frame. This used to
+            // call setRfFreq(freq, 1), i.e. silently rewrite the user's config to
+            // "Fixed" - after the first noise hit an "all ranges" scan stopped
+            // sweeping for good. Park temporarily instead (see holdUntilMs).
             frequency = _freqs[max_index].freq;
+            holdUntilMs = millis() + RF_SCAN_HOLD_MS;
+            ELECHOUSE_cc1101.setRxBW(256);
+            noiseFloorValid = false;
             setMHZ(frequency);
             Serial.println("Frequency Found: " + String(frequency));
-            // When changing to fixed frequency, need to restart the module to reset the registers
-            // so we get good signal reception at this frequency
-            deinitRfModule();
-
-            return true;
+            return false;
         }
     }
     ++idx;
@@ -751,59 +898,74 @@ String rf_scan(float start_freq, float stop_freq, int max_loops) {
     }
     if (!initRfModule("rx", start_freq)) return "";
 
+    // Sanity-check the window here rather than inside the sweep: a reversed or
+    // degenerate range used to leave the loop with nothing to do (or sweep from
+    // 0 MHz, which is what produced thousands of "Frequency out of band" lines
+    // and never found a signal).
+    if (start_freq > stop_freq) {
+        float tmp = start_freq;
+        start_freq = stop_freq;
+        stop_freq = tmp;
+    }
+    if (start_freq < 280.0f) start_freq = 280.0f;
+    if (stop_freq > 928.0f) stop_freq = 928.0f;
+    if (start_freq >= stop_freq) {
+        Serial.println("Invalid frequency range");
+        deinitRfModule();
+        return "";
+    }
+
     ELECHOUSE_cc1101.setRxBW(256);
 
-    float settingf1 = start_freq;
-    float settingf2 = stop_freq;
-    float freq = 0;
-    long compare_freq = 0;
-    float mark_freq;
-    int rssi;
+    const float settingf1 = start_freq;
+    const float settingf2 = stop_freq;
+    float freq = settingf1; // start at the requested band, not at 0 MHz
+    float mark_freq = settingf1;
     int mark_rssi = -100;
     String out = "";
+    String last_reported = "";
+    // `max_loops` is used as a time budget by every caller (the serial command
+    // passes 10*1000 for "10 s"). It used to be counted as sweep steps, so
+    // `subghz scan` ran for minutes instead of the documented ten seconds.
+    const uint32_t deadline = max_loops > 0 ? millis() + (uint32_t)max_loops : 0;
 
-    while (max_loops || !check(EscPress)) {
-        vTaskDelay(1 / portTICK_PERIOD_MS);
-        max_loops -= 1;
+    // The sweep is the RMT/GDO0 idle time as far as the UI is concerned, so give
+    // the render task a chance to run on every step instead of hogging the CPU.
+    while (deadline == 0 || (int32_t)(millis() - deadline) < 0) {
+        if (check(EscPress)) break;
 
         setMHZ(freq);
 
-        rssi = ELECHOUSE_cc1101.getRssi();
-        if (rssi > -75) {
-            if (rssi > mark_rssi) {
-                mark_rssi = rssi;
-                mark_freq = freq;
-            };
-        };
+        int rssi = rfGetRssi();
+        // Same permissive floor as the interactive sweep / Flipper analyzer;
+        // -75 was strict enough to miss ordinary keyfobs a few metres away.
+        if (rssi > RF_SCAN_CARRIER_RSSI && rssi > mark_rssi) {
+            mark_rssi = rssi;
+            mark_freq = freq;
+        }
 
-        freq += 0.01;
+        freq += 0.1f; // 100 kHz steps: 1 MHz band = 10 reads, fast enough to feel live
 
         if (freq > settingf2) {
             freq = settingf1;
-
-            if (mark_rssi > -75) {
-                long fr = mark_freq * 100;
-                if (fr == compare_freq) {
-                    Serial.print(F("\r\nSignal found at  "));
-                    Serial.print(F("Freq: "));
-                    Serial.print(mark_freq);
-                    Serial.print(F(" Rssi: "));
-                    Serial.println(mark_rssi);
-                    out += String(mark_freq) + ",";
-                    mark_rssi = -100;
-                    compare_freq = 0;
-                    mark_freq = 0;
-                } else {
-                    compare_freq = mark_freq * 100;
-                    freq = mark_freq - 0.10;
-                    mark_freq = 0;
-                    mark_rssi = -100;
-                };
-            };
-        }; // end of IF freq>stop frequency
-    }; // End of While
+            // Report the strongest carrier of the pass, once per distinct
+            // frequency: a multi-pass sweep otherwise repeats the same "Signal
+            // found" line until the timeout expires.
+            if (mark_rssi > RF_SCAN_CARRIER_RSSI && String(mark_freq, 3) != last_reported) {
+                Serial.printf("\r\nSignal found at Freq: %.3f Rssi: %d\r\n", mark_freq, mark_rssi);
+                out += String(mark_freq, 3) + ",";
+                last_reported = String(mark_freq, 3);
+            }
+            // Reset the peak so the next sweep finds its own maximum instead of
+            // repeating the previous one.
+            mark_rssi = -100;
+            mark_freq = settingf1;
+        }
+        vTaskDelay(1 / portTICK_PERIOD_MS);
+    }
 
     deinitRfModule();
+    if (out.length()) Serial.println("Scan complete: " + out);
     return out;
 }
 
