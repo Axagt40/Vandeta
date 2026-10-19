@@ -479,23 +479,51 @@ size_t getFileSize(FS &fs, String filepath) {
     return fileSize;
 }
 
+/***************************************************************************************
+** Function name: md5File / crc32File
+** Description:   hash a file of ANY size in 512 B chunks.
+**
+**                These used to go through readSmallFile(), which refuses
+**                anything over SAFE_STACK_BUFFER_SIZE and pops a BLOCKING
+**                "File is too big" dialog - so `storage md5` on e.g. the 74 KB
+**                rickroller.js hung the console forever and even a small file
+**                cost a heap String the size of the file. Streaming keeps the
+**                footprint flat (one 512 B buffer) and makes big files work.
+***************************************************************************************/
+static const size_t HASH_CHUNK = 512;
+
 String md5File(FS &fs, const String &filepath) {
-    if (!fs.exists(filepath)) return "";
-    String txt = readSmallFile(fs, filepath);
+    File file = fs.open(filepath, FILE_READ);
+    if (!file || file.isDirectory()) return "";
+
+    uint8_t buf[HASH_CHUNK];
     MD5Builder md5;
     md5.begin();
-    md5.add(txt);
+    while (file.available()) {
+        size_t got = file.read(buf, sizeof(buf));
+        if (got == 0) break;
+        md5.add(buf, got);
+    }
+    file.close();
     md5.calculate();
-    return (md5.toString());
+    return md5.toString();
 }
 
 String crc32File(FS &fs, const String &filepath) {
-    if (!fs.exists(filepath)) return "";
-    String txt = readSmallFile(fs, filepath);
-    // derived from
-    // https://techoverflow.net/2022/08/05/how-to-compute-crc32-with-ethernet-polynomial-0x04c11db7-on-esp32-crc-h/
-    uint32_t romCRC =
-        (~esp_rom_crc32_le((uint32_t)~(0xffffffff), (const uint8_t *)txt.c_str(), txt.length())) ^ 0xffffffff;
+    File file = fs.open(filepath, FILE_READ);
+    if (!file || file.isDirectory()) return "";
+
+    // esp_rom_crc32_le() chains across calls, so the running value is fed back
+    // in. It hashes to the same value as the old one-shot call, which reduced
+    // to esp_rom_crc32_le(0, ...) once `~x ^ 0xffffffff` was folded away.
+    uint8_t buf[HASH_CHUNK];
+    uint32_t romCRC = 0;
+    while (file.available()) {
+        size_t got = file.read(buf, sizeof(buf));
+        if (got == 0) break;
+        romCRC = esp_rom_crc32_le(romCRC, buf, got);
+    }
+    file.close();
 
     char s[18] = {0};
     char crcBytes[4] = {0};

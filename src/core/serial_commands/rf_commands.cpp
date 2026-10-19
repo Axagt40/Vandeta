@@ -20,19 +20,33 @@ uint32_t rfRxCallback(cmd *c) {
     Argument rawArg = cmd.getArgument("raw");
     Argument freqArg = cmd.getArgument("frequency");
     bool raw = rawArg.isSet();
-    String strFreq = freqArg.getValue();
+    String arg = freqArg.getValue();
+    arg.trim();
 
-    float frequency = strFreq.toFloat();
-    frequency /= 1000000; // passed as a long int (e.g. 433920000)
+    // `help` documents this as `subghz rx <timeout>`, but the callback only ever
+    // read the value as a frequency and hardcoded a 10 s window - so the
+    // documented `subghz rx 4` was parsed as 4 Hz, fell back to 433.92 with a
+    // blocking "Wrong freq" banner, and then listened for 10 s anyway.
+    // Now both forms work: >= 1 MHz is a frequency in Hz (back-compatible with
+    // `subghz rx 433920000`), anything smaller is a timeout in seconds.
+    float frequency = (bruceConfigPins.rfFreq > 0) ? bruceConfigPins.rfFreq : 433.92f;
+    int timeout = 10;
+    if (arg.length() > 0) {
+        long v = arg.toInt();
+        if (v >= 1000000L) {
+            frequency = v / 1000000.0f;
+        } else if (v > 0) {
+            timeout = (int)min(v, 600L);
+        }
+    }
 
-    // serialDevice->print("frequency: ");
-    // serialDevice->println(frequency);
+    serialDevice->println("Listening on " + String(frequency, 3) + " MHz for " + String(timeout) + "s...");
 
     String r = "";
     if (raw) {
-        r = rfReceiveSignal(frequency, 10, true, true); // raw mode, headless (Serial only)
+        r = rfReceiveSignal(frequency, timeout, true, true); // raw mode, headless (Serial only)
     } else {
-        r = rfReceiveSignal(frequency, 10, false, true); // decoded mode, headless (Serial only)
+        r = rfReceiveSignal(frequency, timeout, false, true); // decoded mode, headless (Serial only)
     }
 
     if (r.length() == 0) return false;
@@ -365,7 +379,10 @@ uint32_t rfSendCallback(cmd *c) {
 
 void createRfRxCommand(Command *rfCmd) {
     Command cmd = rfCmd->addCommand("rx", rfRxCallback);
-    cmd.addPosArg("frequency", String(bruceConfigPins.rfFreq).c_str());
+    // Optional: seconds (documented) or Hz (legacy). Defaults to the configured
+    // frequency and a 10 s window when omitted. Declaration order is unchanged
+    // from upstream so `subghz rx raw ...` keeps parsing the same way.
+    cmd.addPosArg("frequency", "");
     cmd.addFlagArg("raw");
 }
 

@@ -126,6 +126,14 @@ int8_t displayMessage(
     const char *message, const char *leftButton, const char *centerButton, const char *rightButton,
     uint16_t color
 );
+// Console context: set while a serial/CLI command is running. Blocking banners
+// (waitKeyPress) are downgraded to non-blocking in that window, because nobody
+// is at the keypad to dismiss them and the console would stall forever - which
+// is exactly what `storage md5` on a large file and a bad `subghz rx` argument
+// used to do.
+void setConsoleContext(bool on);
+bool consoleContext();
+
 void displayError(const String &txt, bool waitKeyPress = false);    // Red Stripe
 void displayWarning(const String &txt, bool waitKeyPress = false);  // Yellow Stripe
 void displayInfo(const String &txt, bool waitKeyPress = false);     // Blue Stripe

@@ -329,7 +329,10 @@ static uint32_t procCallback(cmd *c) {
         line += "\t";
         line += String((uint32_t)arr[i].usStackHighWaterMark);
         line += "\t";
-        line += String((int)arr[i].xCoreID);
+        // tskNO_AFFINITY (0x7FFFFFFF) used to print as 2147483647; call it what
+        // it is so the column stays readable.
+        if (arr[i].xCoreID == tskNO_AFFINITY) line += "any";
+        else line += String((int)arr[i].xCoreID);
         serialDevice->println(line);
     }
     free(arr);

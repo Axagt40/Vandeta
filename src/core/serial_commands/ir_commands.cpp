@@ -8,6 +8,10 @@
 
 uint32_t irCallback(cmd *c) {
     serialDevice->println("Turning off IR LED");
+    // The pin has to be claimed before the write: without this the console got
+    // "IO 2 is not set as GPIO. Execute digitalMode(2, OUTPUT) first." and the
+    // LED stayed on.
+    pinMode(bruceConfigPins.irTx, OUTPUT);
     digitalWrite(bruceConfigPins.irTx, LED_OFF);
     return true;
 }
@@ -18,6 +22,16 @@ uint32_t irRxCallback(cmd *c) {
     Argument arg = cmd.getArgument("raw");
     bool raw = arg.isSet();
 
+    // `ir rx [timeout]` / `ir rx raw [timeout]` - the documented form. It used
+    // to be rejected as an unknown argument and the window was hardcoded to
+    // 10 s, so `ir rx 4` (as printed by `help`) could never work.
+    int timeout = 10;
+    Argument timeoutArg = cmd.getArgument("timeout");
+    if (timeoutArg.isSet()) {
+        long v = timeoutArg.getValue().toInt();
+        if (v > 0) timeout = (int)min(v, 600L);
+    }
+
     IrRead *i = NULL; // avoid calling the constructor here
 
     if (raw) {
@@ -26,9 +40,12 @@ uint32_t irRxCallback(cmd *c) {
         i = new IrRead(true); // true -> headless mode
     }
 
-    serialDevice->println("Waiting for signal...");
-    String r = i->loop_headless(10); // 10s timeout
-    if (r.length() == 0) return false;
+    serialDevice->println("Waiting for signal (" + String(timeout) + "s)...");
+    String r = i->loop_headless(timeout);
+    if (r.length() == 0) {
+        delete i;
+        return false;
+    }
 
     serialDevice->println(r);
     delete i;
@@ -192,6 +209,7 @@ uint32_t irSendCallback(cmd *c) {
 void createIrRxCommand(Command *irCmd) {
     Command cmd = irCmd->addCommand("rx", irRxCallback);
     cmd.addFlagArg("raw");
+    cmd.addPosArg("timeout", "10");
 }
 
 void createIrTxCommand(Command *irCmd) {

@@ -67,8 +67,24 @@ uint32_t readCallback(cmd *c) {
     FS *fs;
     if (!getFsStorage(fs) || !(*fs).exists(filepath)) return false;
 
-    serialDevice->println(readSmallFile(*fs, filepath));
-    return true;
+    // Stream the file in 512 B chunks. This used to be readSmallFile(), which
+    // refuses anything over SAFE_STACK_BUFFER_SIZE (so `cat`/`storage read` of
+    // a 74 KB script answered "File is too big") and held a heap String the
+    // size of the file. Chunked output has flat cost and works at any size.
+    File f = (*fs).open(filepath, FILE_READ);
+    if (!f || f.isDirectory()) return false;
+
+    uint8_t buf[512];
+    size_t total = 0;
+    while (f.available()) {
+        size_t got = f.read(buf, sizeof(buf));
+        if (got == 0) break;
+        serialDevice->write(buf, got);
+        total += got;
+    }
+    f.close();
+    serialDevice->println();
+    return total > 0;
 }
 
 uint32_t md5Callback(cmd *c) {

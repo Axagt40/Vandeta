@@ -413,7 +413,14 @@ int8_t displayMessage(
     return selected;
 }
 
+// Set by the serial command task around SimpleCLI's parse(), so a banner raised
+// by a console command returns instead of waiting for a key press.
+static volatile bool console_ctx = false;
+void setConsoleContext(bool on) { console_ctx = on; }
+bool consoleContext() { return console_ctx; }
+
 void displayError(const String &txt, bool waitKeyPress) {
+    if (console_ctx) waitKeyPress = false;
     displayRedStripe(txt);
     Serial.println("ERR: " + txt);
 #ifndef HAS_SCREEN
@@ -424,6 +431,7 @@ void displayError(const String &txt, bool waitKeyPress) {
 }
 
 void displayWarning(const String &txt, bool waitKeyPress) {
+    if (console_ctx) waitKeyPress = false;
     displayRedStripe(txt, TFT_BLACK, TFT_YELLOW);
     Serial.println("WARN: " + txt);
 #ifndef HAS_SCREEN
@@ -434,6 +442,7 @@ void displayWarning(const String &txt, bool waitKeyPress) {
 }
 
 void displayInfo(const String &txt, bool waitKeyPress) {
+    if (console_ctx) waitKeyPress = false;
     displayRedStripe(txt, TFT_WHITE, TFT_BLUE);
     Serial.println("INFO: " + txt);
 #ifndef HAS_SCREEN
@@ -445,6 +454,7 @@ void displayInfo(const String &txt, bool waitKeyPress) {
 }
 
 void displaySuccess(const String &txt, bool waitKeyPress) {
+    if (console_ctx) waitKeyPress = false;
     displayRedStripe(txt, TFT_WHITE, TFT_DARKGREEN);
     Serial.println("SUCCESS: " + txt);
 #ifndef HAS_SCREEN
@@ -455,6 +465,7 @@ void displaySuccess(const String &txt, bool waitKeyPress) {
 }
 
 void displayTextLine(const String &txt, bool waitKeyPress) {
+    if (console_ctx) waitKeyPress = false;
     displayRedStripe(txt, getComplementaryColor2(bruceConfig.priColor), bruceConfig.priColor);
     Serial.println("MESSAGE: " + txt);
 #ifndef HAS_SCREEN

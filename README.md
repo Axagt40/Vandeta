@@ -6,9 +6,9 @@
 
 Vandeta is a **reskin of [Bruce](https://github.com/BruceDevices/firmware)** — the
 open-source ESP32 offensive-security firmware — built on **Bruce 1.16.1** and
-tuned for one board: the **LilyGo T-Embed CC1101**. It boots with the Vandeta
-crown and calls itself Vandeta in the menus, the web UI and on the console. The
-code underneath is Bruce's code: same architecture, same menus, same tools, same
+tuned for one board: the **LilyGo T-Embed CC1101**. It ships with its own boot
+screen and Vandeta branding in the web UI and on the console. The code
+underneath is Bruce's code: same architecture, same menus, same tools, same
 licence. Upstream credit and the AGPL-3.0 `LICENSE` are untouched, and the whole
 upstream feature list applies here too (it is reproduced further down).
 
@@ -100,8 +100,8 @@ esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 921600 \
 * Clean install (wipes saved settings): `esptool.py ... erase_flash` first.
 * Flashing this image does **not** touch the SD card.
 
-On first boot the splash shows **Vandeta**, then **vandeta 1.0**, then the crown
-drawn in your UI colour (Settings → Display & UI → UI Colour).
+The boot screen is drawn in your UI colour (Settings → Display & UI → UI Colour),
+so it matches the rest of the theme.
 
 ---
 

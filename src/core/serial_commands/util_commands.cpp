@@ -56,6 +56,8 @@ uint32_t dateCallback(cmd *c) {
 
 uint32_t i2cCallback(cmd *c) {
     // scan for connected i2c modules
+    // `i2c scan` is the documented form; the command used to take no arguments
+    // at all, so the help text and the parser disagreed.
     // derived from https://learn.adafruit.com/scanning-i2c-addresses/arduino
     TwoWire *Wire = acquireI2CBus();
     byte error, address;
@@ -69,9 +71,11 @@ uint32_t i2cCallback(cmd *c) {
         Wire->beginTransmission(address);
         error = Wire->endTransmission();
         if (error == 0) {
+            // println, not print: with two devices on the bus the old code
+            // glued the lines together ("...0x55I2C device found at 0x6B").
             serialDevice->print("I2C device found at address 0x");
             if (address < 16) serialDevice->print("0");
-            serialDevice->print(address, HEX);
+            serialDevice->println(address, HEX);
             nDevices++;
         } else if (error == 4) {
             serialDevice->print("Unknown error at address 0x");
@@ -517,7 +521,8 @@ uint32_t loaderCallback(cmd *c) {
 void createUtilCommands(SimpleCLI *cli) {
     cli->addCommand("uptime", uptimeCallback);
     cli->addCommand("date", dateCallback);
-    cli->addCommand("i2c", i2cCallback);
+    Command i2cCmd = cli->addCommand("i2c", i2cCallback);
+    i2cCmd.addPosArg("op", "scan");
     cli->addCommand("free", freeCallback);
     cli->addCommand("info,!,device_info", infoCallback);
     Command help = cli->addCommand("help,?,halp", helpCallback);

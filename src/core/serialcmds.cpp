@@ -1,4 +1,5 @@
 #include "serialcmds.h"
+#include "core/display.h" // setConsoleContext()
 #include "core/usb_debug/usbdebug.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -39,7 +40,9 @@ void handleSerialCommands(SerialCli &serialCli) {
     CmdPacket packet;
     if (cmdQueue && rspQueue) {
         if (xQueueReceive(cmdQueue, &packet, 0) == pdTRUE) {
+            setConsoleContext(true);
             bool result = serialCli.parse(String(packet.text));
+            setConsoleContext(false);
             xQueueSend(rspQueue, &result, 0);
             Serial.println("COMMAND: " + String(packet.text));
             Serial.printf("[CLI] Result: %s\n", result ? "TRUE" : "FALSE");
@@ -66,7 +69,9 @@ void handleSerialCommands(SerialCli &serialCli) {
     }
 
     Serial.println("COMMAND: " + cmd_str);
+    setConsoleContext(true);
     serialCli.parse(cmd_str);
+    setConsoleContext(false);
     serialDevice->print("# "); // prompt
 
     // forced menu redrawn if the command is not "nav" or "option"

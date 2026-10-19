@@ -253,7 +253,9 @@ bool initRfModule(String mode, float frequency) {
         }
         ELECHOUSE_cc1101.Init();
         if (ELECHOUSE_cc1101.getCC1101()) { // Check the CC1101 Spi connection.
+#if RF_DEBUG
             Serial.println("cc1101 Connection OK");
+#endif
         } else {
             displayError("CC1101 not found");
             Serial.println("cc1101 Connection Error");
@@ -295,7 +297,9 @@ bool initRfModule(String mode, float frequency) {
         ELECHOUSE_cc1101.setPktFormat(3);
         setMHZ(frequency);
         cc1101_mode_hint = 0;
+#if RF_DEBUG
         Serial.println("cc1101 setMHZ(frequency);");
+#endif
         if (fixedFreq) {
             cc1101_mode_hint = (mode == "tx") ? 1 : ((mode == "rx") ? 2 : 0);
             cc1101ApplyFixedFreqOokPreset(cc1101_mode_hint == 1);
@@ -307,15 +311,21 @@ bool initRfModule(String mode, float frequency) {
             ioExpander.turnPinOnOff(IO_EXP_CC_TX, HIGH);
             pinMode(bruceConfigPins.CC1101_bus.io0, OUTPUT);
             ELECHOUSE_cc1101.setPA(12); // set TxPower. The following settings are possible depending
+#if RF_DEBUG
             Serial.println("cc1101 setPA();");
+#endif
             ELECHOUSE_cc1101.SetTx();
+#if RF_DEBUG
             Serial.println("cc1101 SetTx();");
+#endif
         } else if (mode == "rx") {
             ioExpander.turnPinOnOff(IO_EXP_CC_RX, HIGH);
             ioExpander.turnPinOnOff(IO_EXP_CC_TX, LOW);
             pinMode(bruceConfigPins.CC1101_bus.io0, INPUT);
             ELECHOUSE_cc1101.SetRx();
+#if RF_DEBUG
             Serial.println("cc1101 SetRx();");
+#endif
         }
         // else if mode is unspecified wont start TX/RX mode here -> done by the caller
         cc1101_spi_ready = true;
