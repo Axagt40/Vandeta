@@ -1,4 +1,5 @@
 #include "config.h"
+#include "core/usb_debug/usbdebug.h" // applyEnabled/releaseResources on toggle
 #include "mifare_keys_manager.h"
 #include "sd_functions.h"
 #include <algorithm>
@@ -875,6 +876,11 @@ void BruceConfig::setUsbDebug(int value) {
     usbDebug = value;
     validateUsbDebugValue();
     saveFile();
+    // Apply the switch immediately: enabling resizes the USB-CDC RX queue (the
+    // framed protocol needs a whole frame to fit), disabling releases every
+    // resource the mode allocated, so the device does not carry debug overhead
+    // until the next reboot.
+    UsbDebug::applyEnabled(usbDebug != 0);
 }
 
 void BruceConfig::validateUsbDebugValue() {

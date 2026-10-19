@@ -23,8 +23,34 @@ static uint16_t nrfEndFreqMhz = 2525;
 static bool nrfPromiscuous = false;
 static bool nrfNormalMode = true;
 
-// Pseudo-promiscuous pipe address: the shortest the chip supports (3 bytes).
-static const uint8_t NRF_PROMISC_ADDR[3] = {0xE7, 0xE7, 0xE7};
+// The six degenerate "noise" addresses the Spectrum view uses. With address
+// width 2 and CRC off they make the address correlator accept bursts addressed
+// to somebody else, which is the only way an unknown 2.4 GHz remote can be read.
+static const uint8_t NRF_NOISE_ADDR[6][2] = {
+    {0x55, 0x55},
+    {0xAA, 0xAA},
+    {0xA0, 0xAA},
+    {0xAB, 0xAA},
+    {0xAC, 0xAA},
+    {0xAD, 0xAA}
+};
+
+// Known 2.4 GHz RGB / LED-controller profiles (see nrf_capture.h). The nRF24
+// address bytes are the protocol syncword, precomputed for openReadingPipe().
+const NrfSignalProfile NRF_SIGNAL_PROFILES[NRF_PROFILE_COUNT] = {
+    {"RGBW (MiLight)",    {9, 40, 71}, {0x4A, 0x1A, 0x8D, 0xE2, 0x55}, 7, "FUT096 / old RGBW"},
+    {"CCT (MiLight)",     {4, 39, 74}, {0xAA, 0x5A, 0x05, 0x0A, 0x55}, 7, "FUT007 / CCT"},
+    {"RGB+CCT (MiLight)", {8, 39, 70}, {0x8A, 0x01, 0xE9, 0xC4, 0x56}, 9, "FUT092/089, "
+                                                                     "new RGB+CCT"},
+    {"RGB (MiLight)",     {3, 38, 73}, {0xD5, 0x33, 0x9B, 0x55, 0xAD}, 6, "FUT098 / RGB"},
+    {"FUT020",            {6, 41, 76}, {0x55, 0xA5, 0xAA, 0x50, 0x50}, 6, "FUT020"},
+};
+
+static int nrfCurrProfile = NRF_PROFILE_GENERIC;
+// Expected receive payload length: 0 = dynamic (noise mode), >0 = fixed
+// (profile mode). Kept next to the profile so nrfReadOne() does not have to
+// guess from the radio state.
+static uint8_t nrfRxPayloadLen = 0;
 
 static NrfCapturedPacket nrfBuf[NRF_CAP_MAX_PACKETS];
 static int nrfBufCount = 0;
@@ -95,6 +121,7 @@ void nrfCaptureRestoreNormal() {
 
 uint8_t nrfCaptureGetChannel() { return nrfCurrChannel; }
 uint8_t nrfCaptureGetDataRate() { return nrfCurrRate; }
+uint8_t nrfCaptureGetRate() { return nrfCurrRate; }
 
 void nrfCaptureSetChannel(uint8_t channel) {
     if (channel > 125) channel = 125;
@@ -141,25 +168,63 @@ uint16_t nrfCaptureStartFreq() { return nrfStartFreqMhz; }
 uint16_t nrfCaptureEndFreq() { return nrfEndFreqMhz; }
 
 bool nrfCaptureIsPromiscuous() { return nrfPromiscuous; }
+int nrfCaptureGetProfile() { return nrfCurrProfile; }
+
+/// The receive configuration that actually sees an unknown remote: CRC off,
+/// auto-ack off, address width 2 and all six pipes loaded with noise addresses.
+/// This mirrors the RF24 scanner/Spectrum path that shows the remote's spikes.
+static void nrfApplyNoiseConfig() {
+    NRFradio.stopListening();
+    NRFradio.setAutoAck(false);
+    NRFradio.disableCRC();
+    NRFradio.setAddressWidth(2);
+    NRFradio.setDataRate(nrfRateEnum(nrfCurrRate));
+    NRFradio.enableDynamicPayloads();
+    for (uint8_t i = 0; i < 6; i++) NRFradio.openReadingPipe(i, NRF_NOISE_ADDR[i]);
+    NRFradio.setChannel(nrfCurrChannel);
+    NRFradio.flush_rx();
+    NRFradio.startListening();
+    nrfRxPayloadLen = 0;
+    nrfCurrProfile = NRF_PROFILE_GENERIC;
+    nrfPromiscuous = true;
+    nrfNormalMode = false;
+}
 
 bool nrfCaptureSetPromiscuous(bool enable) {
     if (!nrfCapReady) return false;
-    if (enable) {
-        // Pseudo-promiscuous receive: CRC off, minimum address width.
-        NRFradio.stopListening();
-        NRFradio.setAutoAck(false);
-        NRFradio.disableCRC();
-        NRFradio.setAddressWidth(3);
-        NRFradio.setDataRate(nrfRateEnum(nrfCurrRate));
-        NRFradio.enableDynamicPayloads();
-        NRFradio.openReadingPipe(1, NRF_PROMISC_ADDR);
-        NRFradio.flush_rx();
-        NRFradio.startListening();
-        nrfPromiscuous = true;
-        nrfNormalMode = false;
-    } else {
-        nrfCaptureRestoreNormal();
+    if (enable) nrfApplyNoiseConfig();
+    else nrfCaptureRestoreNormal();
+    return true;
+}
+
+bool nrfCaptureApplyProfile(int profileIndex, uint8_t rate) {
+    if (!nrfCapReady) return false;
+    if (profileIndex < 0 || profileIndex >= NRF_PROFILE_COUNT) {
+        nrfApplyNoiseConfig();
+        return true;
     }
+    const NrfSignalProfile &p = NRF_SIGNAL_PROFILES[profileIndex];
+    if (rate > NRF_RATE_250KBPS) rate = NRF_RATE_1MBPS;
+    nrfCurrRate = rate;
+
+    // A known remote uses a real address, so CRC stays off (the protocol has its
+    // own trailer/checksum) but the address filter is set to the syncword.
+    NRFradio.stopListening();
+    NRFradio.setAutoAck(false);
+    NRFradio.disableCRC();
+    NRFradio.setDataRate(nrfRateEnum(rate));
+    NRFradio.setAddressWidth(5);
+    NRFradio.disableDynamicPayloads();
+    NRFradio.setPayloadSize(p.payloadLen);
+    NRFradio.openReadingPipe(1, p.address);
+    NRFradio.setChannel(p.channels[0]);
+    NRFradio.flush_rx();
+    NRFradio.startListening();
+
+    nrfRxPayloadLen = p.payloadLen;
+    nrfCurrProfile = profileIndex;
+    nrfPromiscuous = true;
+    nrfNormalMode = false;
     return true;
 }
 
@@ -188,7 +253,22 @@ bool nrfCapturePacket(int index, NrfCapturedPacket *out) {
     return true;
 }
 
+static bool nrfLooksLikeNoise(const uint8_t *data, uint8_t len) {
+    // The pseudo-promiscuous receiver hands over a lot of energy from other
+    // 2.4 GHz sources (WiFi) as if it were a packet. A run of one repeated byte
+    // is never a real remote frame; drop it so the small buffer is not filled
+    // with noise before the remote's packet arrives.
+    if (len < 4) return false;
+    for (int i = 1; i < len; i++)
+        if (data[i] != data[0]) return false;
+    return true;
+}
+
 static void nrfStorePacket(const uint8_t *data, uint8_t len, uint8_t channel) {
+    if (nrfLooksLikeNoise(data, len)) {
+        nrfBufDropped++;
+        return;
+    }
     if (nrfBufCount >= NRF_CAP_MAX_PACKETS) {
         nrfBufDropped++;
         return;
@@ -203,12 +283,13 @@ static void nrfStorePacket(const uint8_t *data, uint8_t len, uint8_t channel) {
 }
 
 static uint8_t nrfReadOne(uint8_t *buf) {
-    uint8_t len = 0;
     if (!NRFradio.available()) return 0;
-    if (!nrfNormalMode) {
+    // Profile mode knows the payload length; noise mode has dynamic payloads on.
+    uint8_t len = nrfRxPayloadLen;
+    if (len == 0) {
         len = NRFradio.getDynamicPayloadSize();
         if (len == 0 || len > NRF_CAP_MAX_PAYLOAD) len = NRF_CAP_MAX_PAYLOAD;
-    } else {
+    } else if (len > NRF_CAP_MAX_PAYLOAD) {
         len = NRF_CAP_MAX_PAYLOAD;
     }
     memset(buf, 0, NRF_CAP_MAX_PAYLOAD);
@@ -224,10 +305,16 @@ static int nrfCaptureLoop(
     if (!nrfCapReady) return 0;
     if (durationMs == 0) durationMs = 1000;
     if (durationMs > 300000) durationMs = 300000;
-    if (hopIntervalMs < 5) hopIntervalMs = 5;
+    // 1 ms minimum: a 3-channel remote is captured by visiting each channel
+    // every few ms, so the old 5 ms floor (15 ms per round trip) could miss the
+    // whole burst. The loop still samples at 1 ms granularity.
+    if (hopIntervalMs < 1) hopIntervalMs = 1;
 
-    // Capture always needs the promiscuous receive configuration.
-    nrfCaptureSetPromiscuous(true);
+    // Capture needs a receive configuration, but it must not clobber a profile
+    // the caller just applied (nrfApplyNoiseConfig would reset it to the noise
+    // addresses). Only fall back to the noise configuration when the radio is in
+    // its normal pipe mode.
+    if (nrfNormalMode) nrfCaptureSetPromiscuous(true);
     NRFradio.flush_rx();
 
     // The sweep must not move the user's configured channel: a capture that
@@ -291,6 +378,18 @@ int nrfCaptureRun(uint32_t durationMs, bool forceHop, uint32_t hopIntervalMs, co
     return nrfCaptureLoop(durationMs, nullptr, 0, hopIntervalMs, hop, progress);
 }
 
+int nrfCaptureRunChannels(
+    const uint8_t *channels, int channelCount, uint32_t durationMs, uint32_t dwellMs,
+    const NrfCaptureProgressFn &progress
+) {
+    if (!nrfCapReady || channels == nullptr || channelCount <= 0) return 0;
+    nrfCaptureClear();
+    // Rotate only through the caller's channels: a 3-channel remote sends its
+    // whole command in a few ms, so a 0-125 sweep never spends enough time on
+    // any one of them to see it.
+    return nrfCaptureLoop(durationMs, channels, channelCount, dwellMs, true, progress);
+}
+
 int nrfCaptureChannelSummary(uint8_t *channelsOut, uint8_t *countsOut, int maxOut) {
     int n = 0;
     for (int i = 0; i < nrfBufCount && n < maxOut; i++) {
@@ -349,26 +448,37 @@ bool nrfReplayRaw(const uint8_t *data, uint8_t len, uint8_t channel, uint8_t rep
     if (repeat == 0) repeat = 1;
     if (repeat > 64) repeat = 64;
 
-    // Transmit with the same framing the capture used: CRC off keeps the 32-byte
-    // payload clocked out even when it does not look like a valid nRF24 frame,
-    // which is what an RF remote's decoder sees.
+    // Transmit with the same framing the capture used. With a profile applied we
+    // send that profile's address and payload length; otherwise we send the raw
+    // 32-byte burst with a noise address, exactly as before.
     NRFradio.stopListening();
     NRFradio.setAutoAck(false);
     NRFradio.disableCRC();
-    NRFradio.setPayloadSize(NRF_CAP_MAX_PAYLOAD);
     NRFradio.setDataRate(nrfRateEnum(rate));
     NRFradio.setPALevel(nrfPowerEnum(nrfCurrPower));
     NRFradio.setChannel(channel);
-    NRFradio.openWritingPipe(NRF_PROMISC_ADDR);
+
+    uint8_t txLen = NRF_CAP_MAX_PAYLOAD;
+    if (nrfCurrProfile >= 0) {
+        const NrfSignalProfile &p = NRF_SIGNAL_PROFILES[nrfCurrProfile];
+        NRFradio.setAddressWidth(5);
+        NRFradio.setPayloadSize(p.payloadLen);
+        NRFradio.openWritingPipe(p.address);
+        txLen = p.payloadLen;
+    } else {
+        NRFradio.setAddressWidth(2);
+        NRFradio.setPayloadSize(NRF_CAP_MAX_PAYLOAD);
+        NRFradio.openWritingPipe(NRF_NOISE_ADDR[0]);
+    }
     NRFradio.flush_tx();
 
     uint8_t buf[NRF_CAP_MAX_PAYLOAD];
     memset(buf, 0, sizeof(buf));
-    memcpy(buf, data, len);
+    memcpy(buf, data, len > txLen ? txLen : len);
 
     bool any = false;
     for (uint8_t i = 0; i < repeat; i++) {
-        if (NRFradio.writeFast(buf, NRF_CAP_MAX_PAYLOAD)) any = true;
+        if (NRFradio.writeFast(buf, txLen)) any = true;
         vTaskDelay(1);
     }
     NRFradio.txStandBy();
@@ -439,6 +549,31 @@ int nrfScanChannelActivity(
         }
     }
     nrfCaptureSetChannel(entryChannel);
+    return written;
+}
+
+int nrfFindStrongestChannels(
+    uint8_t *out, int maxOut, uint32_t dwellMs, const NrfCaptureProgressFn &progress
+) {
+    if (out == nullptr || maxOut <= 0) return 0;
+    if (dwellMs < 1) dwellMs = 1;
+    static NrfChannelActivity act[126];
+    int n = nrfScanChannelActivity(0, 125, dwellMs, act, 126, progress);
+    int written = 0;
+    for (int k = 0; k < maxOut; k++) {
+        int best = -1;
+        for (int i = 0; i < n; i++) {
+            if (act[i].level == 0) continue;
+            bool used = false;
+            for (int j = 0; j < written; j++)
+                if (out[j] == act[i].channel) used = true;
+            if (used) continue;
+            if (best < 0 || act[i].level > act[best].level) best = i;
+        }
+        if (best < 0) break;
+        out[written++] = act[best].channel;
+        act[best].level = 0;
+    }
     return written;
 }
 
@@ -901,6 +1036,80 @@ static void nrfMenuAnalyze() {
     nrfShowLines("Analyze", lines, 5);
 }
 
+static void nrfCycleProfile() {
+    if (!nrfCaptureReady()) return;
+    int next = nrfCaptureGetProfile() + 1;
+    if (next >= NRF_PROFILE_COUNT) next = NRF_PROFILE_GENERIC;
+    if (next >= 0) nrfCaptureApplyProfile(next, nrfCaptureGetRate());
+    else nrfCaptureSetPromiscuous(true);
+}
+
+static void nrfMenuSetChannel() {
+    if (!nrfCaptureReady()) return;
+    String s = num_keyboard(String(nrfCaptureGetChannel()), 3, "Channel 0-125:");
+    if (s.length() == 0 || s == "\x1B") return;
+    nrfCaptureSetChannel((uint8_t)s.toInt());
+}
+
+/// Capture an unknown 3-channel 2.4 GHz remote. A remote of this kind always
+/// sends the same command on three fixed channels (the three spikes in the
+/// Spectrum). With a preset selected we already know them; otherwise we find the
+/// three strongest channels first. Either way the capture then rotates over just
+/// those channels, so a command that lasts a few ms is actually seen.
+static void nrfMenuRgbCapture() {
+    if (!nrfCaptureReady()) {
+        displayError("NRF24 not found", true);
+        return;
+    }
+    int prof = nrfCaptureGetProfile();
+    uint8_t rate = nrfCaptureGetRate();
+
+    uint8_t chans[3];
+    int nc = 0;
+
+    if (prof >= 0) {
+        const NrfSignalProfile &p = NRF_SIGNAL_PROFILES[prof];
+        for (int i = 0; i < 3; i++) chans[nc++] = p.channels[i];
+    } else {
+        NrfRunScreen scan;
+        scan.begin("RGB Capture", "1/2 Press the remote now");
+        uint8_t found[3];
+        int nf = nrfFindStrongestChannels(found, 3, 12, [&scan](const NrfCaptureProgress &p) {
+            return scan.update(p);
+        });
+        for (int i = 0; i < nf; i++) chans[nc++] = found[i];
+        if (nc == 0) {
+            chans[0] = nrfCaptureGetChannel();
+            nc = 1;
+        }
+        // The scan switched to the noise configuration; put a profile back.
+        if (prof >= 0) nrfCaptureApplyProfile(prof, rate);
+    }
+
+    NrfRunScreen cap;
+    String sub = "2/2";
+    for (int i = 0; i < nc; i++) sub += String(" ") + String(2400 + chans[i]);
+    cap.begin("RGB Capture", sub);
+    nrfCaptureRunChannels(chans, nc, 6000, 2, [&cap](const NrfCaptureProgress &p) {
+        return cap.update(p);
+    });
+
+    String lines[5];
+    int w = 0;
+    lines[w++] =
+        String("Packets: ") + String(nrfCaptureCount()) + " / dropped " + String(nrfCaptureDropped());
+    for (int i = 0; i < nc && w < 4; i++) {
+        int c = 0;
+        for (int k = 0; k < nrfCaptureCount(); k++) {
+            NrfCapturedPacket p;
+            if (nrfCapturePacket(k, &p) && p.channel == chans[i]) c++;
+        }
+        lines[w++] = String(2400 + chans[i]) + "MHz x" + String(c);
+    }
+    if (nrfCaptureCount() == 0) lines[w++] = "Nothing - try a preset";
+    cap.finish(lines, w);
+}
+
 void nrfRawCaptureMenu() {
     nrfEnsureInit();
 AGAIN:
@@ -909,6 +1118,13 @@ AGAIN:
          []() { nrfMenuCapture(3000, false); }                                                   },
         {"Capture hop 0-125",
          []() { nrfMenuCapture(3000, true); }                                                    },
+        {"RGB remote capture",
+         []() { nrfMenuRgbCapture(); }                                                           },
+        {String("RGB preset: ") +
+             (nrfCaptureGetProfile() >= 0 ? String(NRF_SIGNAL_PROFILES[nrfCaptureGetProfile()].name)
+                                          : String("Generic")),
+         []() { nrfCycleProfile(); }                                                             },
+        {"Set capture ch", []() { nrfMenuSetChannel(); }                                        },
         {"Channel scan",
          []() {
              if (!nrfCaptureReady()) {

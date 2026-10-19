@@ -15,8 +15,8 @@ include/webFiles.h
 include/current_year.h
 checksum.sha256
 /*.bin
-# the modded release image is a deliverable, so track it explicitly
-!/Bruce-modded.bin
+# the release image is a deliverable, so track it explicitly
+!/vandeta.bin
 .vscode/extensions.json
 mqjs_build
 docker-logs

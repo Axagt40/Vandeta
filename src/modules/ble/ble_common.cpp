@@ -118,15 +118,21 @@ void stopBLEStack() {
         pBLEScan = nullptr;
     }
 
-    if (is_ble_inited) {
+    // Deinit whenever the stack is really up, NOT only when this file's
+    // `is_ble_inited` flag happens to be set. BLE capture (ble_capture.cpp), the
+    // iBeacon and the JS bindings all bring NimBLE up through bleInit() WITHOUT
+    // setting that flag, so the old test skipped the teardown entirely and left
+    // the controller holding ~56 KB of internal DRAM. That is why Wi-Fi (and so
+    // NetCut) could not start after one of those features even though
+    // ensureMemForWifi() had just called stopBLEStack() to "release BLE".
+    if (NimBLEDevice::isInitialized()) {
 #if !defined(LITE_VERSION)
         if (BLEStateManager::isBLEActive() || BLEStateManager::getActiveClientCount() > 0) {
             BLEStateManager::deinitBLE(true);
         } else
 #endif
-            if (BLEDevice::getScan() != nullptr || BLEDevice::getAdvertising() != nullptr ||
-                BLEDevice::getServer() != nullptr || BLEConnected) {
-            BLEDevice::deinit();
+        {
+            NimBLEDevice::deinit(true);
         }
     }
 
@@ -165,8 +171,11 @@ bool ble_scan_setup() {
 
     RAM_LOG("ble-scan pre-init");
 
-    // FIX: Always try to init - if already init'd, it's a no-op
-    if (!radioHasMemForBle()) {
+    // FIX: Always try to init - if already init'd, it's a no-op.
+    // The memory guard therefore only makes sense for a REAL bring-up: with the
+    // stack already up, its own buffers are what the guard would be measuring,
+    // so it would refuse a scan that needs no memory at all.
+    if (!NimBLEDevice::isInitialized() && !radioHasMemForBle()) {
         displayError("Low RAM: free WiFi/SD first", true);
         returnToMenu = true;
         return false;

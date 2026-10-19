@@ -562,4 +562,94 @@ JSValue native_nrf24DetectMultiFreqSignals(JSContext *ctx, JSValue *this_val, in
     return obj;
 }
 
+JSValue native_nrf24CaptureChannels(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    // usage: nrf24.captureChannels([8,39,70], durationMs?, dwellMs?)
+    //
+    // The remote-side way to capture a 2.4 GHz RGB remote: it transmits on a
+    // fixed set of (usually three) channels, so listening on ONLY those, fast,
+    // hears the command while a full 0-125 sweep does not. The channel list may
+    // be an array or a comma-separated string.
+    if (argc < 1) return JS_NewArray(ctx, 0);
+    if (!nrfJsEnsureReady(nrfCaptureGetChannel())) return JS_NewArray(ctx, 0);
+
+    uint8_t chans[8];
+    int nc = 0;
+    if (JS_IsString(ctx, argv[0])) {
+        String s = js_tocstring_copy(ctx, argv[0]);
+        const char *p = s.c_str();
+        while (*p && nc < 8) {
+            while (*p == ',' || *p == ' ' || *p == ';') p++;
+            if (!*p) break;
+            int v = atoi(p);
+            if (v < 0) v = 0;
+            if (v > 125) v = 125;
+            chans[nc++] = (uint8_t)v;
+            while (*p && *p != ',' && *p != ' ' && *p != ';') p++;
+        }
+    } else if (JS_IsObject(ctx, argv[0])) {
+        int n = 0;
+        if (JS_ToInt32(ctx, &n, JS_GetPropertyStr(ctx, argv[0], "length")) != 0 || n <= 0)
+            return JS_NewArray(ctx, 0);
+        for (int i = 0; i < n && nc < 8; i++) {
+            int v = 0;
+            if (JS_ToInt32(ctx, &v, JS_GetPropertyUint32(ctx, argv[0], i)) != 0) continue;
+            if (v < 0) v = 0;
+            if (v > 125) v = 125;
+            chans[nc++] = (uint8_t)v;
+        }
+    }
+    if (nc == 0) return JS_NewArray(ctx, 0);
+
+    int ms = 4000;
+    if (argc > 1 && JS_IsNumber(ctx, argv[1])) JS_ToInt32(ctx, &ms, argv[1]);
+    if (ms < 200) ms = 200;
+    if (ms > 120000) ms = 120000;
+    int dwell = 2;
+    if (argc > 2 && JS_IsNumber(ctx, argv[2])) JS_ToInt32(ctx, &dwell, argv[2]);
+    if (dwell < 1) dwell = 1;
+    if (dwell > 50) dwell = 50;
+
+    nrfCaptureRunChannels(chans, nc, (uint32_t)ms, (uint32_t)dwell);
+
+    static NrfCapturedPacket pkts[NRF_CAP_MAX_PACKETS];
+    int got = 0;
+    for (int i = 0; i < nrfCaptureCount() && got < NRF_CAP_MAX_PACKETS; i++) {
+        if (nrfCapturePacket(i, &pkts[got])) got++;
+    }
+    return nrfJsBuildCaptureArray(ctx, pkts, got);
+}
+
+JSValue native_nrf24SetProfile(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    // usage: nrf24.setProfile(indexOrName)  -1 = generic noise-address RX
+    if (!nrfJsEnsureReady(nrfCaptureGetChannel())) return JS_NewBool(false);
+    int idx = NRF_PROFILE_GENERIC;
+    if (argc > 0 && JS_IsString(ctx, argv[0])) {
+        String s = js_tocstring_copy(ctx, argv[0]);
+        s.toLowerCase();
+        for (int i = 0; i < NRF_PROFILE_COUNT; i++) {
+            String name = String(NRF_SIGNAL_PROFILES[i].name);
+            name.toLowerCase();
+            if (name.indexOf(s) >= 0) {
+                idx = i;
+                break;
+            }
+        }
+    } else if (argc > 0 && JS_IsNumber(ctx, argv[0])) {
+        JS_ToInt32(ctx, &idx, argv[0]);
+        if (idx >= NRF_PROFILE_COUNT) idx = NRF_PROFILE_GENERIC;
+    }
+    return JS_NewBool(nrfCaptureApplyProfile(idx, nrfCaptureGetRate()));
+}
+
+JSValue native_nrf24GetProfile(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    // usage: nrf24.getProfile() -> {index, name}
+    int idx = nrfCaptureGetProfile();
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "index", JS_NewInt32(ctx, idx));
+    JS_SetPropertyStr(
+        ctx, obj, "name", JS_NewString(ctx, idx >= 0 ? NRF_SIGNAL_PROFILES[idx].name : "Generic")
+    );
+    return obj;
+}
+
 #endif

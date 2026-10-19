@@ -26,6 +26,15 @@ bool devMode();
 // begin() is called once from setup(), after the config is loaded. It
 // installs the log hook and prints the boot banner when the mode is on.
 void begin();
+// applyEnabled() is called when the persisted setting is changed at runtime.
+// Turning it ON resizes the USB-CDC RX queue so the framed protocol can fit a
+// whole frame; turning it OFF calls releaseResources().
+void applyEnabled(bool on);
+// releaseResources() gives back everything the mode allocated or switched on
+// (error stream, batch queue, hot-reload watches, UI watcher, binary protocol
+// and the enlarged USB-CDC RX queue), so a device with Developer Options OFF is
+// as light as a stock build.
+void releaseResources();
 // loop() is pumped from the serial command task. It drains the batch queue
 // and polls the hot-reload watches. Safe to call when the mode is off.
 void loop();

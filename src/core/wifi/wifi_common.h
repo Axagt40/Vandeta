@@ -55,6 +55,17 @@ esp_err_t wifiRawTx(wifi_interface_t ifx, const void *frame, int len, uint8_t re
 void wifiConnectTask(void *pvParameters);
 
 /**
+ * @brief Makes room for Wi-Fi before a bring-up.
+ *
+ * Returns true when a contiguous DMA block is available. When it is not, this
+ * releases the things that normally hold it (the BLE host, the built-in Web UI
+ * and any stale promiscuous capture) and retries before giving up. Callers that
+ * would otherwise crash inside esp_wifi_init should refuse cleanly when this
+ * returns false.
+ */
+bool wifiEnsureRadioMem();
+
+/**
  * @brief Ensures esp_netif and the default event loop are initialized (idempotent)
  */
 void ensureWifiPlatform();

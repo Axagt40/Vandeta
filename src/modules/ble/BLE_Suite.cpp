@@ -288,20 +288,30 @@ const FastPairModelInfo fastpair_models[] = {
 //=============================================================================
 
 bool BLEStateManager::initBLE(const String &name, int powerLevel) {
-    if (FORCE_RADIO_TEARDOWN_ON_SWITCH) {
-        if (WiFi.getMode() != WIFI_MODE_NULL || wifiConnected) {
-            if (wifiConnected) {
-                displayWarning("Board with no PSRAM, closing WiFi Stack");
-                vTaskDelay(700 / portTICK_PERIOD_MS);
+    // The memory guard must only run when a REAL bring-up is about to happen.
+    // When the stack is already initialized every later initBLE() is a no-op,
+    // and running the guard first made those no-ops fail with "Low RAM": the
+    // stack's own controller/HCI buffers had already consumed the free internal
+    // DRAM the guard was asking for. That is what made BLE Suite (which calls
+    // initBLE once at entry and again per attack) fail immediately after the
+    // first successful init, and what made a second BLE Scan fail in the same
+    // boot. Freeing WiFi/SD cannot help here - the memory is inside BLE itself.
+    if (!NimBLEDevice::isInitialized()) {
+        if (FORCE_RADIO_TEARDOWN_ON_SWITCH) {
+            if (WiFi.getMode() != WIFI_MODE_NULL || wifiConnected) {
+                if (wifiConnected) {
+                    displayWarning("Board with no PSRAM, closing WiFi Stack");
+                    vTaskDelay(700 / portTICK_PERIOD_MS);
+                }
+                wifiDisconnect();
+                vTaskDelay(300 / portTICK_PERIOD_MS);
             }
-            wifiDisconnect();
-            vTaskDelay(300 / portTICK_PERIOD_MS);
         }
-    }
 
-    if (!radioHasMemForBle()) {
-        displayError("Low RAM: free WiFi/SD first", true);
-        return false;
+        if (!radioHasMemForBle()) {
+            displayError("Low RAM: free WiFi/SD first", true);
+            return false;
+        }
     }
 
     // bleInit() reports whether the stack really came up and releases the

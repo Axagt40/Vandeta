@@ -1,5 +1,6 @@
 #include "BleMenu.h"
 #include "core/display.h"
+#include "core/packet_view.h"
 #include "core/utils.h"
 #include "modules/badusb_ble/ducky_typer.h"
 #include "modules/ble/ble_common.h"
@@ -36,6 +37,7 @@ void BleMenu::optionsMenu() {
 #endif
     options.push_back({"BLE Spam", [=]() { spamMenu(); }});
     options.push_back({"Capture & Replay", [=]() { bleCaptureMenu(); }});
+    options.push_back({"Packet Monitor", [=]() { packetMonitor(PKT_SRC_BLE); }});
 
 #if !defined(LITE_VERSION)
     options.push_back({"BLE Suite", [=]() { BleSuiteMenu(); }});

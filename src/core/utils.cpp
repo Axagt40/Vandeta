@@ -285,13 +285,16 @@ String getOptionsJSON() {
     String response = "{\"width\":" + String(tftWidth) + ", \"height\":" + String(tftHeight) +
                       ",\"menu\":\"" + menutype + "\",\"menu_title\":\"" + menuOptionLabel +
                       "\", \"options\":[";
+    // Report the menu that is actually on screen: menus may build a local vector
+    // (which shadows the global `options`), and loopOptions publishes it here.
+    std::vector<Option> &opts = activeMenuOptions();
     int i = 0;
     int sel = 0;
-    for (auto opt : options) {
+    for (auto opt : opts) {
         response += "{\"n\":" + String(i) + ",\"label\":\"" + opt.label + "\"}";
         if (opt.hovered) sel = i;
         i++;
-        if (i < options.size()) response += ",";
+        if (i < opts.size()) response += ",";
     }
     response += "], \"active\":" + String(sel) + "}";
     return response;

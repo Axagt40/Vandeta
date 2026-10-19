@@ -61,7 +61,7 @@ void MassStorage::setupUsbCallback() {
     uint32_t numSectors = SD.numSectors();
 
     msc.vendorID("ESP32");
-    msc.productID("BRUCE");
+    msc.productID("VANDETA");
     msc.productRevision("1.0");
 
     msc.onRead(usbReadCallback);

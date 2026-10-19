@@ -7,25 +7,33 @@
 // nrf24.replayRaw, ...) and the NRF24 > Raw Capture menu, so the scripted and
 // on-device paths share one implementation.
 //
-// PSEUDO-PROMISCUOUS MODE (CRC off, auto-ack off, minimum address width)
-//   The nRF24L01 hardware always filters received packets by address and only
-//   hands a packet over when the CRC matches. "Pseudo promiscuous" works around
-//   as much of that as the silicon allows:
-//     * CRC is disabled        -> payloads with a bad CRC are delivered too
+// PSEUDO-PROMISCUOUS MODE (CRC off, auto-ack off, 2-byte "noise" addresses)
+//   The nRF24L01 hardware filters received packets by address, so it cannot be
+//   put in a true promiscuous mode. There is, however, a well-known receive
+//   configuration that makes the chip hand over packets addressed to somebody
+//   else: CRC off, auto-ack off, the address width set to the shortest value the
+//   chip accepts (2 bytes), and all six pipes loaded with the deliberately
+//   degenerate "noise" addresses (0x55/0xAA patterns). Those addresses confuse
+//   the address correlator into treating the RF preamble as the address, so a
+//   burst from a remote with an unknown address is delivered anyway. This is the
+//   exact configuration the Spectrum view uses to SEE a 2.4 GHz signal, and it
+//   is the only configuration under which an unknown remote can be read.
+//
+//   The older capture code used a 3-byte fixed address (E7 E7 E7). That still
+//   requires the first three address bytes to match, which is why a remote could
+//   be visible in Spectrum but never be captured. Do not go back to it:
+//     * 2-byte width + the six noise addresses -> any burst is received
+//     * CRC disabled        -> payloads with a bad CRC are delivered too
 //     * auto-ack is disabled   -> no ACK requirement
-//     * the address is reduced to the shortest the chip supports (3 bytes) and
-//       set to a fixed, common value, so far fewer bits must match
 //     * a fixed 32-byte payload keeps the FIFO readable for any length
-//   Together with a channel sweep this picks up a large share of the nRF24
-//   traffic on a channel (and a lot of noise). It is *not* true promiscuous
-//   mode: the address filter still runs in hardware, so a packet whose leading
-//   address bytes do not match is still dropped. Documented as-is on purpose.
+//   It is still not true promiscuous mode (the payload may include a few bits of
+//   preamble/address framing), so captures are treated as raw bytes to replay.
 
 #include <Arduino.h>
 #include <functional>
 
 /// Capture buffer bounds.
-#define NRF_CAP_MAX_PACKETS 64
+#define NRF_CAP_MAX_PACKETS 128
 #define NRF_CAP_MAX_PAYLOAD 32
 
 /// A single received raw packet.
@@ -59,6 +67,31 @@ struct NrfChannelActivity {
     uint16_t freqMhz;
     uint8_t level; // 0..100, mapped from RPD (carrier detected) sampling
 };
+
+// ---------------------------------------------------------------------------
+// Known 2.4 GHz RGB / LED-controller profiles
+// ---------------------------------------------------------------------------
+
+/// A known on-air parameter set for the family of 2.4 GHz LED/RGB remotes that
+/// use a Nordic-clone (PL1167 / nRF24-compatible) radio. These remotes always
+/// transmit the SAME command on THREE fixed channels (the three spikes seen in
+/// the Spectrum), so a capture that locks onto the right three channels hears
+/// the whole command while a 0-125 sweep almost never does.
+///
+/// MiLight / LimitlessLED is the best documented member of that family and many
+/// other brands (EGLO, FUT, and no-name strips) clone it. Each entry is the
+/// nRF24 address derived from the protocol's syncword plus its three channels.
+struct NrfSignalProfile {
+    const char *name;
+    uint8_t channels[3];
+    uint8_t address[5]; // nRF24 pipe address, in openReadingPipe() order
+    uint8_t payloadLen; // over-the-air payload length in bytes
+    const char *about;
+};
+
+#define NRF_PROFILE_COUNT 5
+#define NRF_PROFILE_GENERIC (-1) // no profile: raw noise-address promiscuous RX
+extern const NrfSignalProfile NRF_SIGNAL_PROFILES[NRF_PROFILE_COUNT];
 
 /// Heuristic analysis of one captured payload.
 struct NrfSignalAnalysis {
@@ -100,6 +133,9 @@ uint16_t nrfCaptureEndFreq();
 bool nrfCaptureSetPromiscuous(bool enable);
 bool nrfCaptureIsPromiscuous();
 
+/// Current data rate remembered by the module (kept for replay/profile apply).
+uint8_t nrfCaptureGetRate();
+
 // ---------------------------------------------------------------------------
 // Capture
 // ---------------------------------------------------------------------------
@@ -126,6 +162,32 @@ typedef std::function<bool(const NrfCaptureProgress &p)> NrfCaptureProgressFn;
 int nrfCaptureRun(
     uint32_t durationMs, bool forceHop = false, uint32_t hopIntervalMs = 20,
     const NrfCaptureProgressFn &progress = nullptr
+);
+
+/// Listen for `durationMs` while rotating ONLY through the given channel list,
+/// spending `dwellMs` on each. This is how a 3-channel RGB remote is captured:
+/// a 0-125 sweep with a 20 ms dwell spends 2.5 s between visits to any one
+/// channel, while a command burst lasts only a few ms, so it is never seen. A
+/// 3-entry list with a 2 ms dwell visits every channel every 6 ms.
+/// Returns the number of packets captured.
+int nrfCaptureRunChannels(
+    const uint8_t *channels, int channelCount, uint32_t durationMs, uint32_t dwellMs = 2,
+    const NrfCaptureProgressFn &progress = nullptr
+);
+
+/// Apply a known RGB/LED-controller profile (index into NRF_SIGNAL_PROFILES):
+/// sets the pipe address, the three channels and the data rate, and turns on the
+/// matching receive configuration. Pass NRF_PROFILE_GENERIC to go back to the
+/// raw noise-address promiscuous configuration.
+bool nrfCaptureApplyProfile(int profileIndex, uint8_t rate = NRF_RATE_1MBPS);
+
+/// Index of the profile last applied (NRF_PROFILE_GENERIC when none).
+int nrfCaptureGetProfile();
+
+/// Sample every channel and return the `maxOut` busiest ones, strongest first.
+/// Used to discover the three channels an unknown remote transmits on.
+int nrfFindStrongestChannels(
+    uint8_t *out, int maxOut, uint32_t dwellMs = 8, const NrfCaptureProgressFn &progress = nullptr
 );
 
 int nrfCaptureCount();

@@ -14,8 +14,11 @@ static uint32_t jsCallback(cmd *c) {
     first.trim();
     if (first.length() == 0) return true;
 
-    if (first == "exit") {
+    if (first == "exit" || first == "stop") {
+        // `js stop` is the simple form of `js exit`: ask the interpreter to shut
+        // down. Immediate confirmation so a serial terminal sees the ack.
         interpreter_state = -1;
+        if (first == "stop") Serial.println("js: stop requested");
         return true;
     }
 
@@ -32,7 +35,8 @@ static uint32_t jsCallback(cmd *c) {
     }
 
     String filepath;
-    if (first == "run_from_file") {
+    // `js run <file>` is the simple alias for `js run_from_file <file>`.
+    if (first == "run_from_file" || first == "run") {
         if (argc < 2) return false;
 
         filepath = cmd.getArgument(1).getValue();

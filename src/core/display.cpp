@@ -10,6 +10,107 @@
 
 #define MAX_MENU_SIZE (int)(tftHeight / 25)
 
+/***************************************************************************************
+** Task 06 - more intuitive navigation (DEMO SHELL)
+**   Visible chrome only: a breadcrumb of the open menu path, a position counter /
+**   scroll indicator for long lists and a bottom control-hint bar. The behavioural
+**   parts of the task (consistent Back, bounded history jump, keyboard search) are
+**   phase 2 and are NOT wired here.
+***************************************************************************************/
+static String navPathStack[NAV_PATH_MAX];
+static uint8_t navPathDepth = 0;
+
+void navPushMenu(const char *title, uint8_t menuType) {
+    if (menuType == MENU_TYPE_MAIN) return; // the main menu is the root, not a crumb
+    if (navPathDepth >= NAV_PATH_MAX) return;
+    navPathStack[navPathDepth++] = String(title ? title : "");
+}
+
+void navPopMenu(void) {
+    if (navPathDepth > 0) navPathDepth--;
+}
+
+void navResetMenu(void) { navPathDepth = 0; }
+
+// Right-aligned "index+1/total" position badge.
+static void drawMenuCountBadge(int index, int total, int y) {
+    if (total <= 0 || index < 0) return;
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d/%d", index + 1, total);
+    int w = (int)strlen(buf) * FP * LW;
+    tft.setTextSize(FP);
+    tft.setTextColor(bruceConfig.secColor, bruceConfig.bgColor);
+    tft.fillRect(tftWidth - 12 - w, y, w + 2, FP * LH, bruceConfig.bgColor);
+    tft.setCursor(tftWidth - 12 - w, y);
+    tft.print(buf);
+}
+
+// Vertical scrollbar on the right edge; only drawn when the list actually scrolls.
+static void drawMenuScrollbar(int index, int total, int top, int height, int visible) {
+    if (total <= visible || total <= 0 || height <= 0) return;
+    tft.fillRect(tftWidth - 5, top, 5, height, bruceConfig.bgColor);
+    int thumbH = (int)((long)height * visible / total);
+    if (thumbH < 6) thumbH = 6;
+    int denom = total - visible;
+    int thumbY = top + (denom > 0 ? (int)((long)(height - thumbH) * index / denom) : 0);
+    if (thumbY + thumbH > top + height) thumbY = top + height - thumbH;
+    tft.fillRect(tftWidth - 5, thumbY, 5, thumbH, bruceConfig.priColor);
+}
+
+// Top Y of the bottom hint strip (used to keep the counter badge just above it).
+static int menuHintBarTop(void) {
+    return tftHeight - BORDER_OFFSET_FROM_SCREEN_EDGE - 2 - (FP * LH + 4);
+}
+
+// Bottom control hints for the encoder boards (T-Embed has no touch footer).
+void drawMenuHintBar(void) {
+#if defined(HAS_TOUCH)
+    TouchFooter();
+#else
+    int h = FP * LH + 4;
+    int y = menuHintBarTop();
+    if (y < 30) return;
+    tft.fillRect(6, y, tftWidth - 12, h, bruceConfig.bgColor);
+    tft.drawFastHLine(12, y, tftWidth - 24, bruceConfig.secColor);
+    tft.setTextSize(FP);
+    tft.setTextColor(bruceConfig.secColor, bruceConfig.bgColor);
+    tft.drawCentreString("TURN", tftWidth / 6, y + 2, 1);
+    tft.drawCentreString("SEL", tftWidth / 2, y + 2, 1);
+    tft.drawCentreString("BACK", 5 * tftWidth / 6, y + 2, 1);
+#endif
+}
+
+// Breadcrumb line: "WiFi > Wifi Atks > Target Atks" plus the position badge.
+static void drawMenuPath(int index, int total, const char *fallbackTitle) {
+    String path = "";
+    for (uint8_t i = 0; i < navPathDepth; i++) {
+        if (navPathStack[i].isEmpty()) continue;
+        if (!path.isEmpty()) path += " > ";
+        path += navPathStack[i];
+    }
+    if (path.isEmpty() && fallbackTitle && *fallbackTitle) path = String(fallbackTitle);
+    if (path.isEmpty()) return;
+
+    int counterW = 0;
+    if (total > 0) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d/%d", index + 1, total);
+        counterW = (int)strlen(buf) * FP * LW + 8;
+    }
+    int maxW = tftWidth - 24 - counterW;
+    while ((int)(path.length() * FP * LW) > maxW && path.length() > 4) {
+        int sep = path.indexOf(" > ");
+        if (sep >= 0) path = ".." + path.substring(sep); // drop the oldest crumb
+        else path.remove(path.length() - 1, 1);           // no separators: trim the tail
+    }
+    tft.setTextSize(FP);
+    tft.fillRect(6, 30, tftWidth - 12, FP * LH + 2, bruceConfig.bgColor);
+    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+    tft.setCursor(12, 30);
+    tft.print(path);
+    if (total > 0) drawMenuCountBadge(index, total, 30);
+}
+
 // Send the ST7789 into or out of sleep mode
 void panelSleep(bool on) {
 #if defined(ST7789_2_DRIVER) || defined(ST7789_DRIVER)
@@ -511,7 +612,7 @@ void padprintln(double n, int digits, int16_t padx) {
 **  Function: loopOptions
 **  Where you choose among the options in menu
 **********************************************************************/
-int loopOptions(
+int loopOptionsImpl(
     std::vector<Option> &options, uint8_t menuType, const char *subText, int index, bool interpreter
 ) {
     if (options.empty()) return -1;
@@ -848,6 +949,16 @@ Opt_Coord drawOptions(
         }
         if (cont > MAX_MENU_SIZE) break;
     }
+
+    // Task 06 demo shell: scroll indicator + position badge + control hints.
+    if (menuOptionType != MENU_TYPE_MAIN) {
+        int total = (int)options.size();
+        bool scrolls = total > MAX_MENU_SIZE;
+        if (scrolls) drawMenuScrollbar(index, total, 28, tftHeight - 36, MAX_MENU_SIZE);
+        drawMenuHintBar();
+        if (scrolls) drawMenuCountBadge(index, total, menuHintBarTop() - FP * LH - 2);
+    }
+
     // update history
     last_index = index;
 #if defined(HAS_TOUCH)
@@ -866,8 +977,8 @@ void drawSubmenu(int index, std::vector<Option> &options, const char *title) {
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
     tft.setTextSize(FP);
     tft.drawPixel(0, 0, 0);
-    tft.fillRect(6, 30, tftWidth - 12, 8 * FP, bruceConfig.bgColor);
-    tft.drawString(title, 12, 30);
+    // Task 06 demo shell: full path breadcrumb (+ n/total) replaces the bare title.
+    drawMenuPath(index, menuSize, title);
 
     // middle of the drawing area
     int middle = 25 /*status*/ + (tftHeight - 30 /*status + bottom margin*/) / 2;
@@ -910,6 +1021,9 @@ void drawSubmenu(int index, std::vector<Option> &options, const char *title) {
     tft.fillRect(tftWidth - 5, 0, 5, tftHeight, bruceConfig.bgColor);
     tft.fillRect(tftWidth - 5, index * tftHeight / menuSize, 5, tftHeight / menuSize, bruceConfig.priColor);
 
+    // Task 06 demo shell: bottom control hints (TURN / SEL / BACK).
+    drawMenuHintBar();
+
 #if defined(HAS_TOUCH)
     tft.drawCentreString("\\/", tftWidth / 2, middle_down + (FM * LH + 6), 1);
     tft.setTextColor(getColorVariation(bruceConfig.priColor), bruceConfig.bgColor);
@@ -938,7 +1052,7 @@ void drawStatusBar() {
         tft.print(timeStr);
     } else {
         setTftDisplay(12, 12, bruceConfig.priColor, 1, bruceConfig.bgColor);
-        tft.print("BRUCE " + String(BRUCE_VERSION));
+        tft.print(String(BRUCE_VERSION));
     }
 
     int iconCount = 0;

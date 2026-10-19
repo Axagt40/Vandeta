@@ -729,6 +729,9 @@ static const JSPropDef js_nrf24[] = {
     JS_CFUNC_DEF("analyzeSignal", 1, native_nrf24AnalyzeSignal),
     JS_CFUNC_DEF("setFrequencyRange", 2, native_nrf24SetFrequencyRange),
     JS_CFUNC_DEF("detectMultiFreqSignals", 1, native_nrf24DetectMultiFreqSignals),
+    JS_CFUNC_DEF("captureChannels", 3, native_nrf24CaptureChannels),
+    JS_CFUNC_DEF("setProfile", 1, native_nrf24SetProfile),
+    JS_CFUNC_DEF("getProfile", 0, native_nrf24GetProfile),
     JS_PROP_END,
 };
 

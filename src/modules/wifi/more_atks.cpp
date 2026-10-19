@@ -749,104 +749,57 @@ static void moreRunTargetUi(int id, const String &ssid, const String &mac, uint8
     moreResultScreen(moreTargetAtkName(id), r);
 }
 
-void moreTargetAtkMenu(const String &tssid, const String &mac, uint8_t channel) {
-AGAIN:
-    options = {
-        {"EAPOL Logoff",
-         [=]() {
-             moreRunTargetUi(0, tssid, mac, channel, 0);
-         }                                        },
-        {"Channel Switch",
-         [=]() {
-             String ch = num_keyboard("11", 2, "New channel (1-14):");
-             int newCh = ch.toInt();
-             if (newCh < 1 || newCh > 14) newCh = 11;
-             moreRunTargetUi(1, tssid, mac, channel, (uint8_t)newCh);
-         }                                        },
-        {"Bad Message",
-         [=]() {
-             moreRunTargetUi(2, tssid, mac, channel, 0);
-         }                                        },
-        {"Authentication Attack",
-         [=]() {
-             moreRunTargetUi(3, tssid, mac, channel, 0);
-         }                                        },
-        {"Disassociation Attack",
-         [=]() {
-             moreRunTargetUi(4, tssid, mac, channel, 0);
-         }                                        },
-        {"Info",
-         [=]() {
-             moreStatusScreen("Target", tssid, mac);
-             moreWaitAnyKey();
-         }                                        },
-    };
-    addOptionToMainMenu();
-    int selected = loopOptions(options, MENU_TYPE_SUBMENU, "More Attacks");
-    // Physical Back leaves the page instead of re-rendering it.
-    if (selected < 0) return;
-    if (returnToMenu) return; // "Main Menu" entry
-    goto AGAIN;
+// The targeted attacks used to live behind the nested "More Attacks" page that
+// hung off Target Attacks. That page is gone: each attack is now a row of the
+// Target Attacks menu itself, so it is wrapped in its own status/result screen
+// here and called directly. The signatures match the other menu entries so
+// wifi_atks.cpp can drop them straight into its option vector.
+void moreTargetEapolLogoff(const String &tssid, const String &mac, uint8_t channel) {
+    moreRunTargetUi(0, tssid, mac, channel, 0);
 }
 
-void moreAtkMenu() {
-AGAIN:
-    options = {
-        {"Auth Flood",
-         [=]() {
-             uint32_t t0 = millis();
-             moreStatusScreen("Auth Flood", "all APs in range", "open-system auth frames");
-             MoreAtkResult r = more_auth_flood(MORE_MENU_MS, moreMenuProgress("Auth Flood", "all APs"));
-             r.seconds = (millis() - t0) / 1000;
-             moreResultScreen("Auth Flood", r);
-         }      },
-        {"Probe Request",
-         [=]() {
-             uint32_t t0 = millis();
-             moreStatusScreen("Probe Request", "random SSIDs", "all channels");
-             MoreAtkResult r =
-                 more_probe_flood(MORE_MENU_MS, "", true, moreMenuProgress("Probe Request", "random SSIDs"));
-             r.seconds = (millis() - t0) / 1000;
-             moreResultScreen("Probe Request", r);
-         }      },
-        {"EAPOL Attack",
-         [=]() {
-             uint32_t t0 = millis();
-             moreStatusScreen("EAPOL Attack", "EAPOL-Start flood", "all APs in range");
-             MoreAtkResult r = more_eapol_start_flood(MORE_MENU_MS, moreMenuProgress("EAPOL Attack", "all APs"));
-             r.seconds = (millis() - t0) / 1000;
-             moreResultScreen("EAPOL Attack", r);
-         }      },
-        {"Beacon Flood",
-         [=]() {
-             beaconAttack();
-         }      },
-        {"Target Attacks",
-         [=]() {
-             int nets = WiFi.scanNetworks(false, showHiddenNetworks);
-             if (nets <= 0) {
-                 displayError("No networks found", true);
-                 return;
-             }
-             std::vector<Option> netOptions;
-             for (int i = 0; i < nets && i < 24; i++) {
-                 String ssid = WiFi.SSID(i);
-                 if (ssid.length() == 0) ssid = "<hidden>";
-                 String mac = WiFi.BSSIDstr(i);
-                 uint8_t ch = (uint8_t)WiFi.channel(i);
-                 String label = ssid + " (" + String(WiFi.RSSI(i)) + "|ch." + String(ch) + ")";
-                 netOptions.push_back({label, [ssid, mac, ch]() { moreTargetAtkMenu(ssid, mac, ch); }});
-             }
-             netOptions.push_back({"Back", []() {}});
-             int sel = loopOptions(netOptions, MENU_TYPE_SUBMENU, "Pick target");
-             (void)sel;
-             WiFi.scanDelete();
-         }      },
-    };
-    addOptionToMainMenu();
-    int selected = loopOptions(options, MENU_TYPE_SUBMENU, "More Attacks");
-    // Physical Back leaves the page instead of re-rendering it.
-    if (selected < 0) return;
-    if (returnToMenu) return; // "Main Menu" entry
-    goto AGAIN;
+void moreTargetChannelSwitch(const String &tssid, const String &mac, uint8_t channel) {
+    String ch = num_keyboard("11", 2, "New channel (1-14):");
+    int newCh = ch.toInt();
+    if (newCh < 1 || newCh > 14) newCh = 11;
+    moreRunTargetUi(1, tssid, mac, channel, (uint8_t)newCh);
+}
+
+void moreTargetBadMessage(const String &tssid, const String &mac, uint8_t channel) {
+    moreRunTargetUi(2, tssid, mac, channel, 0);
+}
+
+void moreTargetAuthAttack(const String &tssid, const String &mac, uint8_t channel) {
+    moreRunTargetUi(3, tssid, mac, channel, 0);
+}
+
+void moreTargetDisassoc(const String &tssid, const String &mac, uint8_t channel) {
+    moreRunTargetUi(4, tssid, mac, channel, 0);
+}
+
+// The flood attacks used to live in a nested "More Attacks" page. They are now
+// entries of the main WiFi Attacks menu (wifi_atk_menu), so each one is wrapped
+// in its own status/result screen here and called directly.
+void moreAuthFloodMenu() {
+    uint32_t t0 = millis();
+    moreStatusScreen("Auth Flood", "all APs in range", "open-system auth frames");
+    MoreAtkResult r = more_auth_flood(MORE_MENU_MS, moreMenuProgress("Auth Flood", "all APs"));
+    r.seconds = (millis() - t0) / 1000;
+    moreResultScreen("Auth Flood", r);
+}
+
+void moreProbeFloodMenu() {
+    uint32_t t0 = millis();
+    moreStatusScreen("Probe Request", "random SSIDs", "all channels");
+    MoreAtkResult r = more_probe_flood(MORE_MENU_MS, "", true, moreMenuProgress("Probe Request", "random SSIDs"));
+    r.seconds = (millis() - t0) / 1000;
+    moreResultScreen("Probe Request", r);
+}
+
+void moreEapolStartMenu() {
+    uint32_t t0 = millis();
+    moreStatusScreen("EAPOL Attack", "EAPOL-Start flood", "all APs in range");
+    MoreAtkResult r = more_eapol_start_flood(MORE_MENU_MS, moreMenuProgress("EAPOL Attack", "all APs"));
+    r.seconds = (millis() - t0) / 1000;
+    moreResultScreen("EAPOL Attack", r);
 }

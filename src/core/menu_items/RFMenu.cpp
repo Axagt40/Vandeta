@@ -1,5 +1,6 @@
 #include "RFMenu.h"
 #include "core/display.h"
+#include "core/packet_view.h"
 #include "core/settings.h"
 #include "core/utils.h"
 #include "modules/rf/record.h"
@@ -7,6 +8,7 @@
 #include "modules/rf/rf_jammer.h"
 #include "modules/rf/rf_listen.h"
 #include "modules/rf/rf_scan.h"
+#include "modules/rf/rf_freq_analyzer.h"
 #include "modules/rf/rf_send.h"
 #include "modules/rf/rf_utils.h"
 #include "modules/rf/rf_spectrum.h"
@@ -20,6 +22,8 @@ void RFMenu::optionsMenu() {
         {"Custom SubGhz",   sendCustomRF              },
 #endif
         {"Spectrum",        rf_spectrum               },
+        {"Frequency Analyzer", rf_freq_analyzer       },
+        {"Packet Monitor",   [=]() { packetMonitor(PKT_SRC_SUBGHZ); }},
 #if !defined(LITE_VERSION)
         {"RSSI Spectrum",   rf_CC1101_rssi            }, // @Pirata
         {"SquareWave Spec", rf_SquareWave             }, // @Pirata

@@ -149,6 +149,7 @@ bool clock_set = false;
 #endif
 
 std::vector<Option> options;
+std::vector<Option> *activeOptions = nullptr;
 // Protected global variables
 #if defined(HAS_SCREEN)
 tft_logger tft = tft_logger(); // Invoke custom library
@@ -266,7 +267,7 @@ void boot_screen() {
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
     tft.setTextSize(FM);
     tft.drawPixel(0, 0, bruceConfig.bgColor);
-    tft.drawCentreString("Bruce", tftWidth / 2, 10, 1);
+    tft.drawCentreString("Vandeta", tftWidth / 2, 10, 1);
     tft.setTextSize(FP);
     tft.drawCentreString(BRUCE_VERSION, tftWidth / 2, 25, 1);
     tft.setTextSize(FM);

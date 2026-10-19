@@ -1,6 +1,7 @@
 #include "usbdebug.h"
 
 #include "core/sd_functions.h"
+#include "core/serial_commands/debug_commands.h" // debugPollUiWatch()
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -67,8 +68,8 @@ enum : uint8_t {
     FR_INFO_R = 0x8B,     // key=value system information
 };
 
-const char *UsbDebug_verbs =
-    "cd pwd usbdebug batch queue history complete hotreload liveupdate errors log proc sys mem proto";
+const char *UsbDebug_verbs = "cd pwd usbdebug batch queue history complete hotreload liveupdate errors log proc sys "
+                            "mem proto ui move press file livepatch liveboot";
 
 // ---------------------------------------------------------------------------
 // State
@@ -190,9 +191,12 @@ static uint32_t get32(const uint8_t *p) {
 // ---------------------------------------------------------------------------
 static void recordLogLine(const char *line) {
     if (!line || !line[0]) return;
-    // Only keep things that look like failures: ESP-IDF prefixes errors with
-    // "E (" on the formatted line; plain text hits are matched too.
-    bool isErr = (line[0] == 'E' && (line[1] == ' ' || line[1] == '(')) ||
+    // Only keep things that look like failures. The hook receives the fully
+    // formatted line, whose header depends on the build's logger: ESP-IDF's
+    // plain form starts with "E (123)", while this Arduino target prints
+    // "[  123][E][file:line] ...". Match both, plus plain-text failure words.
+    bool isErr = strstr(line, "[E]") != nullptr ||
+                 (line[0] == 'E' && (line[1] == ' ' || line[1] == '(')) ||
                  strstr(line, "ERROR") || strstr(line, "error:") || strstr(line, "abort") ||
                  strstr(line, "assert");
     if (!isErr) return;
@@ -201,6 +205,11 @@ static void recordLogLine(const char *line) {
     size_t slot = s_errHead;
     strncpy(s_errRing[slot], line, USBDBG_ERR_LEN - 1);
     s_errRing[slot][USBDBG_ERR_LEN - 1] = '\0';
+    // Arduino log lines end in "\r\n"; trim so the ring dump is one clean line.
+    size_t l = strlen(s_errRing[slot]);
+    while (l > 0 && (s_errRing[slot][l - 1] == '\n' || s_errRing[slot][l - 1] == '\r' ||
+                     s_errRing[slot][l - 1] == ' '))
+        s_errRing[slot][--l] = '\0';
     s_errHead = (s_errHead + 1) % USBDBG_ERR_LINES;
     if (s_errCount < USBDBG_ERR_LINES) s_errCount = s_errCount + 1;
     portEXIT_CRITICAL(&s_errMux);
@@ -225,6 +234,53 @@ static void installLogHook() {
     if (s_logHookInstalled) return;
     s_prevLog = esp_log_set_vprintf(usbDebugLogVprintf);
     s_logHookInstalled = true;
+}
+
+// Arduino's own log_x() helpers do NOT go through esp_log_set_vprintf(): they
+// call log_printf() -> log_printfv() -> ets_printf(), so the vprintf hook above
+// never saw them - only native ESP-IDF logs arrive that way. The build links
+// with `-Wl,--wrap=log_printf` (board ini), so every Arduino log line lands here
+// first. Failure-looking lines are copied into the ring, then the call is handed
+// to the real implementation (log_printfv), so the console output and its format
+// are byte-for-byte what they were. Gated on s_logHookInstalled so nothing runs
+// during static initialisation, before the settings are loaded.
+extern "C" int log_printfv(const char *format, va_list arg);
+extern "C" int __wrap_log_printf(const char *format, ...) {
+    if (s_logHookInstalled && bruceConfig.usbDebug != 0) {
+        va_list copy;
+        va_start(copy, format);
+        char buf[USBDBG_ERR_LEN];
+        int n = vsnprintf(buf, sizeof(buf), format, copy);
+        va_end(copy);
+        if (n > 0) recordLogLine(buf);
+    }
+    va_list fwd;
+    va_start(fwd, format);
+    int r = log_printfv(format, fwd);
+    va_end(fwd);
+    return r;
+}
+
+// Some components log through plain printf(): NimBLE's console_printf IS printf,
+// so every BLE error line (`E NimBLEDevice: ...`) reached neither esp_log nor
+// log_printf and was the one common class the ring still missed. The board env
+// links `-Wl,--wrap=printf` for this. Forwarding goes through vprintf(), which is
+// printf's own core, so stdout output is byte-for-byte unchanged. Same gate and
+// same failure filter as the other two paths.
+extern "C" int __wrap_printf(const char *format, ...) {
+    if (s_logHookInstalled && bruceConfig.usbDebug != 0) {
+        va_list copy;
+        va_start(copy, format);
+        char buf[USBDBG_ERR_LEN];
+        int n = vsnprintf(buf, sizeof(buf), format, copy);
+        va_end(copy);
+        if (n > 0) recordLogLine(buf);
+    }
+    va_list fwd;
+    va_start(fwd, format);
+    int r = vprintf(format, fwd);
+    va_end(fwd);
+    return r;
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +328,35 @@ void begin() {
     outln("[USBDBG] 'usbdebug status' for details, 'help' for the stock CLI");
 
     if (devMode()) applyDevMode(true);
+}
+
+void releaseResources() {
+    // Turn everything the mode allocated or switched on back off, so a device
+    // with Developer Options disabled is as light as a stock build. Cheap and
+    // idempotent - every step is safe when the feature was never used.
+    s_errorStream = false;
+    clearQueue();
+    s_batchMode = false;
+    s_batchBusy = false;
+    clearWatches();
+    s_binary = false; // the console always returns to text mode
+    s_cwd = "/";
+    debugUiWatchOff();
+
+    // Give the USB-CDC RX queue back to its stock size (setup() set it to
+    // SAFE_STACK_BUFFER_SIZE / 4 before Serial.begin()).
+    Serial.setRxBufferSize(SAFE_STACK_BUFFER_SIZE / 4);
+
+    serialDevice->println("[USBDBG] Developer Options OFF - debug resources released");
+}
+
+void applyEnabled(bool on) {
+    if (on) {
+        // The framed protocol needs the larger queue to hold a whole frame.
+        Serial.setRxBufferSize(USBDBG_RX_QUEUE);
+    } else {
+        releaseResources();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -925,6 +1010,9 @@ void loop() {
     streamErrors();
     pollWatches();
     pumpQueue();
+    // Live screen watcher (`ui watch on`): prints the UI whenever it changes, so
+    // a host sees navigation happen in real time without polling or rebooting.
+    debugPollUiWatch();
 }
 
 } // namespace UsbDebug

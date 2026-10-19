@@ -63,6 +63,43 @@ static bool nrfEnsure(uint8_t channel) {
     return nrfCaptureInit(cfg);
 }
 
+// List payloads that appear more than once in the current capture. A remote
+// repeats the same frame on every press; ambient 2.4 GHz noise does not.
+static int nrfReportRepeats(int minCount) {
+    if (minCount < 2) minCount = 2;
+    int total = nrfCaptureCount();
+    static bool done[NRF_CAP_MAX_PACKETS];
+    memset(done, 0, sizeof(done));
+    int groups = 0;
+    for (int i = 0; i < total; i++) {
+        if (done[i]) continue;
+        NrfCapturedPacket pi;
+        if (!nrfCapturePacket(i, &pi)) continue;
+        int count = 0;
+        for (int j = i; j < total; j++) {
+            if (done[j]) continue;
+            NrfCapturedPacket pj;
+            if (!nrfCapturePacket(j, &pj)) continue;
+            if (pj.len != pi.len) continue;
+            bool same = true;
+            for (int b = 0; b < pi.len && same; b++)
+                if (pj.data[b] != pi.data[b]) same = false;
+            if (!same) continue;
+            count++;
+            done[j] = true;
+        }
+        if (count >= minCount) {
+            groups++;
+            serialDevice->println(
+                String("repeat x") + String(count) + " len=" + String(pi.len) + " ch=" +
+                String(pi.channel) + " freq=" + String(pi.freqMhz) + " data=" + nrfHex(pi.data, pi.len)
+            );
+        }
+    }
+    serialDevice->println(String("RESULT repeat groups=") + String(groups) + " of " + String(total));
+    return groups;
+}
+
 uint32_t nrfCapCallback(cmd *c) {
     Command cmd(c);
     String mode = cmd.getArgument(0).getValue();
@@ -84,7 +121,8 @@ uint32_t nrfCapCallback(cmd *c) {
             String("chip=") + (NRFradio.isChipConnected() ? "ok" : "absent") + " channel=" +
             String(nrfCaptureGetChannel()) + " freq=" + String(2400 + nrfCaptureGetChannel()) + " rate=" +
             String(nrfCaptureGetDataRate()) + " power=" + String(3) + " promisc=" +
-            (nrfCaptureIsPromiscuous() ? "1" : "0") + " range=" + String(nrfCaptureStartFreq()) + "-" +
+            (nrfCaptureIsPromiscuous() ? "1" : "0") + " profile=" + String(nrfCaptureGetProfile()) +
+            " range=" + String(nrfCaptureStartFreq()) + "-" +
             String(nrfCaptureEndFreq()) + " packets=" + String(nrfCaptureCount()) + " folder=" +
             nrfCaptureFolder()
         );
@@ -173,6 +211,185 @@ uint32_t nrfCapCallback(cmd *c) {
         );
         return true;
     }
+    if (mode == "capch" || mode == "channels") {
+        // nrfcap capch <c1,c2,c3,...> [ms] [dwellMs]
+        uint8_t chans[24];
+        int nc = 0;
+        const char *s = a.c_str();
+        while (*s && nc < 24) {
+            while (*s == ',' || *s == ' ' || *s == ';') s++;
+            if (!*s) break;
+            int v = atoi(s);
+            if (v < 0) v = 0;
+            if (v > 125) v = 125;
+            chans[nc++] = (uint8_t)v;
+            while (*s && *s != ',' && *s != ' ' && *s != ';') s++;
+        }
+        if (nc == 0) {
+            serialDevice->println("ERR no channels");
+            return false;
+        }
+        uint32_t ms = b.length() ? b.toInt() : 4000;
+        uint32_t dwell = d.length() ? d.toInt() : 2;
+        int n = nrfCaptureRunChannels(chans, nc, ms, dwell);
+        serialDevice->println(
+            String("RESULT capture count=") + String(n) + " dropped=" + String(nrfCaptureDropped()) +
+            " channels=" + String(nc)
+        );
+        for (int i = 0; i < n && i < 16; i++) {
+            NrfCapturedPacket p;
+            if (!nrfCapturePacket(i, &p)) continue;
+            serialDevice->println(
+                String("pkt i=") + String(i) + " ch=" + String(p.channel) + " freq=" + String(p.freqMhz) +
+                " len=" + String(p.len) + " data=" + nrfHex(p.data, p.len)
+            );
+        }
+        return true;
+    }
+    if (mode == "lock") {
+        // nrfcap lock [topN] [scanDwellMs] [captureMs]
+        int topN = a.length() ? a.toInt() : 3;
+        if (topN < 1) topN = 1;
+        if (topN > 8) topN = 8;
+        uint32_t scanDwell = b.length() ? b.toInt() : 12;
+        uint32_t ms = d.length() ? d.toInt() : 6000;
+        uint8_t chans[8];
+        int nc = nrfFindStrongestChannels(chans, topN, scanDwell);
+        for (int i = 0; i < nc; i++)
+            serialDevice->println(
+                String("lock ch=") + String(chans[i]) + " freq=" + String(2400 + chans[i])
+            );
+        if (nc == 0) {
+            serialDevice->println("RESULT lock channels=0");
+            return true;
+        }
+        int n = nrfCaptureRunChannels(chans, nc, ms, 2);
+        serialDevice->println(
+            String("RESULT capture count=") + String(n) + " channels=" + String(nc)
+        );
+        for (int i = 0; i < n && i < 16; i++) {
+            NrfCapturedPacket p;
+            if (!nrfCapturePacket(i, &p)) continue;
+            serialDevice->println(
+                String("pkt i=") + String(i) + " ch=" + String(p.channel) + " freq=" + String(p.freqMhz) +
+                " len=" + String(p.len) + " data=" + nrfHex(p.data, p.len)
+            );
+        }
+        return true;
+    }
+    if (mode == "repeat") {
+        // nrfcap repeat [minCount]  - list payloads seen more than once.
+        nrfReportRepeats(a.length() ? a.toInt() : 2);
+        return true;
+    }
+    if (mode == "repeatcap") {
+        // nrfcap repeatcap <c1,c2,...> [ms] [dwellMs] - capture then list repeats.
+        uint8_t chans[24];
+        int nc = 0;
+        const char *s = a.c_str();
+        while (*s && nc < 24) {
+            while (*s == ',' || *s == ' ' || *s == ';') s++;
+            if (!*s) break;
+            int v = atoi(s);
+            if (v < 0) v = 0;
+            if (v > 125) v = 125;
+            chans[nc++] = (uint8_t)v;
+            while (*s && *s != ',' && *s != ' ' && *s != ';') s++;
+        }
+        if (nc == 0) {
+            serialDevice->println("ERR no channels");
+            return false;
+        }
+        uint32_t ms = b.length() ? b.toInt() : 15000;
+        uint32_t dwell = d.length() ? d.toInt() : 1;
+        int n = nrfCaptureRunChannels(chans, nc, ms, dwell);
+        serialDevice->println(
+            String("RESULT repeatcap count=") + String(n) + " dropped=" + String(nrfCaptureDropped()) +
+            " channels=" + String(nc)
+        );
+        int groups = nrfReportRepeats(2);
+        // Replay every repeated frame (this is the capture-and-replay path).
+        if (groups > 0) {
+            bool done[NRF_CAP_MAX_PACKETS] = {false};
+            for (int i = 0; i < nrfCaptureCount(); i++) {
+                NrfCapturedPacket pi;
+                if (!nrfCapturePacket(i, &pi) || done[i]) continue;
+                int count = 0;
+                for (int j = i; j < nrfCaptureCount(); j++) {
+                    NrfCapturedPacket pj;
+                    if (!nrfCapturePacket(j, &pj) || done[j] || pj.len != pi.len) continue;
+                    bool same = true;
+                    for (int b = 0; b < pi.len && same; b++)
+                        if (pj.data[b] != pi.data[b]) same = false;
+                    if (same) {
+                        count++;
+                        done[j] = true;
+                    }
+                }
+                if (count >= 2)
+                    nrfReplayRaw(pi.data, pi.len, pi.channel, 2, nrfCaptureGetRate());
+            }
+            serialDevice->println("replayed repeats on their channels");
+        }
+        return true;
+    }
+    if (mode == "rgb") {
+        // nrfcap rgb <profileIdx|99> [ms]
+        // Applies the profile (99 = generic noise RX) and captures on its three
+        // channels in one command, so a host reset between commands cannot lose
+        // the selected profile.
+        int idx = a.length() ? a.toInt() : -1;
+        if (idx >= NRF_PROFILE_COUNT) idx = NRF_PROFILE_GENERIC;
+        uint32_t ms = b.length() ? b.toInt() : 8000;
+        uint8_t chans[3];
+        int nc = 0;
+        const char *pname = "generic";
+        if (idx >= 0) {
+            nrfCaptureApplyProfile(idx, nrfCaptureGetRate());
+            for (int i = 0; i < 3; i++) chans[nc++] = NRF_SIGNAL_PROFILES[idx].channels[i];
+            pname = NRF_SIGNAL_PROFILES[idx].name;
+        } else {
+            nrfCaptureSetPromiscuous(true);
+            chans[nc++] = nrfCaptureGetChannel();
+        }
+        int n = nrfCaptureRunChannels(chans, nc, ms, 2);
+        serialDevice->println(
+            String("RESULT rgb profile=") + pname + " count=" + String(n) + " channels=" + String(nc)
+        );
+        for (int i = 0; i < n && i < 20; i++) {
+            NrfCapturedPacket p;
+            if (!nrfCapturePacket(i, &p)) continue;
+            serialDevice->println(
+                String("pkt i=") + String(i) + " ch=" + String(p.channel) + " freq=" + String(p.freqMhz) +
+                " len=" + String(p.len) + " data=" + nrfHex(p.data, p.len)
+            );
+        }
+        return true;
+    }
+    if (mode == "profile") {
+        // nrfcap profile <index|-1> [rate]   (-1 = generic noise-address RX)
+        int idx = a.length() ? a.toInt() : -1;
+        if (idx >= NRF_PROFILE_COUNT) idx = -1;
+        uint8_t rate = b.length() ? (uint8_t)b.toInt() : nrfCaptureGetRate();
+        bool ok = nrfCaptureApplyProfile(idx, rate);
+        serialDevice->println(
+            String("RESULT profile ") + (idx >= 0 ? NRF_SIGNAL_PROFILES[idx].name : "generic") + " ok=" +
+            (ok ? "1" : "0")
+        );
+        return true;
+    }
+    if (mode == "profiles") {
+        for (int i = 0; i < NRF_PROFILE_COUNT; i++) {
+            const NrfSignalProfile &p = NRF_SIGNAL_PROFILES[i];
+            serialDevice->println(
+                String("profile i=") + String(i) + " name=" + p.name + " ch=" + String(p.channels[0]) +
+                "," + String(p.channels[1]) + "," + String(p.channels[2]) + " len=" + String(p.payloadLen) +
+                " about=" + p.about
+            );
+        }
+        serialDevice->println(String("current=") + String(nrfCaptureGetProfile()));
+        return true;
+    }
     if (mode == "list") {
         for (int i = 0; i < nrfCaptureCount(); i++) {
             NrfCapturedPacket p;
@@ -234,8 +451,8 @@ uint32_t nrfCapCallback(cmd *c) {
         return true;
     }
     serialDevice->println(
-        "modes: info init promisc channel rate power freqrange scan capture multifreq list replay save load "
-        "analyze"
+        "modes: info init promisc channel rate power freqrange scan capture capch lock rgb multifreq "
+        "profile profiles repeat list replay save load analyze"
     );
     return false;
 }

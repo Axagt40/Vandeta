@@ -174,6 +174,12 @@ struct TouchPoint {
 extern TouchPoint touchPoint;
 extern keyStroke KeyStroke;
 extern std::vector<Option> options;
+// The options vector of the menu that is actually on screen right now. Menus may
+// use a local vector (which shadows the global `options`), so serial readback
+// (ui/move/press, UISTATE, ui watch) must read this instead of the global one.
+// Set by loopOptions() on entry and restored to the caller's menu on exit;
+// nullptr when no menu is being drawn.
+extern std::vector<Option> *activeOptions;
 
 template <typename R, typename... Args>
 std::function<void()> lambdaHelper(R (*callback)(Args...), std::decay_t<Args>... args) {

@@ -1,4 +1,5 @@
 #include "util_commands.h"
+#include "core/display.h" // activeMenuOptions()
 #include "core/main_menu.h"
 #include "core/sd_functions.h"
 #include "core/utils.h" // to return optionsJSON
@@ -105,7 +106,6 @@ uint32_t freeCallback(cmd *c) {
 }
 
 uint32_t infoCallback(cmd *c) {
-    serialDevice->print("Bruce v");
     serialDevice->println(BRUCE_VERSION);
     serialDevice->println(GIT_COMMIT_HASH);
     serialDevice->print("SDK: ");
@@ -132,10 +132,65 @@ uint32_t infoCallback(cmd *c) {
     return true;
 }
 
+// `help <command>`: one command's usage, so a serial terminal (or an AI) can ask
+// for exactly what it needs instead of scrolling the full list.
+static bool printCommandHelp(const String &topicRaw) {
+    String t = topicRaw;
+    t.trim();
+    t.toLowerCase();
+    if (t == "move" || t == "press" || t == "file" || t == "log" || t == "js" || t == "livepatch" ||
+        t == "liveboot" || t == "ui") {
+        if (t == "move") {
+            serialDevice->println("move <direction>            - move the highlight; prints the new screen");
+            serialDevice->println("  directions: up down left right prev next nextpage prevpage");
+            serialDevice->println("  example: move down");
+        } else if (t == "press") {
+            serialDevice->println("press <key>                 - press a key; prints the new screen");
+            serialDevice->println("  keys: ok select enter back esc up down left right");
+            serialDevice->println("  example: press ok");
+        } else if (t == "file") {
+            serialDevice->println("file read <filename>        - print a file");
+            serialDevice->println("file write <filename> <data>- write data to a file (spaces allowed)");
+            serialDevice->println("file list [dir]             - list a directory (defaults to cwd)");
+            serialDevice->println("file delete <filename>      - delete a file");
+            serialDevice->println("file stat <filename>        - show size");
+            serialDevice->println("  example: file write /BruceJS/hello.js print('hi')");
+        } else if (t == "log") {
+            serialDevice->println("log show                    - dump the error ring buffer");
+            serialDevice->println("log clear                   - empty the error ring buffer");
+            serialDevice->println("log on|off                  - stream new errors live");
+        } else if (t == "js") {
+            serialDevice->println("js run <script>             - run a JavaScript file");
+            serialDevice->println("js stop                     - stop the running script");
+            serialDevice->println("js run_from_buffer <size>   - run code streamed from the host");
+        } else if (t == "livepatch") {
+            serialDevice->println("livepatch apply <module> <code> - write + reload a JS module now");
+            serialDevice->println("livepatch reload <module>   - re-run a stored module");
+            serialDevice->println("livepatch list              - list stored modules");
+            serialDevice->println("livepatch status            - report state");
+        } else if (t == "liveboot") {
+            serialDevice->println("liveboot enable <script.js> - run a script at boot");
+            serialDevice->println("liveboot disable            - stop running a script at boot");
+            serialDevice->println("liveboot status             - report state");
+        } else if (t == "ui") {
+            serialDevice->println("ui [up|down|select|back]    - live UI navigation + screen readback");
+            serialDevice->println("ui select <n> / ui watch on|off");
+        }
+        return true;
+    }
+    return false;
+}
+
 uint32_t helpCallback(cmd *c) {
-    serialDevice->print("Bruce v");
-    serialDevice->print(BRUCE_VERSION);
-    serialDevice->print("\nThese shell commands are defined internally.\n");
+    Command cmd(c);
+    String topic = cmd.getArgument(0).getValue();
+    topic.trim();
+    if (topic.length() > 0) {
+        if (printCommandHelp(topic)) return true;
+        serialDevice->println("help: no detailed help for '" + topic + "' - showing the command list");
+    }
+    serialDevice->println(BRUCE_VERSION);
+    serialDevice->print("These shell commands are defined internally.\n");
 
     serialDevice->println("\nWiFi Commands:");
     serialDevice->println("  wifi off (Disconnects Wifi)");
@@ -214,6 +269,15 @@ uint32_t helpCallback(cmd *c) {
     serialDevice->println("  errors [clear] / log on|off - Error ring buffer, optional live streaming.");
     serialDevice->println("  proc / sys              - Task list and detailed system information.");
     serialDevice->println("  mem                     - Heap/DMA/PSRAM report; tells you if a radio can still init.");
+    serialDevice->println("  ui [up|down|select|back] - Live UI navigation + screen readback (no reboot).");
+    serialDevice->println("  move up|down|left|right - Simple UI movement; prints the new screen.");
+    serialDevice->println("  press ok|back|up|down   - Simple key press; prints the new screen.");
+    serialDevice->println("  file read|write|list|delete|stat <name> [data] - Simple file operations.");
+    serialDevice->println("  js run <script> / js stop - Run or stop a JavaScript script.");
+    serialDevice->println("  log show|clear          - Dump or empty the error ring buffer.");
+    serialDevice->println("  livepatch apply|reload|list|status - Change the JS layer live, no reflash.");
+    serialDevice->println("  liveboot enable|disable|status - Run a script automatically at boot.");
+    serialDevice->println("  help <command>          - Usage for one command (e.g. help file).");
 
     serialDevice->println("\nSettings:");
     serialDevice->println("  settings                - View all the current settings.");
@@ -225,10 +289,13 @@ uint32_t helpCallback(cmd *c) {
 }
 
 void optionsList() {
+    // Report the menu on screen, which may be built from a local vector that
+    // shadows the global `options` (loopOptions publishes it to activeOptions).
+    std::vector<Option> &opts = activeMenuOptions();
     int i = 0;
     Serial.println("\nActual Menu: " + menuOptionLabel);
     Serial.println("Options available: ");
-    for (auto opt : options) {
+    for (auto opt : opts) {
         String txt = (opt.hovered ? ">" : " ") + String(i) + " - " + opt.label;
         Serial.println(txt);
         i++;
@@ -307,15 +374,14 @@ uint32_t optionsCallback(cmd *c) {
     // int opt = arg.getValue().startsWith("-") ? -1 : arg.getValue().toInt();
     int opt = arg.getValue().toInt();
 
-    if (opt >= 0 && opt < options.size()) {
+    std::vector<Option> &opts = activeMenuOptions();
+    if (opt >= 0 && opt < opts.size()) {
         // wakeUpScreen(); // Do not wakeup screen if it is dimmed and using Remote control
         forceMenuOption = opt;
-        serialDevice->printf(
-            "Selected option %d: %s\n", forceMenuOption, options[forceMenuOption].label.c_str()
-        );
+        serialDevice->printf("Selected option %d: %s\n", forceMenuOption, opts[forceMenuOption].label.c_str());
         vTaskDelay(30 / portTICK_PERIOD_MS);
         optionsList();
-    } else if (options.size() > 0) {
+    } else if (opts.size() > 0) {
         optionsList();
     } else serialDevice->println("No options Available");
     return true;
@@ -454,7 +520,8 @@ void createUtilCommands(SimpleCLI *cli) {
     cli->addCommand("i2c", i2cCallback);
     cli->addCommand("free", freeCallback);
     cli->addCommand("info,!,device_info", infoCallback);
-    cli->addCommand("help,?,halp", helpCallback);
+    Command help = cli->addCommand("help,?,halp", helpCallback);
+    help.addPosArg("topic", "");
     cli->addCommand("optionsJSON", optionsJsonCallback);
     Command display = cli->addCommand("display", displayCallback);
     display.addPosArg("option", "dump");

@@ -6,6 +6,7 @@
 #include "core/ram_profile.h"
 #include "core/settings.h"
 #include "core/utils.h"
+#include "core/wifi/webInterface.h"
 #include "core/wifi/wifi_mac.h"
 #include "esp_wifi.h"
 #include "modules/ble/ble_common.h"
@@ -15,6 +16,37 @@
 
 static TaskHandle_t timezoneTaskHandle = NULL;
 static bool wifiTransitioning = false;
+
+// Wi-Fi and BLE share the same DMA-capable internal DRAM, and this board does
+// not have enough of it for both at once. When a Wi-Fi bring-up is refused for
+// lack of a contiguous block, BLE is almost always the reason; give its memory
+// back and retry once before showing the "Low RAM" error. This is what lets
+// NetCut and the other Wi-Fi tools run after a BLE feature in the same boot
+// instead of failing on RAM until the next reboot. stopBLEStack() is a no-op
+// when BLE is not up, so it is safe to call unconditionally here.
+bool wifiEnsureRadioMem() {
+    if (radioHasMemForWifi()) return true;
+    Serial.printf(
+        "[RAM] Low memory for WiFi (free internal %u, DMA block %u), releasing BLE...\n",
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+        (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA)
+    );
+    // BLE is the usual reason the contiguous DMA block is gone, but on this
+    // board the Web UI's ports and any stale capture/promiscuous session also
+    // hold it. Free all three before giving up: this is what lets the scripted
+    // interception path arm while a BLE feature was used earlier in the boot.
+    stopBLEStack();
+    cleanlyStopWebUiForWiFiFeature();
+    vTaskDelay(150 / portTICK_PERIOD_MS);
+    if (radioHasMemForWifi()) return true;
+
+    // Last resort: a promiscuous capture left running pins driver RX buffers.
+    // Stopping it is safe here (the caller is about to bring Wi-Fi up anyway).
+    esp_wifi_set_promiscuous(false);
+    esp_wifi_set_promiscuous_rx_cb(NULL);
+    vTaskDelay(120 / portTICK_PERIOD_MS);
+    return radioHasMemForWifi();
+}
 
 esp_err_t wifiRawTx(wifi_interface_t ifx, const void *frame, int len, uint8_t retries) {
     esp_err_t err = esp_wifi_80211_tx(ifx, frame, len, false);
@@ -193,7 +225,7 @@ bool wifiConnectMenu(wifi_mode_t mode) {
 
         case WIFI_STA: { // station mode
             int nets;
-            if (!radioHasMemForWifi()) {
+            if (!wifiEnsureRadioMem()) {
                 displayError("Low RAM: free BLE/SD first", true);
                 return false;
             }
@@ -299,7 +331,7 @@ void wifiConnectTask(void *pvParameters) {
     // No-PSRAM guard: don't bring Wi-Fi up if the contiguous DMA block is too
     // small (e.g. BLE already active) — the scan would half-init the driver and
     // crash on teardown. Silent bail: this is a background auto-connect task.
-    if (!radioHasMemForWifi()) {
+    if (!wifiEnsureRadioMem()) {
         vTaskDelete(NULL);
         return;
     }
@@ -354,7 +386,7 @@ bool wifiConnecttoKnownNet(void) {
     }
 
     // No-PSRAM guard: refuse before the scan brings Wi-Fi up in low memory.
-    if (!radioHasMemForWifi()) {
+    if (!wifiEnsureRadioMem()) {
         displayError("Low RAM: free BLE/SD first", true);
         return false;
     }

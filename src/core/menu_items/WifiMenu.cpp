@@ -1,5 +1,6 @@
 #include "WifiMenu.h"
 #include "core/display.h"
+#include "core/packet_view.h"
 #include "core/settings.h"
 #include "core/utils.h"
 #include "core/wifi/webInterface.h"
@@ -73,6 +74,7 @@ void WifiMenu::optionsMenu() {
     options.push_back({"TelNET", telnet_setup});
     options.push_back({"SSH", lambdaHelper(ssh_setup, String(""))});
     options.push_back({"Sniffer", sniffer_setup});
+    options.push_back({"Packet Monitor", []() { packetMonitor(PKT_SRC_WIFI); }});
     options.push_back({"Channel Analyzer", channel_analyzer_setup});
     options.push_back({"Jam Detect", jam_detect_setup});
     options.push_back({"Scan Hosts", [=]() {

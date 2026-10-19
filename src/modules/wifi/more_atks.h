@@ -97,12 +97,22 @@ MoreAtkResult more_disassoc_attack(
 // Menu entry points
 // ---------------------------------------------------------------------------
 
-/// Flood submenu, added to the WiFi > Wifi Atks menu.
-void moreAtkMenu();
+// Flood attack entry points. They are menu entries of the main WiFi > Wifi Atks
+// menu (the old nested "More Attacks" page was removed), so each one paints its
+// own status/result frame and runs for the standard menu duration.
+void moreAuthFloodMenu();
+void moreProbeFloodMenu();
+void moreEapolStartMenu();
 
-/// Per-target submenu (EAPOL logoff, channel switch, bad message, auth attack,
-/// disassociation), reached from the target list.
-void moreTargetAtkMenu(const String &tssid, const String &mac, uint8_t channel);
+// Per-target attacks, reached directly from the Target Attacks menu (the old
+// nested "More Attacks" page was removed). Each one paints its own status and
+// result frame and runs for the standard menu duration, exactly like the other
+// Target Attacks entries.
+void moreTargetEapolLogoff(const String &tssid, const String &mac, uint8_t channel);
+void moreTargetChannelSwitch(const String &tssid, const String &mac, uint8_t channel);
+void moreTargetBadMessage(const String &tssid, const String &mac, uint8_t channel);
+void moreTargetAuthAttack(const String &tssid, const String &mac, uint8_t channel);
+void moreTargetDisassoc(const String &tssid, const String &mac, uint8_t channel);
 
 // ---------------------------------------------------------------------------
 // Helpers used by the console commands and the menu

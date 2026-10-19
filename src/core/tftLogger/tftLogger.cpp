@@ -80,9 +80,14 @@ void tft_logger::setLogging(bool _log) {
 };
 void tft_logger::asyncSerialTaskFunc(void *pv) {
     tft_logger *logger = static_cast<tft_logger *>(pv);
+    // This task owns the queue it was started with. A fast stop/start can
+    // replace `asyncSerialQueue` while this task is still winding down, so all
+    // use of it below goes through `myQueue`, never through the member.
+    QueueHandle_t myQueue = logger->asyncSerialQueue;
     tftLog item;
-    while (logger->async_serial || uxQueueMessagesWaiting(logger->asyncSerialQueue) > 0) {
-        if (xQueueReceive(logger->asyncSerialQueue, &item, pdMS_TO_TICKS(100))) {
+    while (logger->async_serial ||
+           (logger->asyncSerialQueue == myQueue && myQueue && uxQueueMessagesWaiting(myQueue) > 0)) {
+        if (xQueueReceive(myQueue, &item, pdMS_TO_TICKS(100))) {
             uint8_t *entry = item.data;
             uint8_t fn = entry[2];
             if (fn == DRAWIMAGE) {
@@ -108,15 +113,22 @@ void tft_logger::asyncSerialTaskFunc(void *pv) {
         }
     }
     logger->asyncSerialTask = NULL;
-    if (logger->asyncSerialQueue) {
-        vQueueDelete(logger->asyncSerialQueue);
+    // Only delete the queue if it is still ours. Deleting a replacement that a
+    // new startAsyncSerial() just created left the new task with a NULL handle
+    // -> assert in uxQueueMessagesWaiting (queue.c:2310) and a reboot.
+    if (myQueue && logger->asyncSerialQueue == myQueue) {
         logger->asyncSerialQueue = NULL;
+        vQueueDelete(myQueue);
     }
     vTaskDelete(NULL);
 }
 
 void tft_logger::startAsyncSerial() {
     if (async_serial) return;
+    // A previous task may still be draining and tearing down its queue. Wait for
+    // it to finish (bounded) before creating a new one, so it cannot delete the
+    // new queue out from under the new task.
+    for (int i = 0; i < 50 && asyncSerialTask != NULL; i++) vTaskDelay(pdMS_TO_TICKS(10));
     async_serial = true;
     setLogging(true);
     asyncSerialQueue = xQueueCreate(MAX_LOG_ENTRIES, sizeof(tftLog));
@@ -129,7 +141,9 @@ void tft_logger::stopAsyncSerial() {
     if (!async_serial) return;
     async_serial = false;
     setLogging(false);
-    // task will exit on its own and clear handle
+    // Let the task drain and exit itself (it deletes its own queue and clears
+    // the handle) before we return, so an immediate start cannot race it.
+    for (int i = 0; i < 50 && asyncSerialTask != NULL; i++) vTaskDelay(pdMS_TO_TICKS(10));
 }
 void tft_logger::getTftInfo() {
     uint8_t buffer[16];

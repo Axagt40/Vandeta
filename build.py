@@ -34,10 +34,10 @@ boot_bin = build_dir / "bootloader.bin"
 part_bin = build_dir / "partitions.bin"
 app_bin  = build_dir / "firmware.bin"
 
-out_bin  = proj_dir / f"Bruce-{pioenv}.bin"
-# Public release name for the modded distribution. The same merged image is also
-# written here so release tooling and humans agree on a single, stable path.
-release_bin = proj_dir / "Bruce-modded.bin"
+out_bin  = proj_dir / f"vandeta-{pioenv}.bin"
+# Public release name for the reskinned distribution. The same merged image is
+# also written here so release tooling and humans agree on a single, stable path.
+release_bin = proj_dir / "vandeta.bin"
 
 # Esptool from PlatformIO + Python executable
 esptool_pkg = senv.PioPlatform().get_package_dir("tool-esptoolpy")

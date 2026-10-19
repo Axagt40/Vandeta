@@ -7,6 +7,7 @@
 #include "core/display.h"
 #include "core/main_menu.h"
 #include "core/mykeyboard.h"
+#include "core/radio_mem.h"
 #include "core/sd_functions.h"
 #include "core/utils.h"
 #include "core/wifi/webInterface.h"
@@ -15,6 +16,7 @@
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "evil_portal.h"
+#include "modules/ble/ble_common.h"
 #include "more_atks.h"
 #include "karma_attack.h"
 #include "sniffer.h"
@@ -248,15 +250,24 @@ void wifi_atk_menu() {
     checkHeap("Wifi menu start");
 
     bool scanAtks = false;
+    // Single flat attack menu. Everything that used to hide behind the nested
+    // "More Attacks" page (Auth Flood, Probe Request, EAPOL Attack) lives here
+    // now. The duplicate Beacon Flood entry that page carried was dropped -
+    // "Beacon SPAM" below is the original, still functional beacon-spam engine.
+    // Target-based attacks stay in WiFi > Target Atks (unchanged).
     options = {
-        {"Target Atks",     [&]() { scanAtks = true; }     },
+        {"Target Atks",     [&]() { scanAtks = true; }        },
 #ifndef LITE_VERSION
-        {"Karma Attack",    [=]() { karma_setup(); }       },
+        {"Karma Attack",    [=]() { karma_setup(); }          },
 #endif
-        {"Beacon SPAM",     [=]() { beaconAttack(); }      },
-        {"Deauth Flood",    [=]() { deauthFloodAttack(); } },
-        {"Enhanced Deauth", [=]() { enhancedDeauthMenu(); }},
-        {"More Attacks",    [=]() { moreAtkMenu(); }       },
+        {"Beacon SPAM",     [=]() { beaconAttack(); }         },
+        {"Deauth Flood",    [=]() { deauthFloodAttack(); }    },
+        {"Enhanced Deauth", [=]() { enhancedDeauthMenu(); }   },
+#ifndef LITE_VERSION
+        {"Auth Flood",      [=]() { moreAuthFloodMenu(); }    },
+        {"Probe Request",   [=]() { moreProbeFloodMenu(); }   },
+        {"EAPOL Attack",    [=]() { moreEapolStartMenu(); }   },
+#endif
     };
     addOptionToMainMenu();
     loopOptions(options);
@@ -642,16 +653,25 @@ void capture_handshake(const String &tssid, const String &mac, uint8_t channel) 
 
 void target_atk_menu(const String &tssid, const String &mac, uint8_t channel) {
 AGAIN:
+    // Every target attack lives here in one page. The old nested "More Attacks"
+    // submenu was removed and its five attacks (EAPOL Logoff, Channel Switch,
+    // Bad Message, Authentication Attack, Disassociation Attack) are now rows of
+    // this menu, so nothing hides one level down. The menu style is unchanged:
+    // the same loopOptions rendering and the same "Main Menu" footer.
     options = {
-        {"Information",         [=]() { wifi_atk_info(tssid, mac, channel); }      },
-        {"Deauth",              [=]() { target_atk(tssid, mac, channel); }         },
+        {"Information",           [=]() { wifi_atk_info(tssid, mac, channel); }             },
+        {"Deauth",                [=]() { target_atk(tssid, mac, channel); }                },
 #ifndef LITE_VERSION
-        {"Capture Handshake",   [=]() { capture_handshake(tssid, mac, channel); }  },
+        {"Capture Handshake",     [=]() { capture_handshake(tssid, mac, channel); }         },
+        {"EAPOL Logoff",          [=]() { moreTargetEapolLogoff(tssid, mac, channel); }     },
+        {"Channel Switch",        [=]() { moreTargetChannelSwitch(tssid, mac, channel); }   },
+        {"Bad Message",           [=]() { moreTargetBadMessage(tssid, mac, channel); }      },
+        {"Authentication Attack", [=]() { moreTargetAuthAttack(tssid, mac, channel); }     },
+        {"Disassociation Attack", [=]() { moreTargetDisassoc(tssid, mac, channel); }       },
 #endif
-        {"More Attacks",        [=]() { moreTargetAtkMenu(tssid, mac, channel); } },
-        {"Clone Portal",        [=]() { EvilPortal(tssid, channel, false, false); }},
-        {"Deauth+Clone",        [=]() { EvilPortal(tssid, channel, true, false); } },
-        {"Deauth+Clone+Verify", [=]() { EvilPortal(tssid, channel, true, true); }  },
+        {"Clone Portal",          [=]() { EvilPortal(tssid, channel, false, false); }      },
+        {"Deauth+Clone",          [=]() { EvilPortal(tssid, channel, true, false); }       },
+        {"Deauth+Clone+Verify",   [=]() { EvilPortal(tssid, channel, true, true); }        },
     };
     addOptionToMainMenu();
 
@@ -1614,6 +1634,18 @@ WifiPortalStats wifi_portal_run(const WifiPortalConfig &cfg) {
     cleanlyStopWebUiForWiFiFeature();
     wifi_raw_cleanup();
     wifi_complete_cleanup();
+
+    // The twin needs AP mode plus an HTTP server and a DNS server, and BLE on
+    // this board holds the DMA block that makes those fail. Release it, then
+    // refuse cleanly if the radio still cannot come up - this is what turns the
+    // "evil twin" crash into an error message a script can report.
+    stopBLEStack();
+    vTaskDelay(120 / portTICK_PERIOD_MS);
+    if (radioLargestDmaBlock() < RADIO_WIFI_MIN_DMA_BLOCK) {
+        stats.error = "not enough DMA memory for the portal AP";
+        wifi_complete_cleanup(false);
+        return stats;
+    }
 
     IPAddress gateway;
     if (!gateway.fromString(cfg.gateway.length() > 0 ? cfg.gateway : bruceConfig.evilPortalGatewayIp)) {

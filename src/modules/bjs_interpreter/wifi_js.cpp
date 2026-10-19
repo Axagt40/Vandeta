@@ -50,6 +50,14 @@ JSValue native_wifiConnect(JSContext *ctx, JSValue *this_val, int argc, JSValue 
     bool r = false;
     Serial.println(String("Connecting to: ") + (ssid ? ssid : ""));
 
+    // A script is a tight-memory place to bring Wi-Fi up, and BLE / the Web UI
+    // may be holding the contiguous DMA block. Release them first; if the radio
+    // still cannot fit, say so instead of crashing inside WiFi.begin().
+    if (!wifiEnsureRadioMem()) {
+        Serial.println("[RAM] not enough DMA memory for script WiFi connect");
+        return JS_NewBool(false);
+    }
+
     WiFi.mode(WIFI_MODE_STA);
     if (argc > 2 && JS_IsString(ctx, argv[2])) {
         JSCStringBuf psb;
@@ -79,6 +87,13 @@ JSValue native_wifiConnect(JSContext *ctx, JSValue *this_val, int argc, JSValue 
 }
 
 JSValue native_wifiScan(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    if (!wifiEnsureRadioMem()) {
+        Serial.println("[RAM] not enough DMA memory for script WiFi scan");
+        JSGCRef empty_ref;
+        JSValue *empty = JS_PushGCRef(ctx, &empty_ref);
+        *empty = JS_NewArray(ctx, 0);
+        return JS_PopGCRef(ctx, &empty_ref);
+    }
     WiFi.mode(WIFI_MODE_STA);
     int nets = WiFi.scanNetworks();
 

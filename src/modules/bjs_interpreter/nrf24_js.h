@@ -32,6 +32,9 @@ JSValue native_nrf24LoadSignal(JSContext *ctx, JSValue *this_val, int argc, JSVa
 JSValue native_nrf24AnalyzeSignal(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue native_nrf24SetFrequencyRange(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue native_nrf24DetectMultiFreqSignals(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue native_nrf24CaptureChannels(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue native_nrf24SetProfile(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue native_nrf24GetProfile(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 }
 
 #endif

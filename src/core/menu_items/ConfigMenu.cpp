@@ -175,7 +175,7 @@ void ConfigMenu::systemMenu() {
             {"Hide/Show Apps",                                                      [this]() { mainMenu.hideAppsMenu(); }},
             {"Clock",                                                               [this]() { setClock(); }             },
             {String("Keyboard Language: ") + bruceConfig.keyboardLang,              [this]() { setKeyboardLanguage(); }  },
-            {String("Developer Options: ") + (bruceConfig.usbDebug ? "ON" : "OFF"), [this]() { usbDebugMenu(); }        },
+            {"Developer Options",                                                       [this]() { usbDebugMenu(); }        },
             {"Advanced",                                                            [this]() { advancedMenu(); }         },
             {"Back",                                                                []() {}                              },
         };
@@ -300,14 +300,15 @@ void ConfigMenu::devMenu() {
 void ConfigMenu::usbDebugMenu() {
     while (true) {
         std::vector<Option> localOptions = {
-            {String("Developer Options: ") + (bruceConfig.usbDebug ? "ON" : "OFF"),
+            {String("USB Debugging: ") + (bruceConfig.usbDebug ? "ON" : "OFF"),
              [this]() {
-                 bruceConfig.setUsbDebug(bruceConfig.usbDebug ? 0 : 1);
-                 if (bruceConfig.usbDebug) {
-                     // Announce the new console surface right away; the
-                     // setting itself is already persisted by setUsbDebug().
-                     UsbDebug::begin();
-                 }
+                 // Single master switch for the whole developer console. It does
+                 // exactly what the old "Developer Options" toggle did (enable
+                 // the debug verb set, the log hook and the framed protocol),
+                 // so there is no second toggle to keep in sync.
+                 bool on = !bruceConfig.usbDebug;
+                 bruceConfig.setUsbDebug(on ? 1 : 0);
+                 if (on) UsbDebug::begin();
              }                                                    },
             {String("Developer Mode: ") + (bruceConfig.usbDebugDevMode ? "ON" : "OFF"),
              [this]() {

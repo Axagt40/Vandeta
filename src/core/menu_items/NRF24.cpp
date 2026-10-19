@@ -1,5 +1,6 @@
 #include "NRF24.h"
 #include "core/display.h"
+#include "core/packet_view.h"
 #include "core/utils.h"
 #include "modules/NRF24/nrf_capture.h"
 #include "modules/NRF24/nrf_common.h"
@@ -20,6 +21,7 @@ void NRF24Menu::optionsMenu() {
         #endif
         options.push_back({"NRF Jammer", nrf_jammer});
         options.push_back({"Raw Capture", nrfRawCaptureMenu});
+        options.push_back({"Packet Monitor", []() { packetMonitor(PKT_SRC_NRF24); }});
 
 #if defined(ARDUINO_M5STICK_C_PLUS) || defined(ARDUINO_M5STICK_C_PLUS2)
         options.push_back({"Config pins", [this]() { configMenu(); }});
