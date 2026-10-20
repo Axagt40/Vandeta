@@ -98,10 +98,26 @@ static void drawMenuPath(int index, int total, const char *fallbackTitle) {
         counterW = (int)strlen(buf) * FP * LW + 8;
     }
     int maxW = tftWidth - 24 - counterW;
+    // Shorten the breadcrumb until it fits. The old version prefixed ".." to
+    // `path.substring(sep)`, which for a path that ALREADY starts with ".. > "
+    // produced the same string again - an infinite loop inside the draw pass.
+    // The main loop never came back, so the previous screen stayed frozen and
+    // SELECT/scroll did nothing: that is what "the USB Footprint menu does not
+    // work" was (the path Config > System Config > Advanced > BadUSB Settings is
+    // the first one wide enough to trigger it). Every branch below is strictly
+    // shorter, and there is a hard guard besides.
     while ((int)(path.length() * FP * LW) > maxW && path.length() > 4) {
         int sep = path.indexOf(" > ");
-        if (sep >= 0) path = ".." + path.substring(sep); // drop the oldest crumb
-        else path.remove(path.length() - 1, 1);           // no separators: trim the tail
+        String next;
+        if (sep >= 0) {
+            // Drop the oldest crumb (and its separator) entirely.
+            next = path.substring(sep + 3);
+            if (next.length() >= 3 && next.indexOf(" > ") < 0) next = ".. " + next;
+        } else {
+            next = path.substring(0, path.length() - 1); // no separators: trim the tail
+        }
+        if (next.length() >= path.length()) break; // never spin on the same string
+        path = next;
     }
     tft.setTextSize(FP);
     tft.fillRect(6, 30, tftWidth - 12, FP * LH + 2, bruceConfig.bgColor);
@@ -679,9 +695,11 @@ int loopOptionsImpl(
         if (exit) break;
         if (menuType == MENU_TYPE_MAIN) {
             checkReboot();
-            if (devModeCounter >= 5 && !bruceConfig.devMode) {
+            if (devModeCounter >= 5 && !bruceConfig.usbDebug) {
+                // The hidden wrap gesture now arms the single developer switch
+                // (console + speed profile), not the removed Config > Dev Mode page.
                 bruceConfig.setDevMode(true);
-                displayInfo("Dev Mode Enabled", true);
+                displayInfo("Developer Mode Enabled", true);
             }
             if (millis() - _clock_bat_timer > 30000) {
                 _clock_bat_timer = millis();
@@ -860,11 +878,33 @@ int loopOptionsImpl(
 ** Dependencia: prog_handler =>>    0 - Flash, 1 - LittleFS
 ***************************************************************************************/
 void progressHandler(int progress, size_t total, const String &message) {
-    int barWidth = map(progress, 0, total, 0, tftWidth - 40);
-    if (barWidth < 3) {
-        tft.fillRect(6, 27, tftWidth - 12, tftHeight - 33, bruceConfig.bgColor);
-        tft.drawRect(18, tftHeight - 47, tftWidth - 36, 17, bruceConfig.priColor);
+    // The message used to be drawn only while the bar was still narrower than 3
+    // px, which is progress 0-3 on a short run and still under 1% on a long one:
+    // the Universal Remote sweep prints its counter in `message`, so a 295-code
+    // sweep froze on "4/295" while the bar kept moving (DISCOVERIES 66).
+    // Draw the label whenever it actually changes instead; the message is stable
+    // for file transfers and RFID writes, so those keep the old, cheap path.
+    static String lastMessage;
+    static size_t lastTotal = 0;
+
+    if (total == 0) total = 1; // map() divides by its input range
+    int barWidth = map(progress, 0, (int)total, 0, tftWidth - 40);
+    if (barWidth < 0) barWidth = 0;
+    if (barWidth > tftWidth - 40) barWidth = tftWidth - 40;
+
+    if (message != lastMessage || total != lastTotal) {
+        lastMessage = message;
+        lastTotal = total;
+        // Clear the old label first: the new one can be shorter ("9/42" after
+        // "10/42") and displayRedStripe only paints its own box.
+        tft.fillRect(8, tftHeight / 2 - 16, tftWidth - 16, 32, bruceConfig.bgColor);
         displayRedStripe(message, TFT_WHITE, bruceConfig.priColor);
+    }
+    if (barWidth < 3) {
+        // Start of a new run: wipe the bar area so an older, longer bar cannot
+        // show through, then redraw the frame.
+        tft.fillRect(18, tftHeight - 47, tftWidth - 36, 19, bruceConfig.bgColor);
+        tft.drawRect(18, tftHeight - 47, tftWidth - 36, 17, bruceConfig.priColor);
     }
     tft.fillRect(20, tftHeight - 45, barWidth, 13, bruceConfig.priColor);
 }

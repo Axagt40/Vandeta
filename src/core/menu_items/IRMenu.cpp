@@ -13,7 +13,9 @@ void IRMenu::optionsMenu() {
     bool prevPower = M5.Power.getExtOutput();
     M5.Power.setExtOutput(true); // ENABLE 5V OUTPUT
 #endif
-    options = {
+    // Local vector: Custom IR / Universal Remote open their own menus, and a
+    // child that rewrote the shared global `options` broke this parent's loop.
+    std::vector<Option> localOptions = {
         {"TV-B-Gone", StartTvBGone              },
         {"Universal Remote", irUniversalMenu     }, // TV / AC / Fans / Audio / Projectors / LEDs
         {"Custom IR", otherIRcodes              },
@@ -23,26 +25,29 @@ void IRMenu::optionsMenu() {
 #endif
         {"Config",    [this]() { configMenu(); }},
     };
-    addOptionToMainMenu();
+    // addOptionToMainMenu() appends to the global vector, so do its two steps
+    // here instead (clear the flag, then the real back-to-menu action).
+    returnToMenu = false;
+    localOptions.push_back({"Main Menu", backToMenu});
 
     String txt = "Infrared";
     txt += " Tx: " + String(bruceConfigPins.irTx) + " Rx: " + String(bruceConfigPins.irRx) +
            " Rpts: " + String(bruceConfigPins.irTxRepeats);
-    loopOptions(options, MENU_TYPE_SUBMENU, txt.c_str());
+    loopOptions(localOptions, MENU_TYPE_SUBMENU, txt.c_str());
 #if defined(ARDUINO_M5STICK_S3)
     M5.Power.setExtOutput(prevPower);
 #endif
 }
 
 void IRMenu::configMenu() {
-    options = {
+    std::vector<Option> localOptions = {
         {"Ir TX Pin", lambdaHelper(gsetIrTxPin, true)},
         {"Ir RX Pin", lambdaHelper(gsetIrRxPin, true)},
         {"Ir TX Repeats", setIrTxRepeats},
         {"Back", [this]() { optionsMenu(); }},
     };
 
-    loopOptions(options, MENU_TYPE_SUBMENU, "IR Config");
+    loopOptions(localOptions, MENU_TYPE_SUBMENU, "IR Config");
 }
 
 void IRMenu::drawIcon(float scale) {

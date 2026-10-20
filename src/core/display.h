@@ -193,14 +193,31 @@ inline std::vector<Option> &activeMenuOptions() {
 
 // Published to `activeOptions` for the whole time the menu is on screen (nested
 // menus restore their parent's vector on exit) and cleared when it closes.
+//
+// NESTED-MENU GUARD: most of this firmware builds its rows in the shared global
+// `options` and an option handler very often opens a child menu that rebuilds
+// that same vector. That used to destroy the parent's Option objects while the
+// parent's own loop was still iterating them, so the child menu closed again
+// immediately and the parent redrew from stale entries - reported as "USB
+// Footprint does nothing", "Bad BLE does not open" and the AC remote pages
+// flashing back. When the vector being opened is already the active menu's
+// vector, give the child its own copy; the parent keeps its rows and redraws
+// correctly when the child returns. Non-nested menus are not copied at all.
 inline int loopOptions(
-    std::vector<Option> &options, uint8_t menuType, const char *subText, int index = 0,
+    std::vector<Option> &menuOptions, uint8_t menuType, const char *subText, int index = 0,
     bool interpreter = false
 ) {
+    std::vector<Option> childCopy;
+    std::vector<Option> *use = &menuOptions;
+    if (activeOptions == &menuOptions) {
+        childCopy = menuOptions;
+        use = &childCopy;
+    }
+
     std::vector<Option> *prev = activeOptions;
-    activeOptions = &options;
+    activeOptions = use;
     navPushMenu(subText, menuType);
-    int ret = loopOptionsImpl(options, menuType, subText, index, interpreter);
+    int ret = loopOptionsImpl(*use, menuType, subText, index, interpreter);
     navPopMenu();
     activeOptions = prev;
     return ret;

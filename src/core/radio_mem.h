@@ -20,6 +20,11 @@
 #include "core/wifi/wifi_common.h"
 #include <WiFi.h>
 
+// Declared here instead of including core/wifi/webInterface.h: that header has
+// no include guard, so pulling it in from the shared pin-out header tripped
+// "default argument given twice" in every TU that also includes it directly.
+void cleanlyStopWebUiForWiFiFeature();
+
 // Largest contiguous DMA-capable internal block, in bytes. This is the number
 // that gates Wi-Fi/BLE controller init.
 static inline size_t radioLargestDmaBlock() { return heap_caps_get_largest_free_block(MALLOC_CAP_DMA); }
@@ -48,6 +53,15 @@ constexpr size_t RADIO_BLE_MIN_DMA_BLOCK = 15 * 1024;
 // unwinds a failed controller bring-up and returns its RAM instead of leaking
 // it. Guessing high here would refuse BLE where it would have worked.
 constexpr size_t RADIO_BLE_MIN_INTERNAL_FREE = 60 * 1024;
+
+// Below the comfortable figure but above this one the bring-up is still worth
+// ATTEMPTING. Several apps in a row (SubGHz wardriver + a script + a scan) can
+// leave ~45-55 KB free internal, where the old guard refused before even trying
+// and the user only saw "Low RAM: free WiFi/SD first" for a board that would
+// have worked. A failed attempt is cheap: bleInit() unwinds the controller and
+// gives the RAM back (DISCOVERIES 64), so the floor only stops the clearly
+// hopeless case.
+constexpr size_t RADIO_BLE_MIN_INTERNAL_TRY = 38 * 1024;
 
 static inline size_t radioFreeInternal() { return heap_caps_get_free_size(MALLOC_CAP_INTERNAL); }
 
@@ -93,7 +107,24 @@ static inline bool radioHasMemForBle() {
         );
         return true;
     }
-    
+
+    // The web UI keeps its own socket buffers alive even when WiFi is off.
+    cleanlyStopWebUiForWiFiFeature();
+    delay(60);
+
+    // Last chance: one contiguous DMA block is what the controller needs for
+    // its largest single allocation. With that present, try anyway - bleInit()
+    // returns the memory if the host side does not fit.
+    if (radioFreeInternal() >= RADIO_BLE_MIN_INTERNAL_TRY &&
+        radioLargestDmaBlock() >= RADIO_BLE_MIN_DMA_BLOCK) {
+        Serial.printf(
+            "[RAM] tight but attempting BLE: free internal %u, DMA block %u\n",
+            (unsigned)radioFreeInternal(),
+            (unsigned)radioLargestDmaBlock()
+        );
+        return true;
+    }
+
     // Still not enough - return false, caller shows error
     Serial.printf(
         "[RAM] Still not enough for BLE: free internal %u (need %u), DMA block %u (need %u)\n",

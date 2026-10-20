@@ -1,5 +1,6 @@
 #include "rf_utils.h"
 #include "core/bus_HAL.h"
+#include "protocols/rf_config.h" // RF_DBG
 #include "core/sd_functions.h"
 #include "core/settings.h"
 #include <globals.h>
@@ -587,7 +588,7 @@ struct RfCodes selectRecentRfMenu() {
 
     return selected_code;
 }
-rmt_channel_handle_t setup_rf_rx() {
+rmt_channel_handle_t setup_rf_rx(int memSymbols) {
     if (!initRfModule("rx", bruceConfigPins.rfFreq)) return NULL;
     setMHZ(bruceConfigPins.rfFreq);
     rmt_rx_channel_config_t rx_channel_cfg = {};
@@ -596,7 +597,7 @@ rmt_channel_handle_t setup_rf_rx() {
                                   : gpio_num_t(bruceConfigPins.rfRx); // GPIO number
     rx_channel_cfg.clk_src = RMT_CLK_SRC_DEFAULT;                     // select source clock
     rx_channel_cfg.resolution_hz = 1 * 1000 * 1000; // 1 MHz tick resolution, i.e., 1 tick = 1 µs
-    rx_channel_cfg.mem_block_symbols = 64;          // memory block size, 64 * 4 = 256 Bytes
+    rx_channel_cfg.mem_block_symbols = memSymbols;  // buffer size, memSymbols * 4 Bytes
     rx_channel_cfg.intr_priority = 0;               // interrupt priority
     rx_channel_cfg.flags.invert_in = false;         // do not invert input signal
     rx_channel_cfg.flags.with_dma = false;          // do not need DMA backend
@@ -604,7 +605,14 @@ rmt_channel_handle_t setup_rf_rx() {
     rx_channel_cfg.flags.io_loop_back = false; // do not loop back output to input
 
     rmt_channel_handle_t rx_channel = NULL;
-    ESP_ERROR_CHECK(rmt_new_rx_channel(&rx_channel_cfg, &rx_channel));
+    esp_err_t err = rmt_new_rx_channel(&rx_channel_cfg, &rx_channel);
+    if (err != ESP_OK) {
+        // A caller that asked for a buffer larger than the RMT pool can provide
+        // gets NULL and decides (the wardriver falls back to the default size);
+        // the old ESP_ERROR_CHECK() aborted the whole firmware instead.
+        RF_DBG("rmt_new_rx_channel(%d symbols) failed: %d", memSymbols, (int)err);
+        return NULL;
+    }
     return rx_channel;
 }
 

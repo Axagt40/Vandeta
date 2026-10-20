@@ -1359,7 +1359,10 @@ void setNetworkCredsMenu() {
 **  One place that owns every BadUSB setting: the USB identity it presents,
 **  the keyboard layout (moved here from the old Advanced > BadUSB/BLE menu),
 **  the HID device type, attack timing and payload storage. Reachable from
-**  Others > BadUSB & HID > "BadUSB Config" and from Advanced > BadUSB/BLE.
+**  Others > BadUSB & HID > "BadUSB Settings" and from Advanced > BadUSB/BLE.
+**  BadBLE (the BLE HID keyboard) reads the same identity fields, the layout and
+**  the timing from here; "Apple/BLE Patch" switches its advertising and pairing
+**  to the profile iOS/macOS insist on.
 **********************************************************************/
 
 static String badUsbHidTypeName(int t) {
@@ -1414,6 +1417,19 @@ static void badUsbExportCustomLayout() {
 **  Function: badUsbFootprintMenu
 **  USB identity (VID/PID/manufacturer/product/serial) presented by BadUSB
 **********************************************************************/
+/// Tell the user when the identity will actually be seen by a host: TinyUSB
+/// reads the descriptors once, at USB.begin(), so after the first BadUSB run the
+/// board has to restart before a new VID/PID/manufacturer is advertised.
+static void badUsbFootprintSaved() {
+#if defined(USB_as_HID)
+    displayInfo(
+        badusbUsbNeedsReset() ? "Saved - reset to apply to USB" : "Saved - used at next BadUSB start", true
+    );
+#else
+    displayInfo("Saved", true);
+#endif
+}
+
 static void badUsbFootprintMenu() {
     while (true) {
         char vidStr[8];
@@ -1421,36 +1437,52 @@ static void badUsbFootprintMenu() {
         snprintf(vidStr, sizeof(vidStr), "%04X", bruceConfig.badUSBBLEVid);
         snprintf(pidStr, sizeof(pidStr), "%04X", bruceConfig.badUSBBLEPid);
 
-        // Built into the global `options` rather than a local vector: the
-        // serial `option <n>` verb reads that vector to drive a menu headlessly.
-        options.clear();
-        options = {
+        // Local vector, never the shared global `options`: this menu is opened
+        // from inside the parent menu's loopOptions(), and replacing that very
+        // vector mid-iteration made the child menu close again immediately (the
+        // "USB Footprint does nothing" report). loopOptions() publishes whatever
+        // vector it is given through activeMenuOptions(), so `ui select <n>`
+        // still drives it headlessly.
+        std::vector<Option> localOptions = {
             {String("Vendor ID: 0x") + vidStr,
              [vidStr]() {
                  String v = hex_keyboard(String(vidStr), 4, "Vendor ID (hex):");
-                 if (v.length() > 0 && v != "\x1B")
+                 if (v.length() > 0 && v != "\x1B") {
                      bruceConfig.setBadUSBBLEVid((uint16_t)strtol(v.c_str(), nullptr, 16));
+                     badUsbFootprintSaved();
+                 }
              }                                                                               },
             {String("Product ID: 0x") + pidStr,
              [pidStr]() {
                  String v = hex_keyboard(String(pidStr), 4, "Product ID (hex):");
-                 if (v.length() > 0 && v != "\x1B")
+                 if (v.length() > 0 && v != "\x1B") {
                      bruceConfig.setBadUSBBLEPid((uint16_t)strtol(v.c_str(), nullptr, 16));
+                     badUsbFootprintSaved();
+                 }
              }                                                                               },
             {String("Manufacturer: ") + bruceConfig.badUSBBLEManufacturer,
              []() {
                  String v = keyboard(bruceConfig.badUSBBLEManufacturer, 32, "Manufacturer:");
-                 if (v.length() > 0 && v != "\x1B") bruceConfig.setBadUSBBLEManufacturer(v);
+                 if (v.length() > 0 && v != "\x1B") {
+                     bruceConfig.setBadUSBBLEManufacturer(v);
+                     badUsbFootprintSaved();
+                 }
              }                                                                               },
             {String("Product: ") + bruceConfig.badUSBBLEProduct,
              []() {
                  String v = keyboard(bruceConfig.badUSBBLEProduct, 32, "Product name:");
-                 if (v.length() > 0 && v != "\x1B") bruceConfig.setBadUSBBLEProduct(v);
+                 if (v.length() > 0 && v != "\x1B") {
+                     bruceConfig.setBadUSBBLEProduct(v);
+                     badUsbFootprintSaved();
+                 }
              }                                                                               },
             {String("Serial: ") + (bruceConfig.badUSBBLESerial.length() ? bruceConfig.badUSBBLESerial : "(default)"),
              []() {
                  String v = keyboard(bruceConfig.badUSBBLESerial, 24, "Serial (empty=default):");
-                 if (v != "\x1B") bruceConfig.setBadUSBBLESerial(v);
+                 if (v != "\x1B") {
+                     bruceConfig.setBadUSBBLESerial(v);
+                     badUsbFootprintSaved();
+                 }
              }                                                                               },
             {"Reset USB identity",
              []() {
@@ -1459,13 +1491,13 @@ static void badUsbFootprintMenu() {
                  bruceConfig.setBadUSBBLEManufacturer("Bruce");
                  bruceConfig.setBadUSBBLEProduct("Bruce BadUSB");
                  bruceConfig.setBadUSBBLESerial("");
-                 displayInfo("USB identity reset", true);
+                 badUsbFootprintSaved();
              }                                                                               },
             {"Back", []() {}},
         };
 
-        int sel = loopOptions(options, MENU_TYPE_SUBMENU, "USB Footprint");
-        if (sel == -1 || sel == (int)options.size() - 1) return;
+        int sel = loopOptions(localOptions, MENU_TYPE_SUBMENU, "USB Footprint");
+        if (sel == -1 || sel == (int)localOptions.size() - 1) return;
     }
 }
 
@@ -1477,17 +1509,17 @@ static void badUsbFootprintMenu() {
 static void badUsbKeyboardLayoutMenu() {
     while (true) {
         int cur = bruceConfig.badUSBBLEKeyboardLayout;
-        options.clear();
+        std::vector<Option> localOptions;
         for (int i = 0; i < badusbLayoutCount(); i++) {
             int idx = i;
-            options.push_back(Option(badusbLayoutName(i), [idx]() {
+            localOptions.push_back(Option(badusbLayoutName(i), [idx]() {
                 bruceConfig.setBadUSBBLEKeyboardLayout(idx);
             }, idx == cur));
         }
-        options.push_back({"Import custom layout",         badUsbImportCustomLayout      });
-        options.push_back({"Create custom from current",   badUsbCreateCustomFromCurrent });
-        options.push_back({"Export custom layout",         badUsbExportCustomLayout      });
-        options.push_back({String("Layout file: ") + bruceConfig.badUSBBLECustomLayoutFile,
+        localOptions.push_back({"Import custom layout",       badUsbImportCustomLayout      });
+        localOptions.push_back({"Create custom from current", badUsbCreateCustomFromCurrent });
+        localOptions.push_back({"Export custom layout",       badUsbExportCustomLayout      });
+        localOptions.push_back({String("Layout file: ") + bruceConfig.badUSBBLECustomLayoutFile,
             []() {
                 String v = keyboard(bruceConfig.badUSBBLECustomLayoutFile, 64, "Custom layout file:");
                 if (v.length() > 0 && v != "\x1B") {
@@ -1495,10 +1527,10 @@ static void badUsbKeyboardLayoutMenu() {
                     bruceConfig.setBadUSBBLECustomLayoutFile(v);
                 }
             }});
-        options.push_back({"Back", []() {}});
+        localOptions.push_back({"Back", []() {}});
 
-        int sel = loopOptions(options, MENU_TYPE_SUBMENU, "Keyboard Layout");
-        if (sel == -1 || sel == (int)options.size() - 1) return;
+        int sel = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Keyboard Layout");
+        if (sel == -1 || sel == (int)localOptions.size() - 1) return;
     }
 }
 
@@ -1508,14 +1540,13 @@ static void badUsbKeyboardLayoutMenu() {
 **********************************************************************/
 static void badUsbHidTypeMenu() {
     int cur = bruceConfig.badUSBBLEHidType;
-    options.clear();
-    options = {
+    std::vector<Option> localOptions = {
         {"Keyboard",        []() { bruceConfig.setBadUSBBLEHidType(0); }, cur == 0},
         {"Keyboard + Mouse", []() { bruceConfig.setBadUSBBLEHidType(1); }, cur == 1},
         {"Mouse only",      []() { bruceConfig.setBadUSBBLEHidType(2); }, cur == 2},
         {"Back",            []() {}}                                         ,
     };
-    loopOptions(options, MENU_TYPE_SUBMENU, "HID Device Type");
+    loopOptions(localOptions, MENU_TYPE_SUBMENU, "HID Device Type");
 }
 
 /*********************************************************************
@@ -1524,8 +1555,7 @@ static void badUsbHidTypeMenu() {
 **********************************************************************/
 static void badUsbTimingMenu() {
     while (true) {
-        options.clear();
-        options = {
+        std::vector<Option> localOptions = {
             {String("Key Delay: ") + String(bruceConfig.badUSBBLEKeyDelay) + " ms",
              []() {
                  String v = num_keyboard(String(bruceConfig.badUSBBLEKeyDelay), 3, "Key Delay (ms):");
@@ -1558,8 +1588,8 @@ static void badUsbTimingMenu() {
             {"Back", []() {}},
         };
 
-        int sel = loopOptions(options, MENU_TYPE_SUBMENU, "BadUSB Timing");
-        if (sel == -1 || sel == (int)options.size() - 1) return;
+        int sel = loopOptions(localOptions, MENU_TYPE_SUBMENU, "BadUSB Timing");
+        if (sel == -1 || sel == (int)localOptions.size() - 1) return;
     }
 }
 
@@ -1569,8 +1599,7 @@ static void badUsbTimingMenu() {
 **********************************************************************/
 static void badUsbPayloadMenu() {
     while (true) {
-        options.clear();
-        options = {
+        std::vector<Option> localOptions = {
             {"Run payload...",
              []() {
                  FS *fs = setupSdCard() ? (FS *)&SD : (FS *)&LittleFS;
@@ -1611,8 +1640,8 @@ static void badUsbPayloadMenu() {
             {"Back", []() {}},
         };
 
-        int sel = loopOptions(options, MENU_TYPE_SUBMENU, "Payload Manager");
-        if (sel == -1 || sel == (int)options.size() - 1) return;
+        int sel = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Payload Manager");
+        if (sel == -1 || sel == (int)localOptions.size() - 1) return;
     }
 }
 
@@ -1622,8 +1651,7 @@ static void badUsbPayloadMenu() {
 **********************************************************************/
 static void badUsbConfigMenu() {
     while (true) {
-        options.clear();
-        options = {
+        std::vector<Option> localOptions = {
             {"USB Footprint",
              []() { badUsbFootprintMenu(); }},
             {String("Keyboard Layout: ") + badusbLayoutName(bruceConfig.badUSBBLEKeyboardLayout),
@@ -1636,11 +1664,26 @@ static void badUsbConfigMenu() {
              []() { badUsbPayloadMenu(); }},
             {String("Show Output: ") + (bruceConfig.badUSBBLEShowOutput ? "ON" : "OFF"),
              []() { bruceConfig.setBadUSBBLEShowOutput(!bruceConfig.badUSBBLEShowOutput); }},
+            {String("Apple/BLE Patch: ") + (bruceConfig.badUSBBLEApplePatch ? "ON" : "OFF"),
+             []() {
+                 bruceConfig.setBadUSBBLEApplePatch(!bruceConfig.badUSBBLEApplePatch);
+                 displayInfo(
+                     bruceConfig.badUSBBLEApplePatch
+                         ? "BadBLE: Apple HID profile (reconnect)"
+                         : "BadBLE: standard HID profile",
+                     true
+                 );
+             }                                                                                  },
+            {String("BadBLE Name: ") + bruceConfigPins.bleName,
+             []() {
+                 String v = keyboard(bruceConfigPins.bleName, 30, "BadBLE device name:");
+                 if (v.length() > 0 && v != "\x1B") bruceConfigPins.setBleName(v);
+             }                                                                                  },
             {"Back", []() {}},
         };
 
-        int sel = loopOptions(options, MENU_TYPE_SUBMENU, "BadUSB Config");
-        if (sel == -1 || sel == (int)options.size() - 1) return;
+        int sel = loopOptions(localOptions, MENU_TYPE_SUBMENU, "BadUSB Settings");
+        if (sel == -1 || sel == (int)localOptions.size() - 1) return;
     }
 }
 

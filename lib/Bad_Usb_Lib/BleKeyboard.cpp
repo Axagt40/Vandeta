@@ -171,11 +171,27 @@ void BleKeyboard::begin(const uint8_t *layout, uint16_t showAs) {
     outputKeyboard->setCallbacks(new CharacteristicCallbacks(this));
     inputMediaKeys->setCallbacks(new CharacteristicCallbacks(this));
 
-    hid->setManufacturer("Espressif");
-    hid->setPnp(0x02, vid, pid, version);
+    // Was hardcoded to "Espressif", which threw away the manufacturer string the
+    // caller (and now BadUSB Settings > USB Footprint) passes in.
+    hid->setManufacturer(deviceManufacturer.length() ? deviceManufacturer.c_str() : "Espressif");
+    if (_applePatch) {
+        // Apple's HID acceptance path looks at the PnP ID of the Device
+        // Information service; the vendor ids here are Apple's own so macOS and
+        // iOS treat the link as a real keyboard.
+        hid->setPnp(0x02, 0x05AC, 0x820A, 0x0210);
+    } else {
+        hid->setPnp(0x02, vid, pid, version);
+    }
     hid->setHidInfo(0x00, 0x01);
 
-    BLEDevice::setSecurityAuth(true, true, true);
+    // NimBLE's signature is setSecurityAuth(bonding, mitm, sc) - the arguments
+    // were previously passed as (false, true, true), i.e. MITM ON with no IO
+    // capability. A HID keyboard has no display and no keypad to enter a
+    // passkey with, so iOS/macOS aborted the pairing and dropped the link: the
+    // Apple patch made the keyboard LESS connectable instead of more. Both
+    // paths now use Just Works + LE Secure Connections + bonding.
+    BLEDevice::setSecurityAuth(true, false, true); // bonding, no MITM, SC
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
 
     hid->setReportMap((uint8_t *)_hidReportDescriptor, sizeof(_hidReportDescriptor));
     hid->startServices();
@@ -183,17 +199,37 @@ void BleKeyboard::begin(const uint8_t *layout, uint16_t showAs) {
     advertising->setAppearance(appearance);
     if (_randUUID) {
         advertising->addServiceUUID(BLEUUID((uint16_t)(ESP.getEfuseMac() & 0xFFFF)));
+        advertising->enableScanResponse(false);
     } else {
-
-        advertising->addServiceUUID(hid->getHidService()->getUUID());
+        // The HID service UUID has to be part of the advertisement PAYLOAD,
+        // not just registered with the advertising object. NimBLE's
+        // setAdvertisementData() replaces the whole payload, so the old
+        // addServiceUUID() + setAdvertisementData() pair silently threw the
+        // 0x1812 UUID away and hosts had no way to see a keyboard (macOS/iOS
+        // filter such a peripheral out; that read as "the Apple patch does not
+        // work"). Build one payload that holds flags + UUID + appearance, and
+        // put the name in it when it still fits, otherwise in the scan
+        // response (flags 3 + UUID 4 + appearance 4 = 11 of the 31 bytes).
         NimBLEAdvertisementData advertisementData = NimBLEAdvertisementData();
-        advertisementData.setFlags(BLE_HS_ADV_F_DISC_GEN);
-        advertisementData.setName(deviceName.c_str());
+        advertisementData.setFlags(BLE_HS_ADV_F_DISC_GEN); // always ORs BREDR_UNSUP
+        advertisementData.addServiceUUID(hid->getHidService()->getUUID());
         advertisementData.setAppearance(appearance);
+
+        bool nameInAdv = advertisementData.setName(deviceName.c_str());
         advertising->setAdvertisementData(advertisementData);
+
+        // iOS reads the name from the scan response anyway; a long name (the
+        // check above fails instead of truncating) has to go there.
+        if (!nameInAdv || _applePatch) {
+            advertising->enableScanResponse(true);
+            NimBLEAdvertisementData scanResponse = NimBLEAdvertisementData();
+            scanResponse.setName(deviceName.c_str());
+            advertising->setScanResponseData(scanResponse);
+        } else {
+            advertising->enableScanResponse(false);
+        }
     }
 
-    advertising->enableScanResponse(false);
     advertising->start();
     hid->setBatteryLevel(batteryLevel);
 }

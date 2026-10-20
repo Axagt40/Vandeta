@@ -86,6 +86,11 @@ JsonDocument BruceConfig::toJson() const {
     setting["badUSBBLEPayloadDir"] = badUSBBLEPayloadDir;
     setting["badUSBBLEDefaultPayload"] = badUSBBLEDefaultPayload;
     setting["badUSBBLECustomLayoutFile"] = badUSBBLECustomLayoutFile;
+    setting["badUSBBLEApplePatch"] = badUSBBLEApplePatch;
+    setting["rfWardriverFreq"] = rfWardriverFreq;
+    setting["rfWardriverDedupeSec"] = rfWardriverDedupeSec;
+    setting["rfWardriverMinPulses"] = rfWardriverMinPulses;
+    setting["rfWardriverHop"] = rfWardriverHop;
 
     JsonArray dm = setting["disabledMenus"].to<JsonArray>();
     for (int i = 0; i < disabledMenus.size(); i++) { dm.add(disabledMenus[i]); }
@@ -493,6 +498,32 @@ void BruceConfig::fromFile(bool checkFS) {
     } else {
         count++;
     }
+    if (!setting["badUSBBLEApplePatch"].isNull()) {
+        badUSBBLEApplePatch = setting["badUSBBLEApplePatch"].as<bool>();
+    } else {
+        count++;
+    }
+    if (!setting["rfWardriverFreq"].isNull()) {
+        rfWardriverFreq = setting["rfWardriverFreq"].as<float>();
+        if (rfWardriverFreq < 280.0f || rfWardriverFreq > 928.0f) rfWardriverFreq = 433.92f;
+    } else {
+        count++;
+    }
+    if (!setting["rfWardriverDedupeSec"].isNull()) {
+        rfWardriverDedupeSec = (uint16_t)setting["rfWardriverDedupeSec"].as<int>();
+    } else {
+        count++;
+    }
+    if (!setting["rfWardriverMinPulses"].isNull()) {
+        rfWardriverMinPulses = (uint8_t)setting["rfWardriverMinPulses"].as<int>();
+    } else {
+        count++;
+    }
+    if (!setting["rfWardriverHop"].isNull()) {
+        rfWardriverHop = setting["rfWardriverHop"].as<bool>();
+    } else {
+        count++;
+    }
 
     if (!setting["disabledMenus"].isNull()) {
         disabledMenus.clear();
@@ -579,6 +610,12 @@ void BruceConfig::validateConfig() {
     validateUsbDebugValue();
     validateUsbDebugDevModeValue();
     validateUsbDebugBinaryValue();
+    // One switch, three keys: `usbDebug` is the source of truth and the two
+    // legacy aliases follow it. A /bruce.conf written by an older build can
+    // still carry devMode=1 with usbDebug=0 (the old hidden page) or a
+    // half-applied pair, and that used to surface as two toggles disagreeing.
+    usbDebugDevMode = usbDebug;
+    devMode = usbDebug;
     validateColorInverted();
     validateBadUSBBLEKeyboardLayout();
     validateBadUSBBLEKeyDelay();
@@ -863,9 +900,14 @@ void BruceConfig::setWdgwarsApiKey(String value) {
 }
 
 void BruceConfig::setDevMode(int value) {
+    // Kept as a compatibility alias: "devMode" was the hidden flag the Config
+    // menu used to reveal its own Dev Mode page. That page is gone - the one
+    // developer switch now lives in Config > System Config > Developer Options -
+    // so setting this flag arms the same thing the visible toggle does.
     devMode = value;
     validateDevModeValue();
-    saveFile();
+    setUsbDebug(devMode);
+    setUsbDebugDevMode(devMode);
 }
 
 void BruceConfig::validateDevModeValue() {
@@ -1005,6 +1047,35 @@ void BruceConfig::setBadUSBBLEDefaultPayload(const String &value) {
 
 void BruceConfig::setBadUSBBLECustomLayoutFile(const String &value) {
     badUSBBLECustomLayoutFile = value;
+    saveFile();
+}
+
+void BruceConfig::setBadUSBBLEApplePatch(bool value) {
+    badUSBBLEApplePatch = value;
+    saveFile();
+}
+
+void BruceConfig::setWardriverFreq(float value) {
+    if (value < 280.0f || value > 928.0f) value = 433.92f;
+    rfWardriverFreq = value;
+    saveFile();
+}
+
+void BruceConfig::setWardriverDedupeSec(uint16_t value) {
+    if (value > 600) value = 600;
+    rfWardriverDedupeSec = value;
+    saveFile();
+}
+
+void BruceConfig::setWardriverMinPulses(uint8_t value) {
+    if (value < 4) value = 4;
+    if (value > 64) value = 64;
+    rfWardriverMinPulses = value;
+    saveFile();
+}
+
+void BruceConfig::setWardriverHop(bool value) {
+    rfWardriverHop = value;
     saveFile();
 }
 void BruceConfig::ensureMifareKeysLoaded() {

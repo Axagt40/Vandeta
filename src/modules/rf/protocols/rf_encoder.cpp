@@ -54,10 +54,12 @@ bool rf_tx_durations(const std::vector<int> &durations) {
     std::vector<rmt_symbol_word_t> syms;
     syms.reserve(durations.size() / 2 + 1);
     bool pendingLow = false;
+    uint64_t totalUs = 0;
     for (int d : durations) {
         if (d == 0) continue;
         uint8_t level = (d > 0) ? 1 : 0;
         long dur = (d > 0) ? d : -d;
+        totalUs += (uint64_t)dur;
         rf_push_half(syms, pendingLow, level, dur);
     }
     if (syms.empty()) return false;
@@ -102,7 +104,13 @@ bool rf_tx_durations(const std::vector<int> &durations) {
             RF_DBG("rmt_transmit failed: %d", (int)err);
             ok = false;
         } else {
-            err = rmt_tx_wait_all_done(ch, 2000); // up to 2s for the frame to flush
+            // Wait for as long as the train actually takes, not a fixed 2 s: a
+            // raw wardriver capture can hold several repeated presses, and
+            // timing out mid-transmission dropped the channel while the radio
+            // was still keyed.
+            int waitMs = (int)(totalUs / 1000ULL) + 500;
+            if (waitMs > 30000) waitMs = 30000;
+            err = rmt_tx_wait_all_done(ch, waitMs);
             if (err != ESP_OK) {
                 RF_DBG("rmt_tx_wait_all_done failed: %d", (int)err);
                 ok = false;
@@ -122,9 +130,14 @@ bool rf_encode_protocol(
 ) {
     out.clear();
     if (def == nullptr || bits == 0) return false;
-    int base = (te > 0) ? te : def->te;
-    if (base <= 0) return false;
+    // A `.sub` file supplies `bits` and `repeat`; without the clamp a corrupt
+    // entry (Bit: 200) would shift a 64-bit key by >= 64 (undefined) and could
+    // ask for an allocation of gigabytes on a board with ~80 KB free.
+    if (bits > 64) bits = 64;
     if (repeat < 1) repeat = 1;
+    if (repeat > 100) repeat = 100;
+    int base = (te > 0) ? te : def->te;
+    if (base <= 0 || base > 100000) return false;
 
     // Faithful port of the classic OOK send: for each repetition emit the data bits
     // MSB first, then the sync/pilot pulse. Each pulse is firstLevel for

@@ -191,6 +191,10 @@ void sendParsedCodeBatch(const IrCode *const *codes, uint8_t count, IRsend &irse
             rawData[(k * 2) + 1] = powerCode->times[ti + 1] * 10;
         }
 
+        // A TV-B-Gone sweep is minutes long and presses no key, so the idle
+        // timer used to dim and blank the panel in the middle of it. Keep it
+        // alive while frames are going out (same fix as the AC sweep).
+        previousMillis = millis();
         if (i % 5 == 0) {
             progressHandler(i, count);
         }
@@ -199,6 +203,7 @@ void sendParsedCodeBatch(const IrCode *const *codes, uint8_t count, IRsend &irse
         unlock_ir_tx();
         bitsleft_r = 0;
         delay_ten_us(20500);
+        previousMillis = millis();
 
         if (irSweepPauseIfRequested()) {
             returnToMenu = true;
@@ -227,6 +232,7 @@ void sendRawCodeBatch(const RawIrCode *const *codes, uint8_t count, IRsend &irse
             rawData[(k * 2) + 1] = (uint16_t)(rawPowerCode->times[(k * 2) + 1]);
         }
 
+        previousMillis = millis();
         if (i % 5 == 0) {
             progressHandler(i, count);
         }
@@ -235,6 +241,7 @@ void sendRawCodeBatch(const RawIrCode *const *codes, uint8_t count, IRsend &irse
         unlock_ir_tx();
         bitsleft_r = 0;
         delay_ten_us(20500);
+        previousMillis = millis();
 
         if (irSweepPauseIfRequested()) {
             returnToMenu = true;

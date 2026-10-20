@@ -44,21 +44,23 @@ void addToRecentCodes(IRCode *ircode) {
 void selectRecentIrMenu() {
     // show menu with filenames
     checkIrTxPin();
-    options = {};
+    // Local vector: this menu is opened from the option of another menu, and
+    // rewriting the shared global `options` there corrupted the parent's loop.
+    std::vector<Option> localOptions;
     bool exit = false;
     IRCode *selected_code = NULL;
     for (auto recent_ircode : recent_ircodes) {
         if (recent_ircode->filepath == "") continue; // not inited
         // else
-        options.push_back({recent_ircode->filepath.c_str(), [recent_ircode, &selected_code]() {
-                               selected_code = recent_ircode;
-                           }});
+        localOptions.push_back({recent_ircode->filepath.c_str(), [recent_ircode, &selected_code]() {
+                                    selected_code = recent_ircode;
+                                }});
     }
-    options.push_back({"Main Menu", [&]() { exit = true; }});
+    localOptions.push_back({"Main Menu", [&]() { exit = true; }});
 
     int idx = 0;
     while (1) {
-        idx = loopOptions(options, idx);
+        idx = loopOptions(localOptions, idx);
         if (selected_code != NULL) {
             sendIRCommand(selected_code);
             selected_code = NULL;
@@ -66,7 +68,7 @@ void selectRecentIrMenu() {
         if (check(EscPress) || exit) break;
         vTaskDelay(pdMS_TO_TICKS(1));
     }
-    options.clear();
+    localOptions.clear();
 
     return;
 }
@@ -612,20 +614,37 @@ void sendRawCommand(uint16_t frequency, String rawData, bool hideDefaultUI) {
     irsend.begin();
     if (!hideDefaultUI) { displayTextLine("Sending.."); }
 
-    uint16_t dataBufferSize = 1;
-    for (int i = 0; i < rawData.length(); i++) {
+    // A raw IR string from a file is untrusted: size_t (not uint16_t, which
+    // wrapped and turned a large string into a heap overflow) and a hard cap
+    // that matches what the sender can actually stream.
+    const size_t kMaxIrRawValues = 1024;
+    size_t dataBufferSize = 1;
+    for (unsigned int i = 0; i < rawData.length(); i++) {
         if (rawData[i] == ' ') dataBufferSize += 1;
     }
-    uint16_t *dataBuffer = (uint16_t *)malloc((dataBufferSize) * sizeof(uint16_t));
+    if (dataBufferSize > kMaxIrRawValues) {
+        if (!hideDefaultUI) displayError("IR raw too long", true);
+        Serial.printf("IR raw: %u values, limit is %u\n", (unsigned)dataBufferSize, (unsigned)kMaxIrRawValues);
+        return;
+    }
+    uint16_t *dataBuffer = (uint16_t *)malloc(dataBufferSize * sizeof(uint16_t));
+    if (dataBuffer == nullptr) {
+        if (!hideDefaultUI) displayError("Not enough RAM for IR", true);
+        Serial.println("IR raw: out of memory");
+        return;
+    }
 
-    uint16_t count = 0;
+    size_t count = 0;
     // Parse raw data string
     while (rawData.length() > 0 && count < dataBufferSize) {
         int delimiterIndex = rawData.indexOf(' ');
         if (delimiterIndex == -1) { delimiterIndex = rawData.length(); }
         String dataChunk = rawData.substring(0, delimiterIndex);
         rawData.remove(0, delimiterIndex + 1);
-        dataBuffer[count++] = (dataChunk.toInt());
+        long v = dataChunk.toInt();
+        if (v < 0) v = 0; // a malformed entry must not become a 65 ms mark
+        if (v > 65535L) v = 65535L;
+        dataBuffer[count++] = (uint16_t)v;
     }
 
     Serial.println("Parsing raw data complete.");
@@ -634,11 +653,11 @@ void sendRawCommand(uint16_t frequency, String rawData, bool hideDefaultUI) {
     // Serial.println(dataBuffer[0]);
 
     // Send raw command
-    irsend.sendRaw(dataBuffer, count, frequency);
+    irsend.sendRaw(dataBuffer, (uint16_t)count, frequency);
 
     if (bruceConfigPins.irTxRepeats > 0) {
         for (uint8_t i = 1; i <= bruceConfigPins.irTxRepeats; i++) {
-            irsend.sendRaw(dataBuffer, count, frequency);
+            irsend.sendRaw(dataBuffer, (uint16_t)count, frequency);
         }
     }
 

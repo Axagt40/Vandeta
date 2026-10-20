@@ -21,7 +21,6 @@ private:
     void advancedMenu(void);
     void powerMenu(void);
     void pinsMenu(void);
-    void devMenu(void);
     void usbDebugMenu(void);
 
     // Helper methods for complex operations

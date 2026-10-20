@@ -245,6 +245,15 @@ bool readSubFile(FS *fs, const String &filepath, RfCodes &data) {
 
     if (!fs) return false;
 
+    // These lists describe exactly ONE file. They used to be cleared only at the
+    // end of a successful send, so every read appended to whatever the previous
+    // file (or an Esc-cancelled send) left behind: replaying a second .sub sent
+    // the first file's keys as well, and the lists grew without bound.
+    bitList.clear();
+    bitRawList.clear();
+    keyList.clear();
+    rawDataList.clear();
+
     databaseFile = fs->open(filepath, FILE_READ);
 
     if (!databaseFile) {
@@ -436,31 +445,45 @@ void sendRfCommand(struct RfCodes rfcode, bool hideDefaultUI) {
     }
 
     if (protocol == "RAW") {
-        // count the number of elements of RAW_Data
+        // Count the elements, but never trust a file's line length: the old code
+        // sized the buffer from the text and wrote into it without checking the
+        // allocation, so a long (or corrupt) RAW_Data line could crash the board
+        // on `calloc` returning NULL.
+        const int kMaxRawTimings = 4096;
         int buff_size = 0;
         int index = 0;
-        while (index >= 0) {
+        while (index >= 0 && buff_size <= kMaxRawTimings) {
             index = data.indexOf(' ', index + 1);
             buff_size++;
         }
-        // alloc buffer for transmittimings
-        int *transmittimings =
-            (int *)calloc(sizeof(int), buff_size + 1); // should be smaller the data.length()
-        size_t transmittimings_idx = 0;
+        if (buff_size > kMaxRawTimings) {
+            if (!hideDefaultUI) displayError("RAW line too long", true);
+            Serial.printf("RAW_Data too long (%d values max)\n", kMaxRawTimings);
+            return;
+        }
+        int *transmittimings = (int *)calloc((size_t)buff_size + 1, sizeof(int));
+        if (transmittimings == nullptr) {
+            if (!hideDefaultUI) displayError("Not enough RAM for RAW", true);
+            Serial.println("RAW send: out of memory");
+            return;
+        }
 
         // split data into words, convert to int, and store them in transmittimings
+        size_t transmittimings_idx = 0;
         int startIndex = 0;
         index = 0;
-        for (transmittimings_idx = 0; transmittimings_idx < buff_size; transmittimings_idx++) {
+        for (transmittimings_idx = 0; transmittimings_idx < (size_t)buff_size; transmittimings_idx++) {
             index = data.indexOf(' ', startIndex);
-            if (index == -1) {
-                transmittimings[transmittimings_idx] = data.substring(startIndex).toInt();
-            } else {
-                transmittimings[transmittimings_idx] = data.substring(startIndex, index).toInt();
-            }
+            long v = (index == -1) ? data.substring(startIndex).toInt()
+                                   : data.substring(startIndex, index).toInt();
+            // Clamp: a corrupt line can produce INT_MIN, whose negation is
+            // undefined and used to crash the RMT packer.
+            if (v > 1000000L) v = 1000000L;
+            if (v < -1000000L) v = -1000000L;
+            transmittimings[transmittimings_idx] = (int)v;
             startIndex = index + 1;
         }
-        transmittimings[transmittimings_idx] = 0; // termination
+        transmittimings[buff_size] = 0; // termination
 
         // send rf command
         if (!hideDefaultUI) { displayTextLine("Sending.."); }

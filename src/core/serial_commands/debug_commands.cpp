@@ -53,23 +53,35 @@ static uint32_t usbDebugCallback(cmd *c) {
     action.toLowerCase();
 
     if (action == "on" || action == "1" || action == "enable") {
+        // One switch now covers the console and the speed profile. The two
+        // persisted keys stay together so the UI toggle and this verb cannot
+        // disagree (see ConfigMenu::usbDebugMenu).
         bruceConfig.setUsbDebug(1);
-        serialDevice->println("Developer Options: ON (persisted, active immediately)");
+        bruceConfig.setUsbDebugDevMode(1);
+        UsbDebug::applyDevMode(true);
+        serialDevice->println("Developer Mode: ON (persisted, active immediately)");
         serialDevice->println("verbs: " + String(UsbDebug::verbList()));
         return true;
     }
     if (action == "off" || action == "0" || action == "disable") {
         bruceConfig.setUsbDebug(0);
-        serialDevice->println("Developer Options: OFF");
+        bruceConfig.setUsbDebugDevMode(0);
+        UsbDebug::applyDevMode(false);
+        serialDevice->println("Developer Mode: OFF");
         return true;
     }
     if (action == "dev") {
+        // Alias, not a second switch: the speed profile is part of Developer
+        // Mode now, so `usbdebug dev` drives the same combined flag instead of
+        // leaving the console on and the profile off.
         String v = cmd.getArgument(1).getValue();
         v.trim();
         v.toLowerCase();
         bool on = !(v == "off" || v == "0" || v == "false");
+        bruceConfig.setUsbDebug(on ? 1 : 0);
         bruceConfig.setUsbDebugDevMode(on ? 1 : 0);
         UsbDebug::applyDevMode(on);
+        serialDevice->println(on ? "Developer Mode: ON" : "Developer Mode: OFF");
         return true;
     }
     if (action == "proto") {
@@ -95,8 +107,8 @@ static uint32_t usbDebugCallback(cmd *c) {
     }
 
     // status (default)
-    serialDevice->println("Developer Options: " + String(UsbDebug::enabled() ? "ON" : "OFF"));
-    serialDevice->println("  developer mode : " + String(UsbDebug::devMode() ? "ON" : "OFF"));
+    serialDevice->println("Developer Mode: " + String(UsbDebug::enabled() ? "ON" : "OFF"));
+    serialDevice->println("  speed profile  : " + String(UsbDebug::devMode() ? "ON" : "OFF"));
     serialDevice->println("  protocol       : " + String(UsbDebug::binaryMode() ? "binary" : "text"));
     serialDevice->println("  preferred proto: " + String(bruceConfig.usbDebugBinary ? "binary" : "text"));
     serialDevice->println("  queue          : " + String(UsbDebug::batchBusy() ? "running" : "idle"));

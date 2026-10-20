@@ -4,6 +4,7 @@
 #include "core/sd_functions.h"
 #include "TV-B-Gone.h" // irSweepPauseIfRequested(), lock/unlock_ir_tx()
 #include "custom_ir.h"
+#include "ir_ac.h"
 #include "ir_utils.h" // setup_ir_pin()
 #include <IRutils.h>  // strToDecodeType()
 #include <globals.h>
@@ -93,6 +94,93 @@ bool readRecord(File &f, String &scratch, Signal &s) {
     }
     return true;
 }
+
+// Blockwise name scanner. readRecord() is the right tool while a sweep is
+// transmitting, but indexing a library with it costs a String plus a
+// readStringUntil('\n') for every line - including the ~1.5 KB `data:` lines -
+// which measured 2.8 s for ac.ir and 3.4 s for the 257 KB fans.ir before the
+// button menu could be drawn. This walks the file in 512-byte blocks and only
+// materialises the `name:` values.
+class NameScanner {
+  public:
+    NameScanner(FS *fs, const String &path) {
+        if (fs != nullptr) f = (*fs).open(path, FILE_READ);
+    }
+    ~NameScanner() {
+        if (f) f.close();
+    }
+    bool ok() const { return (bool)f; }
+
+    // Next record name, false at end of file.
+    bool next(String &out) {
+        if (!f || eof) return false;
+        for (;;) {
+            if (eof) return false;
+            if (atLineStart) {
+                if (matchPrefix("name:")) {
+                    out = "";
+                    int c;
+                    while ((c = get()) >= 0 && c != '\n') {
+                        if (c != '\r') out += (char)c;
+                    }
+                    out.trim();
+                    return out.length() > 0;
+                }
+            } else if (get() < 0) {
+                return false;
+            }
+        }
+    }
+
+  private:
+    File f;
+    uint8_t buf[512];
+    size_t len = 0;
+    size_t pos = 0;
+    bool atLineStart = true;
+    // A file that does not end in a newline used to leave the scanner spinning
+    // on "still at a line start" forever, so EOF has to be latched.
+    bool eof = false;
+
+    int get() {
+        if (pos >= len) {
+            if (!f) {
+                eof = true;
+                return -1;
+            }
+            len = f.read(buf, sizeof(buf));
+            pos = 0;
+            if (len == 0) {
+                eof = true;
+                return -1;
+            }
+        }
+        uint8_t c = buf[pos++];
+        atLineStart = (c == '\n');
+        return c;
+    }
+
+    // Called at a line start: consume `prefix` when it matches, otherwise drop
+    // the rest of the line (that is how `type:`, `data:` ... are skipped).
+    bool matchPrefix(const char *prefix) {
+        for (size_t i = 0; prefix[i] != '\0'; i++) {
+            int c = get();
+            if (c < 0) return false;
+            if (c != prefix[i]) {
+                skipLine();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void skipLine() {
+        int c;
+        while ((c = get()) >= 0) {
+            if (c == '\n') return;
+        }
+    }
+};
 
 // `.ir` files store address/command as little-endian byte groups:
 // "1C 01 00 00" is 0x0000011C.
@@ -227,32 +315,36 @@ bool irUniversalAvailable(FS *fs, const char *file) {
     return (*fs).exists(irUniversalPath(file));
 }
 
-std::vector<String> irUniversalButtons(FS *fs, const String &path) {
-    std::vector<String> names;
-    if (fs == nullptr) return names;
+std::vector<IrUniversalButton> irUniversalButtonList(FS *fs, const String &path) {
+    std::vector<IrUniversalButton> out;
+    NameScanner sc(fs, path);
+    if (!sc.ok()) return out;
+    out.reserve(16);
 
-    File f = (*fs).open(path, FILE_READ);
-    if (!f) return names;
-
-    String scratch;
-    Signal s;
-    while (readRecord(f, scratch, s)) {
-        if (!s.usable()) continue;
+    String name;
+    while (sc.next(name)) {
         bool seen = false;
-        for (const String &n : names) {
-            if (n == s.name) {
+        for (IrUniversalButton &b : out) {
+            if (b.name == name) {
+                b.count++;
                 seen = true;
                 break;
             }
         }
-        if (!seen && names.size() < 64) names.push_back(s.name);
+        if (!seen && out.size() < 64) out.push_back({name, 1});
     }
-    f.close();
+    return out;
+}
+
+std::vector<String> irUniversalButtons(FS *fs, const String &path) {
+    std::vector<String> names;
+    for (const IrUniversalButton &b : irUniversalButtonList(fs, path)) names.push_back(b.name);
     return names;
 }
 
 int irUniversalSend(
-    FS *fs, const String &path, const String &button, int maxSends, bool showUI, volatile bool *stop
+    FS *fs, const String &path, const String &button, int maxSends, bool showUI, volatile bool *stop,
+    int totalHint
 ) {
     if (fs == nullptr) return 0;
 
@@ -262,18 +354,21 @@ int irUniversalSend(
         return 0;
     }
 
-    // Count the candidates first, only for the progress bar.
-    int total = 0;
-    {
-        String scratch;
-        Signal s;
-        while (readRecord(f, scratch, s)) {
-            if (s.usable() && s.name == button) total++;
+    // Size the progress bar without a second pass over the library: the button
+    // menu already knows how many codes carry each name. The old code rescanned
+    // the whole file before the first code went out, which is why a sweep felt
+    // like it had not started. Fall back to the blockwise list when no hint is
+    // given (console callers do not have one).
+    int total = totalHint;
+    if (total <= 0) {
+        for (const IrUniversalButton &b : irUniversalButtonList(fs, path)) {
+            if (b.name == button) {
+                total = b.count;
+                break;
+            }
         }
-        f.close();
-        f = (*fs).open(path, FILE_READ);
-        if (!f) return 0;
     }
+    if (total <= 0) total = 1; // keep map() away from a zero range
 
     setup_ir_pin(bruceConfigPins.irTx, OUTPUT);
     init_ir_tx_mutex(); // the same lock TV-B-Gone takes, so sweeps cannot overlap
@@ -287,12 +382,19 @@ int irUniversalSend(
         if (stop != nullptr && *stop) break;
         if (maxSends > 0 && sent >= maxSends) break;
 
+        // An AC sweep is 30+ long frames (585 timings each) and easily runs
+        // past the dimmer timeout, and the sweep itself presses no key - so
+        // checkPowerSaveTime() dimmed and then blanked the panel in the middle
+        // of it. That is the "blank screen when going through the AC signals".
+        // Hold the idle timer off for as long as the sweep is transmitting.
+        previousMillis = millis();
         if (showUI) {
             progressHandler(index, total, button + " " + String(index + 1) + "/" + String(total));
         }
         if (transmit(s)) sent++;
         else skipped++;
         index++;
+        previousMillis = millis();
 
         // Same keys as TV-B-Gone: SEL pauses, ESC cancels. On the console the
         // sweep just runs to the end (or `max`).
@@ -304,6 +406,27 @@ int irUniversalSend(
     if (skipped) Serial.println("ir universal: " + String(skipped) + " codes skipped");
     Serial.println("ir universal: " + String(sent) + "/" + String(total) + " sent for '" + button + "'");
     return sent;
+}
+
+// The button list of one library file (the classic universal-remote sweep).
+static void irUniversalLibraryMenu(FS *fs, const IrUniversalCategory &c) {
+    // One blockwise pass: names *and* their candidate counts, so the sweep can
+    // show "n/total" at once.
+    std::vector<IrUniversalButton> names = irUniversalButtonList(fs, irUniversalPath(c.file));
+    if (names.empty()) {
+        displayError("No codes in " + String(c.label), true);
+        return;
+    }
+    std::vector<Option> buttons;
+    for (const IrUniversalButton &n : names) {
+        String name = n.name;
+        int count = n.count;
+        buttons.push_back({name, [fs, c, name, count]() {
+                               irUniversalSend(fs, irUniversalPath(c.file), name, 0, true, nullptr, count);
+                           }});
+    }
+    buttons.push_back({"Back", []() {}});
+    loopOptions(buttons, MENU_TYPE_SUBMENU, c.label);
 }
 
 void irUniversalMenu() {
@@ -319,25 +442,34 @@ void irUniversalMenu() {
         bool present = irUniversalAvailable(fs, c.file);
         String label = String(c.label) + (present ? "" : " (missing)");
         categories.push_back({label, [fs, c, present]() {
+                                  // Air conditioners are not button remotes: every
+                                  // frame carries power+mode+temp+fan. The AC page
+                                  // therefore also offers per-brand remotes built
+                                  // from IRremoteESP8266's AC classes; the library
+                                  // entry stays for the captured model.
+                                  if (strcmp(c.label, "AC") == 0) {
+                                      std::vector<Option> acPage = {
+                                          {"Brand remotes", []() { irAcMenu(); }},
+                                          {"Library codes",
+                                           [fs, c, present]() {
+                                               if (!present) {
+                                                   displayError(
+                                                       String(c.label) + " library not on the card", true
+                                                   );
+                                                   return;
+                                               }
+                                               irUniversalLibraryMenu(fs, c);
+                                           }                                    },
+                                          {"Back", []() {}},
+                                      };
+                                      loopOptions(acPage, MENU_TYPE_SUBMENU, "AC");
+                                      return;
+                                  }
                                   if (!present) {
                                       displayError(String(c.label) + " library not on the card", true);
                                       return;
                                   }
-                                  std::vector<String> names = irUniversalButtons(fs, irUniversalPath(c.file));
-                                  if (names.empty()) {
-                                      displayError("No codes in " + String(c.label), true);
-                                      return;
-                                  }
-                                  std::vector<Option> buttons;
-                                  for (const String &n : names) {
-                                      buttons.push_back({n, [fs, c, n]() {
-                                                             irUniversalSend(
-                                                                 fs, irUniversalPath(c.file), n, 0, true
-                                                             );
-                                                         }});
-                                  }
-                                  buttons.push_back({"Back", []() {}});
-                                  loopOptions(buttons, MENU_TYPE_SUBMENU, c.label);
+                                  irUniversalLibraryMenu(fs, c);
                               }});
     }
     categories.push_back({"Back", []() {}});

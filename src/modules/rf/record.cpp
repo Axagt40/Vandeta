@@ -330,14 +330,22 @@ void rf_raw_record_create(RawRecording &recorded, bool &returnToMenu) {
             if (rx_size >= 5) valid_signal = true;
             if (valid_signal) {         // ignore codes shorter than 5 items
                 rmt_symbol_word_t *code = (rmt_symbol_word_t *)malloc(rx_size * sizeof(rmt_symbol_word_t));
-
-                // Gap calculation
-                unsigned long long signalDuration = 0;
-                for (size_t i = 0; i < rx_size; i++) {
-                    code[i] = rx_items[i];
-                    signalDuration += rx_items[i].duration0 + rx_items[i].duration1;
+                if (code == nullptr) {
+                    // Out of RAM: drop this burst but keep recording. Without
+                    // this check the copy below dereferenced NULL and the whole
+                    // firmware reset while a recording was running.
+                    Serial.println("[record] out of memory, burst skipped");
+                } else {
+                    // Gap calculation
+                    unsigned long long signalDuration = 0;
+                    for (size_t i = 0; i < rx_size; i++) {
+                        code[i] = rx_items[i];
+                        signalDuration += rx_items[i].duration0 + rx_items[i].duration1;
+                    }
+                    rf_raw_record_accept_capture(
+                        recorded, status, fakeRssiPresent, code, rx_size, signalDuration
+                    );
                 }
-                rf_raw_record_accept_capture(recorded, status, fakeRssiPresent, code, rx_size, signalDuration);
             }
             ESP_ERROR_CHECK(rmt_receive(rx_ch, item, sizeof(item), &receive_config));
             rx_size = 0;

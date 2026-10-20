@@ -2,6 +2,7 @@
 #include "core/sd_functions.h"
 #include "helpers.h"
 #include "modules/ir/custom_ir.h"
+#include "modules/ir/ir_ac.h"
 #include "modules/ir/ir_read.h"
 #include "modules/ir/ir_universal.h"
 #include <ArduinoJson.h>
@@ -260,6 +261,79 @@ uint32_t irUniversalEncodeCallback(cmd *c) {
     return true;
 }
 
+// `ir ac list` / `ir ac send <brand> <mode> <temp> <fan>` - drives the same
+// per-brand AC encoders the Universal Remote > AC > Brand remotes page uses, so
+// every make can be exercised (and its frame measured) without a remote.
+uint32_t irAcListCallback(cmd *c) {
+    for (int i = 0; i < irAcBrandCount(); i++) {
+        serialDevice->println(String(i) + "\t" + irAcBrandName(i));
+    }
+    return true;
+}
+
+uint32_t irAcSendCallback(cmd *c) {
+    Command cmd(c);
+    String brandArg = cmd.getArgument("brand").getValue();
+    String modeArg = cmd.getArgument("mode").getValue();
+    String tempArg = cmd.getArgument("temp").getValue();
+    String fanArg = cmd.getArgument("fan").getValue();
+    brandArg.trim();
+    modeArg.trim();
+    tempArg.trim();
+    fanArg.trim();
+
+    int brand = -1;
+    if (brandArg.length() && isdigit((unsigned char)brandArg[0])) brand = brandArg.toInt();
+    else {
+        for (int i = 0; i < irAcBrandCount(); i++) {
+            if (brandArg.equalsIgnoreCase(irAcBrandName(i))) {
+                brand = i;
+                break;
+            }
+        }
+    }
+    if (brand < 0 || brand >= irAcBrandCount()) {
+        serialDevice->println("unknown brand (ir ac list)");
+        return false;
+    }
+
+    IrAcState st;
+    if (modeArg.equalsIgnoreCase("cool")) st.mode = 0;
+    else if (modeArg.equalsIgnoreCase("heat")) st.mode = 1;
+    else if (modeArg.equalsIgnoreCase("dry")) st.mode = 2;
+    else if (modeArg.equalsIgnoreCase("fan")) st.mode = 3;
+    else if (modeArg.equalsIgnoreCase("auto")) st.mode = 4;
+    else if (modeArg.length()) st.mode = (uint8_t)modeArg.toInt();
+
+    if (tempArg.length()) st.temp = (uint8_t)constrain(tempArg.toInt(), 16, 30);
+
+    if (fanArg.equalsIgnoreCase("auto")) st.fan = 0;
+    else if (fanArg.equalsIgnoreCase("low")) st.fan = 1;
+    else if (fanArg.equalsIgnoreCase("med")) st.fan = 2;
+    else if (fanArg.equalsIgnoreCase("high")) st.fan = 3;
+    else if (fanArg.length()) st.fan = (uint8_t)constrain(fanArg.toInt(), 0, 3);
+
+    if (!irAcSend(brand, st)) {
+        serialDevice->println("encode failed");
+        return false;
+    }
+    serialDevice->println(
+        String("sent ") + irAcBrandName(brand) + " mode=" + String(st.mode) + " temp=" + String(st.temp) +
+        " fan=" + String(st.fan)
+    );
+    return true;
+}
+
+void createIrAcCommands(Command *irCmd) {
+    Command ac = irCmd->addCompositeCmd("ac");
+    ac.addCommand("list", irAcListCallback);
+    Command send = ac.addCommand("send", irAcSendCallback);
+    send.addPosArg("brand");
+    send.addPosArg("mode", "cool");
+    send.addPosArg("temp", "24");
+    send.addPosArg("fan", "auto");
+}
+
 void createIrUniversalCommands(Command *irCmd) {
     Command uni = irCmd->addCompositeCmd("uni");
     uni.addCommand("list", irUniversalListCallback);
@@ -352,6 +426,7 @@ void createIrCommands(SimpleCLI *cli) {
     createIrTxFileCommand(&cmd);
     createIrTxBufferCommand(&cmd);
     createIrUniversalCommands(&cmd);
+    createIrAcCommands(&cmd);
 
     cli->addSingleArgCmd("IRSend", irSendCallback);
 }

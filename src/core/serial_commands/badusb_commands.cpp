@@ -79,7 +79,7 @@ uint32_t badusbBufferCallback(cmd *c) {
 
 // ---------------------------------------------------------------------------
 // BadUSB configuration over the console. These mirror the on-device
-// Others > BadUSB & HID > BadUSB Config menu so a headless session (USB
+// Others > BadUSB & HID > BadUSB Settings menu so a headless session (USB
 // Debugging mode) can set and verify the whole configuration.
 // ---------------------------------------------------------------------------
 
@@ -113,6 +113,8 @@ uint32_t badusbConfigCallback(cmd *c) {
         (bruceConfig.badUSBBLEDefaultPayload.length() ? bruceConfig.badUSBBLEDefaultPayload : String("(none)"))
     );
     serialDevice->println(String("show_output=") + (bruceConfig.badUSBBLEShowOutput ? "1" : "0"));
+    serialDevice->println(String("apple_patch=") + (bruceConfig.badUSBBLEApplePatch ? "1" : "0"));
+    serialDevice->println(String("ble_name=") + bruceConfigPins.bleName);
     return true;
 #else
     return false;
@@ -188,10 +190,14 @@ uint32_t badusbSetCallback(cmd *c) {
         bruceConfig.setBadUSBBLECustomLayoutFile(value);
     } else if (field == "showoutput") {
         bruceConfig.setBadUSBBLEShowOutput(value == "1" || value.equalsIgnoreCase("on") || value.equalsIgnoreCase("true"));
+    } else if (field == "applepatch") {
+        bruceConfig.setBadUSBBLEApplePatch(value == "1" || value.equalsIgnoreCase("on") || value.equalsIgnoreCase("true"));
+    } else if (field == "blename") {
+        if (value.length()) bruceConfigPins.setBleName(value);
     } else {
         serialDevice->println(
             "fields: vid pid manufacturer product serial hid layout keydelay stringdelay "
-            "payloaddir defaultpayload layoutfile showoutput"
+            "payloaddir defaultpayload layoutfile showoutput applepatch blename"
         );
         return false;
     }

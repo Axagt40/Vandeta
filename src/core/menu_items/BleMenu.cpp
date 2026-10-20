@@ -6,6 +6,7 @@
 #include "modules/ble/ble_common.h"
 #include "modules/ble/ble_ninebot.h"
 #include "modules/ble/ble_capture.h"
+#include "modules/ble/ble_detector.h"
 #include "modules/ble/ble_spam.h"
 #if !defined(LITE_VERSION)
 #include "modules/ble/BLE_Suite.h"
@@ -29,6 +30,7 @@ void BleMenu::optionsMenu() {
 #if !defined(LITE_VERSION)
     options.push_back({"Media Cmds", [=]() { MediaCommands(hid_ble, true); }});
     options.push_back({"BLE Scan", ble_scan});
+    options.push_back({"BLE Detector", bleDetectorRun});
     options.push_back({"iBeacon", [=]() {
                            ibeacon("Bruce", "e4c159a0-8c82-11e6-bdf4-0800200c9a66", 0x004C);
                        }});

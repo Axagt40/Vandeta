@@ -49,7 +49,21 @@ WiFi, no reflash and no extra hardware.
 * **Universal IR remotes.** TV, AC, fans, audio, projectors and LED libraries
   from the Flipper IR database — 2,858 codes on the card. Pick a category, pick a
   button, and it sends the candidates in turn until the device reacts, exactly
-  like the Flipper/Momentum flow, in Vandeta's own menus.
+  like the Flipper/Momentum flow, in Vandeta's own menus. The AC page also has
+  **brand remotes** for twelve makes (Daikin, Gree, Midea, Panasonic, Samsung,
+  Toshiba, TCL, Mitsubishi, Hitachi, Kelvinator, Whirlpool, Coolix): set power,
+  mode, 16-30 °C and fan on screen and exactly that state frame is sent.
+* **SubGHz Wardriver.** Continuous capture of whatever the CC1101 hears: whole
+  bursts (never cut at a buffer seam), silent-noise rejection, a duplicate
+  window, optional 433/315/868/915 hopping, and one `.sub` file per signal under
+  `/bruce/subghz/wardriver`. Afterwards each capture can be replayed verbatim or
+  identified once into a decoded KeeLoq/OOK file.
+* **BLE Detector.** A live table of every advertiser in range — name, address,
+  RSSI and estimated distance, strongest first, with Apple's Continuity
+  types (AirDrop, AirPods, Watch, Find My, ...) decoded instead of shown as
+  `<?>`. Receive-only. It is the newest screen here and still rough: distances
+  are an estimate, rotating addresses can duplicate rows, and it needs free
+  internal RAM (see the 1.1 release notes for the full caveat).
 * **More radio work from JavaScript.** Raw nRF24 capture (including the five
   documented 2.4 GHz LED-controller protocols, channel-lock capture and a repeat
   finder), BLE advertisement capture/replay and a GATT client, plus
@@ -58,7 +72,8 @@ WiFi, no reflash and no extra hardware.
   HTTP interception/modification against WPA2 clients, with a captive-portal
   (evil-twin) engine and a headless, deadline-bounded WiFi attack set.
 * **BadUSB, scriptable.** Layouts, VID/PID, manufacturer/product strings and
-  payloads are settable from the console and from scripts.
+  payloads are settable from the console and from scripts, and the BLE
+  keyboard's `Apple/BLE Patch` makes it appear to iOS and macOS.
 * **A wider JavaScript API** (WiFi inject/capture/portal, BLE, nRF24, IR, Sub-GHz,
   display, storage, dialog, keyboard) with split scripts and background jobs.
 

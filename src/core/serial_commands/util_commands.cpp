@@ -261,8 +261,8 @@ uint32_t helpCallback(cmd *c) {
     serialDevice->println("  ls - Same as storage list");
 
     serialDevice->println("\nDeveloper Options (enable in Config > System Config, or 'usbdebug on'):");
-    serialDevice->println("  usbdebug on|off|status  - Toggle/query the persisted Developer Options mode.");
-    serialDevice->println("  usbdebug dev on|off     - Developer mode (speed over stability).");
+    serialDevice->println("  usbdebug on|off|status  - The one Developer Mode switch (console + speed profile).");
+    serialDevice->println("  usbdebug dev on|off     - Alias for the same switch, kept for old scripts.");
     serialDevice->println("  usbdebug proto text|binary - Switch the serial protocol for this session.");
     serialDevice->println("  cd <path> / pwd         - Move the working directory; other file commands follow it.");
     serialDevice->println("  queue <command>         - Queue a command; 'batch on|run|status|clear' drains it.");

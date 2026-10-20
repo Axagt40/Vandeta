@@ -42,10 +42,6 @@ void ConfigMenu::optionsMenu() {
         }
 #endif
 
-        if (bruceConfig.devMode) {
-            localOptions.push_back({"Dev Mode", [this]() { devMenu(); }});
-        }
-
         localOptions.push_back({"About", showDeviceInfo});
         localOptions.push_back({"Main Menu", []() {}});
 
@@ -265,56 +261,53 @@ void ConfigMenu::powerMenu() {
 }
 
 /*********************************************************************
-**  Function: devMenu
-**  Developer mode menu for advanced hardware configuration
-**********************************************************************/
-void ConfigMenu::devMenu() {
-    while (true) {
-        std::vector<Option> localOptions = {
-            {"Serial use USB",  [this]() { switchToUSBSerial(); }          },
-            {"Serial use UART", [this]() { switchToUARTSerial(); }         },
-            {"Disable DevMode", [this]() { bruceConfig.setDevMode(false); }},
-            {"Back",            []() {}                                    },
-        };
-
-        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Dev Mode");
-
-        // Check if "Disable DevMode" was pressed (second-to-last option)
-        if (selected == localOptions.size() - 2) {
-            returnToMenu = true; // Signal to exit all Config menus
-            return;
-        }
-
-        // Exit to Config menu on Back or ESC
-        if (selected == -1 || selected == localOptions.size() - 1) { return; }
-        // Menu rebuilds after each action
-    }
-}
-
-/*********************************************************************
 **  Function: usbDebugMenu
 **  Developer Options page (the renamed USB Debugging mode): the master
 **  toggle plus developer mode, the serial protocol choice and the
 **  live-update / hot-reload entry points.
 **********************************************************************/
+/*********************************************************************
+**  Developer Mode - ONE switch for everything that used to be spread over
+**  three places (Config > Dev Mode, "USB Debugging" and "Developer Mode").
+**
+**  On:  the developer console verbs, log hook and framed protocol are armed
+**       (bruceConfig.usbDebug) AND the speed-over-stability profile is on
+**       (bruceConfig.usbDebugDevMode).
+**  Off: both are cleared and UsbDebug::releaseResources() gives the queues and
+**       watches back.
+**
+**  The old Config > Dev Mode menu (Serial use USB / Serial use UART /
+**  Disable DevMode) is gone; its two serial rows live here, after the toggle,
+**  so there is exactly one developer-mode switch in the UI.
+**********************************************************************/
 void ConfigMenu::usbDebugMenu() {
     while (true) {
         std::vector<Option> localOptions = {
-            {String("USB Debugging: ") + (bruceConfig.usbDebug ? "ON" : "OFF"),
+            {String("Developer Mode: ") + (bruceConfig.usbDebug ? "ON" : "OFF"),
              [this]() {
-                 // Single master switch for the whole developer console. It does
-                 // exactly what the old "Developer Options" toggle did (enable
-                 // the debug verb set, the log hook and the framed protocol),
-                 // so there is no second toggle to keep in sync.
                  bool on = !bruceConfig.usbDebug;
+                 // Keep both persisted keys in lock-step: `usbdebug status`, the
+                 // console verb set and the old `developer mode` sub-toggle all
+                 // read one of them, and splitting them is what created the
+                 // "two toggles for one thing" the user was seeing.
                  bruceConfig.setUsbDebug(on ? 1 : 0);
-                 if (on) UsbDebug::begin();
-             }                                                    },
-            {String("Developer Mode: ") + (bruceConfig.usbDebugDevMode ? "ON" : "OFF"),
-             [this]() {
-                 bool on = !bruceConfig.usbDebugDevMode;
                  bruceConfig.setUsbDebugDevMode(on ? 1 : 0);
-                 UsbDebug::applyDevMode(on);
+                 if (on) {
+                     UsbDebug::begin();
+                     UsbDebug::applyDevMode(true);
+                 } else {
+                     UsbDebug::applyDevMode(false);
+                 }
+             }                                                    },
+            {"Serial: USB",
+             [this]() {
+                 switchToUSBSerial();
+                 displayInfo("Console moved to USB", true);
+             }                                                    },
+            {"Serial: UART",
+             [this]() {
+                 switchToUARTSerial();
+                 displayInfo("Console moved to UART", true);
              }                                                    },
             {String("Protocol: ") + (UsbDebug::binaryMode() ? "BINARY" : "TEXT"),
              [this]() { UsbDebug::setBinaryMode(!UsbDebug::binaryMode()); }},

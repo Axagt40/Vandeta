@@ -62,7 +62,7 @@ void PresenterMode(HIDInterface *&hid, bool ble = true);
 void cleanupDuckyBLE(HIDInterface *&hid);
 
 // ---------------------------------------------------------------------------
-// BadUSB keyboard layout management (backs the BadUSB Config menu and the
+// BadUSB keyboard layout management (backs the BadUSB Settings menu and the
 // badusb.setLayout console/JS helpers).
 //   indices 0..14  on-flash layouts (0 US, 1 Danish, 2 UK, 3 FR, 4 DE, 5 HU,
 //                  6 IT, 7 US-alt, 8 PT-BR, 9 PT, 10 SI, 11 ES, 12 SV,
@@ -90,6 +90,9 @@ bool badusbRunPayload(const String &filepath);
 #if defined(USB_as_HID)
 /// Apply the configured USB VID/PID/manufacturer/product/serial before USB.begin().
 void badusbApplyUsbFootprint();
+/// True once USB.begin() has run: descriptor (footprint) edits need a restart
+/// from then on, which the USB Footprint menu reports.
+bool badusbUsbNeedsReset();
 /// Create the optional mouse HID endpoint for composite/mouse device types.
 void badusbStartHidExtraDevices();
 void badusbMouseMove(int8_t x, int8_t y, int8_t wheel);

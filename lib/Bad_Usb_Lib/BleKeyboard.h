@@ -78,6 +78,14 @@ public:
     void setName(const String &deviceName);
     void setDelay(uint32_t ms);
     void setAppearence(uint16_t v) { appearance = v; }
+    // Apple compatibility patch (BadUSB Settings > Apple/BLE Patch): macOS and
+    // iOS ignore a BLE HID keyboard that carries its name inside the main
+    // advertising packet, overflows 31 bytes with flags+UUID+appearance+name, or
+    // asks for MITM pairing it has no way to complete. With this on the name
+    // moves to the scan response, the flags advertise LE-only, and pairing is
+    // Just Works with LE Secure Connections + bonding.
+    void setApplePatch(bool on) { _applePatch = on; }
+    bool getApplePatch() const { return _applePatch; }
     void setRandomUUID(void) { _randUUID = !_randUUID; };
     bool getRandomUUID() { return _randUUID; };
     uint16_t getAppearence() { return appearance; }
@@ -88,6 +96,7 @@ public:
 
 protected:
     bool _randUUID = false;
+    bool _applePatch = false;
 
     class ServerCallbacks : public NimBLEServerCallbacks {
     private:

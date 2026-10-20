@@ -12,6 +12,7 @@
 #include "modules/rf/rf_send.h"
 #include "modules/rf/rf_utils.h"
 #include "modules/rf/rf_spectrum.h"
+#include "modules/rf/rf_wardriver.h"
 #include "modules/rf/rf_waterfall.h"
 
 void RFMenu::optionsMenu() {
@@ -24,6 +25,9 @@ void RFMenu::optionsMenu() {
         {"Spectrum",        rf_spectrum               },
         {"Frequency Analyzer", rf_freq_analyzer       },
         {"Packet Monitor",   [=]() { packetMonitor(PKT_SRC_SUBGHZ); }},
+#if !defined(LITE_VERSION)
+        {"Wardriver",        rfWardriverMenu            }, // capture, replay, identify
+#endif
 #if !defined(LITE_VERSION)
         {"RSSI Spectrum",   rf_CC1101_rssi            }, // @Pirata
         {"SquareWave Spec", rf_SquareWave             }, // @Pirata
@@ -52,6 +56,9 @@ void RFMenu::configMenu() {
         {"RF RX Pin", lambdaHelper(gsetRfRxPin, true)},
         {"RF Module", setRFModuleMenu},
         {"RF Frequency", setRFFreqMenu},
+#ifndef LITE_VERSION
+        {"Wardriver Config", rfWardriverConfigMenu},
+#endif
         {"Back", [this]() { optionsMenu(); }},
     };
 

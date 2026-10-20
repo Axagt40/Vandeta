@@ -10,6 +10,7 @@
 #include "modules/rf/rf_scan.h"
 #include "modules/rf/rf_send.h"
 #include "modules/rf/rf_utils.h"
+#include "modules/rf/rf_wardriver.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <globals.h>
@@ -452,6 +453,85 @@ void createRfTxBufferCommand(Command *rfCmd) {
     Command cmd = rfCmd->addCommand("tx_from_buffer", rfTxBufferCallback);
 }
 
+// `subghz wardriver status` / `subghz wardriver selftest` - the wardriver's
+// duplicate filter and .sub writer are the two things that are hard to eyeball
+// from the screen, so the console can run them against synthetic bursts.
+uint32_t rfWardriverCallback(cmd *c) {
+    Command cmd(c);
+    String action = cmd.getArgument("action").getValue();
+    String extra = cmd.getArgument("path").getValue();
+    action.trim();
+    action.toLowerCase();
+
+    if (action == "selftest") {
+        serialDevice->println(rfWardriverSelfTest());
+        return true;
+    }
+    if (action == "list") {
+        String names = rfWardriverListFiles();
+        serialDevice->println(names.length() ? names : String("(no captures)"));
+        return true;
+    }
+    if (action == "capture") {
+        // Headless capture for a fixed window: same loop as the screen, so what
+        // the console records is byte-identical to a walked session.
+        int seconds = extra.length() ? extra.toInt() : 10;
+        if (seconds < 1) seconds = 1;
+        if (seconds > 600) seconds = 600;
+        rfWardriverRun(seconds);
+        serialDevice->println("capture finished");
+        return true;
+    }
+    if (action == "identify") {
+        if (extra.length() == 0) {
+            serialDevice->println("usage: subghz wardriver identify <file>");
+            return false;
+        }
+        String proto = rfWardriverIdentify(extra);
+        serialDevice->println(proto.length() ? ("identified " + proto) : String("not recognised (raw kept)"));
+        return proto.length() > 0;
+    }
+    if (action == "identifyall") {
+        serialDevice->println("identified " + rfWardriverIdentifyAllFiles());
+        return true;
+    }
+    if (action == "replay") {
+        if (extra.length() == 0) {
+            serialDevice->println("usage: subghz wardriver replay <file>");
+            return false;
+        }
+        bool ok = rfWardriverReplay(extra);
+        serialDevice->println(ok ? "replayed" : "replay failed");
+        return ok;
+    }
+    if (action == "status" || action.length() == 0) {
+        FS *fs = nullptr;
+        int files = 0;
+        if (getFsStorage(fs) && fs != nullptr && fs->exists(RF_WARDRIVER_DIR)) {
+            File d = fs->open(RF_WARDRIVER_DIR);
+            if (d && d.isDirectory()) {
+                File e = d.openNextFile();
+                while (e) {
+                    if (!e.isDirectory()) files++;
+                    e = d.openNextFile();
+                }
+                d.close();
+            }
+        }
+        serialDevice->println(String("frequency=") + String(bruceConfig.rfWardriverFreq, 2));
+        serialDevice->println(String("dedupe_sec=") + String(bruceConfig.rfWardriverDedupeSec));
+        serialDevice->println(String("min_pulses=") + String(bruceConfig.rfWardriverMinPulses));
+        serialDevice->println(String("hop=") + (bruceConfig.rfWardriverHop ? "1" : "0"));
+        serialDevice->println(String("folder=") + RF_WARDRIVER_DIR);
+        serialDevice->println(String("files=") + String(files));
+        return true;
+    }
+    serialDevice->println(
+        "usage: subghz wardriver <status|selftest|list|capture [sec]|identify <f>|identifyall|replay <f>>"
+    );
+    return false;
+}
+
 void createRfCommands(SimpleCLI *cli) {
     Command cmd = cli->addCompositeCmd("rf,subghz");
 
@@ -463,6 +543,11 @@ void createRfCommands(SimpleCLI *cli) {
     createRfTxBufferCommand(&cmd);
     createRfMfcodesCommand(&cmd);
     createRfKeeloqTxCommand(&cmd);
+    {
+        Command wr = cmd.addCommand("wardriver", rfWardriverCallback);
+        wr.addPosArg("action", "status");
+        wr.addPosArg("path", "");
+    }
 #if RF_DEBUG
     createRfSelftestCommand(&cmd);
     createRfKeeloqTestCommand(&cmd);

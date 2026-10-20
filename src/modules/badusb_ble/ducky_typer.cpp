@@ -422,7 +422,7 @@ const uint8_t *badusbResolveLayout(int idx) {
 }
 
 /// Run a BadUSB payload file through the normal HID/BLE engine. Used by the
-/// BadUSB Config > Payload Manager menu and by the badusb.runPayload binding.
+/// BadUSB Settings > Payload Manager menu and by the badusb.runPayload binding.
 /// Returns false when the payload is missing or USB HID is unavailable.
 bool badusbRunPayload(const String &filepath) {
 #if defined(USB_as_HID)
@@ -451,6 +451,13 @@ bool badusbRunPayload(const String &filepath) {
 // Tracked mouse endpoint, only created when the BadUSB HID device type asks
 // for it (composite = keyboard + mouse, mouse = mouse only).
 static USBHIDRelativeMouse *badusbMouse = nullptr;
+
+// TinyUSB builds its descriptors once, inside USB.begin(). After that the host
+// has already read them, so a footprint edited later cannot reach it until the
+// board restarts; the menu says so instead of silently doing nothing.
+static bool badusbUsbStarted = false;
+
+bool badusbUsbNeedsReset() { return badusbUsbStarted; }
 
 void badusbApplyUsbFootprint() {
     // The USB descriptors can only be changed before TinyUSB is started, so
@@ -816,9 +823,24 @@ void ducky_startKb(HIDInterface *&hid, bool ble, int functionId) {
             activeBLEInstances++;
             Serial.printf("[ducky_startKb] Active BLE instances: %d\n", activeBLEInstances);
 
-            // Create HID service
-            hid = new BleKeyboard(deviceName, "BruceFW", 100);
-            Serial.println("[ducky_startKb] New BleKeyboard created");
+            // Create HID service. BadBLE reads the same settings menu as
+            // BadUSB: the manufacturer string and the PnP vendor/product ids
+            // come from USB Footprint, and the Apple/BLE patch is applied when
+            // it is on. The serial string and HID device type stay USB-only -
+            // a BLE HID keyboard has no serial descriptor and this report map
+            // is keyboard+media only.
+            String bleManufacturer =
+                bruceConfig.badUSBBLEManufacturer.length() ? bruceConfig.badUSBBLEManufacturer : String("BruceFW");
+            BleKeyboard *bleKb = new BleKeyboard(deviceName, bleManufacturer, 100);
+            bleKb->setApplePatch(bruceConfig.badUSBBLEApplePatch);
+            if (bruceConfig.badUSBBLEVid) bleKb->set_vendor_id(bruceConfig.badUSBBLEVid);
+            if (bruceConfig.badUSBBLEPid) bleKb->set_product_id(bruceConfig.badUSBBLEPid);
+            hid = bleKb;
+            Serial.printf(
+                "[ducky_startKb] New BleKeyboard created (manufacturer=%s, apple_patch=%d)\n",
+                bleManufacturer.c_str(),
+                (int)bruceConfig.badUSBBLEApplePatch
+            );
 
             // Set hid_ble to point to the active instance
             hid_ble = hid;
@@ -842,12 +864,45 @@ void ducky_startKb(HIDInterface *&hid, bool ble, int functionId) {
 #if defined(USB_as_HID)
             hid = new USBHIDKeyboard();
             badusbStartHidExtraDevices();
-            badusbApplyUsbFootprint();
-            USB.begin();
+            // Descriptors can only be set before TinyUSB is started, so the
+            // footprint is applied here and not when the menu changed it.
+            if (!badusbUsbStarted) {
+                badusbApplyUsbFootprint();
+                USB.begin();
+                badusbUsbStarted = true;
+            } else {
+                Serial.println("[BadUSB] USB already started - footprint edits need a reset to reach the host");
+            }
 
+            // Waiting for the host is expected (the device has to be plugged in
+            // AFTER the HID starts), but it used to be an unbounded loop with no
+            // way out: the serial console is already gone by now because the
+            // OTG peripheral took the port, so a phone that never configures
+            // the device left the screen frozen on "Waiting USB Host..." with
+            // no key able to leave it. BACK cancels, and after 8 s the screen
+            // explains what a host that stays away means.
+            uint32_t hostWaitStart = millis();
+            bool hostHint = false;
             while (!tud_mounted()) {
-                printStatusBadUSBBLE("Waiting USB Host...");
-                delay(500);
+                if (check(EscPress)) {
+                    displayWarning("Cancelled - reset to get console", true);
+                    Serial.println("[BadUSB] cancelled while waiting for a USB host");
+                    delete hid;
+                    hid = nullptr;
+                    returnToMenu = true;
+                    return;
+                }
+                if (!hostHint && millis() - hostWaitStart > 8000) {
+                    hostHint = true;
+                    Serial.println(
+                        "[BadUSB] no USB host configured the HID interface after 8s "
+                        "(iPhone needs USB-C or a camera adapter; on Lightning nothing mounts)"
+                    );
+                }
+                printStatusBadUSBBLE(
+                    hostHint ? String("No USB host - BACK to quit") : String("Waiting USB Host...")
+                );
+                delay(250);
             }
 
             printStatusBadUSBBLE("USB Host Connected");

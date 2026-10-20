@@ -6,7 +6,10 @@
 #include <ELECHOUSE_CC1101_SRC_DRV.h>
 // ESP-IDF 5.5 based framework determines the channels autommatically
 // you do not have the hability to choose the channel
-rmt_channel_handle_t setup_rf_rx();
+// `memSymbols` is the RX buffer size in RMT symbols (2 durations each). The
+// default matches the driver's smallest block; callers that must not lose a
+// pulse mid-burst can ask for more, and get NULL if the hardware cannot give it.
+rmt_channel_handle_t setup_rf_rx(int memSymbols = 64);
 
 #define RMT_MAX_PULSES 10000 // Maximum number of pulses to record
 #define RMT_CLK_DIV 80       /*!< RMT counter clock divider */

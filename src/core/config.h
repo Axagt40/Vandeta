@@ -85,12 +85,14 @@ public:
     String startupAppJSInterpreterFile = "";
     String wigleBasicToken = "";
     String wdgwarsApiKey = "your 64-char hex key from wdgwars.pl/profile";
+    // Legacy alias of usbDebug (the removed Config > Dev Mode page). Kept so
+    // old config files and scripts still parse; validateConfig() re-syncs it.
     int devMode = 0;
 
-    // Developer Options (the renamed USB Debugging page)
-    // Persisted in bruce.conf so the mode survives reboots.
-    int usbDebug = 0;        // master toggle for the USB debugging console
-    int usbDebugDevMode = 0; // developer mode: prioritises speed over stability
+    // Developer Mode - ONE switch, persisted in bruce.conf, shown as a single
+    // toggle in Config > System Config > Developer Options.
+    int usbDebug = 0;        // the switch: developer console + speed profile
+    int usbDebugDevMode = 0; // alias of usbDebug (speed over stability profile)
     int usbDebugBinary = 0;  // 0 = text CLI, 1 = framed binary protocol
 
     int colorInverted = 1;
@@ -98,7 +100,7 @@ public:
     uint16_t badUSBBLEKeyDelay = 10;
     bool badUSBBLEShowOutput = true;
 
-    // BadUSB extended configuration (menu: Others > BadUSB & HID > BadUSB Config)
+    // BadUSB extended configuration (menu: Others > BadUSB & HID > BadUSB Settings)
     int badUSBBLEHidType = 0;                 // 0 keyboard, 1 keyboard+mouse, 2 mouse
     uint16_t badUSBBLEVid = 0x303A;           // USB vendor id presented by BadUSB
     uint16_t badUSBBLEPid = 0x4004;           // USB product id presented by BadUSB
@@ -109,6 +111,19 @@ public:
     String badUSBBLEPayloadDir = "/BruceBadUSB";                  // payload storage folder
     String badUSBBLEDefaultPayload = "";                          // payload run by one-touch actions
     String badUSBBLECustomLayoutFile = "/BruceBadUSB/custom.lay"; // custom layout import/export path
+
+    // SubGHz Wardriver (RF > Wardriver). No GPS on this board, so a record is
+    // the signal itself: frequency, timestamp and the raw pulse train.
+    float rfWardriverFreq = 433.92f;   // frequency to listen on
+    uint16_t rfWardriverDedupeSec = 30; // ignore an identical signal this long (0 = off)
+    uint8_t rfWardriverMinPulses = 16;  // shorter bursts are noise, not a remote
+    bool rfWardriverHop = false;        // walk 433/315/868/915 instead of one band
+
+    // Same settings menu, second consumer: BadBLE (the BLE HID keyboard) reads
+    // the manufacturer / product / VID / PID above and, when this is on, the
+    // Apple compatibility patch (advertising flags + scan response + Just Works
+    // pairing, which is what iOS and macOS need before they will list it).
+    bool badUSBBLEApplePatch = false;
 
     std::vector<String> disabledMenus = {};
 
@@ -236,6 +251,12 @@ public:
     void setBadUSBBLEPayloadDir(const String &value);
     void setBadUSBBLEDefaultPayload(const String &value);
     void setBadUSBBLECustomLayoutFile(const String &value);
+    void setBadUSBBLEApplePatch(bool value);
+
+    void setWardriverFreq(float value);
+    void setWardriverDedupeSec(uint16_t value);
+    void setWardriverMinPulses(uint8_t value);
+    void setWardriverHop(bool value);
     void addDisabledMenu(String value);
     void removeDisabledMenu(String value);
 
