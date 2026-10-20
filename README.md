@@ -2,6 +2,16 @@
 
 **The only firmware you need for the LilyGo T-Embed CC1101.**
 
+[![Release](https://img.shields.io/github/v/release/Axagt40/Vandeta?label=release&color=blue)](https://github.com/Axagt40/Vandeta/releases/latest)
+[![Board](https://img.shields.io/badge/board-LilyGo%20T--Embed%20CC1101-orange)](https://lilygo.cc/products/t-embed-cc1101)
+[![Base](https://img.shields.io/badge/base-Bruce%201.16.1-blueviolet)](https://github.com/BruceDevices/firmware)
+[![Licence](https://img.shields.io/badge/licence-AGPL--3.0-green)](LICENSE)
+[![Discord](https://img.shields.io/badge/Discord-join%20the%20server-5865F2?logo=discord&logoColor=white)](https://discord.gg/dhPXgVerqD)
+
+> **[Download Vandeta 1.1](https://github.com/Axagt40/Vandeta/releases/latest)** — one merged image, flash it at `0x0`
+> · **[What's new in 1.1](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.1)**
+> · **[Discord](https://discord.gg/dhPXgVerqD)**
+
 Vandeta is a **reskin of [Bruce](https://github.com/BruceDevices/firmware)** — the
 open-source ESP32 offensive-security firmware — built on **Bruce 1.16.1** and
 tuned for one board: the **LilyGo T-Embed CC1101**. It ships with its own boot
@@ -16,7 +26,7 @@ upstream feature list applies here too (it is reproduced further down).
 
 ---
 
-## Why this exists
+## :sparkles: Why this exists
 
 Bruce already runs on this board, but out of the box you have to be at the
 device to use most of it: the screen is small, the encoder is fiddly, and the
@@ -30,7 +40,7 @@ WiFi, no reflash and no extra hardware.
 
 ---
 
-## What it adds on top of Bruce
+## :zap: What it adds on top of Bruce
 
 * **Developer Options (USB console).** A persisted toggle that turns the USB
   serial link into a real control surface: `ui` / `move` / `press` drive the menus
@@ -79,7 +89,7 @@ script ecosystem — is Bruce, unchanged.
 
 ---
 
-## How Vandeta differs from Bruce
+## :vs: How Vandeta differs from Bruce
 
 Vandeta is not a rewrite. It is Bruce 1.16.1 with a new face, a handful of fixes
 and extra tools on top; every menu, app, script and file format Bruce has is
@@ -87,12 +97,15 @@ still here, and no C identifier, file name or console verb was renamed.
 
 | | Bruce | Vandeta |
 |---|---|---|
-| Branding | Bruce | Vandeta boot screen, `vandeta 1.1` version, web-UI titles, USB product `VANDETA` |
-| Control from a PC | stock serial CLI | **Developer Options**: `ui` / `move` / `press`, `file` / `mem` / `proc` / `errors`, `livepatch`, framed binary transfers |
+| Branding | Bruce | Vandeta boot screen and crown logo, `vandeta 1.1` version, web-UI titles, USB product `VANDETA` |
+| Control from a PC | stock serial CLI | **Developer Options**: `ui` / `ui watch` / `move` / `press`, `file`, `mem` / `proc` / `sys` / `errors`, `livepatch`, `liveboot`, framed binary transfers |
 | **Sub-GHz / CC1101 RF** | stock driver sharing the display's SPI, so scans can hang or reset | **fixed** — every CC1101 access is serialized against the display; scans, reads, spectrum and the wardriver run reliably |
-| Radio tools | Bruce's scanner and spectrum | + Frequency Analyzer, SubGHz Wardriver, Packet Monitor (WiFi/BLE/nRF24/Sub-GHz), BLE Detector |
-| IR | TV-B-Gone, custom codes | + Universal Remote: 2,858 library codes and 12 brand AC remotes |
-| JavaScript | Bruce's interpreter | + WiFi inject/capture/portal, BLE GATT client, nRF24 raw capture, script folders, background jobs |
+| Radio tools | Bruce's scanner and spectrum | + Frequency Analyzer, SubGHz Wardriver, Packet Monitor (WiFi/BLE/nRF24/Sub-GHz), BLE Detector, BLE Capture & Replay |
+| IR | TV-B-Gone, custom codes | + Universal Remote: 2,858 library codes, RCA/NEC42 encoders and 12 brand AC remotes |
+| WiFi | Bruce's attack set | + ARP/DNS/HTTP interception on WPA2, hardened evil-twin portal, headless attacks, one flat attack menu |
+| BadUSB / HID | basic payloads | + `BadUSB Settings` (footprint, layouts incl. Finnish and custom, HID type, timing, payloads), `Apple/BLE Patch` |
+| JavaScript | Bruce's interpreter | + script folders, background jobs, ARP/DNS/HTTP spoofing, WiFi inject/capture/portal, BLE GATT, nRF24 raw capture |
+| Menus and UI | title only | + breadcrumb path, `n/total` counter, scrollbar, encoder hint bar, live capture screens, nested-menu guard |
 
 ### The RF fix, specifically
 
@@ -111,9 +124,185 @@ adaptive noise floor instead of a fixed threshold. The result: **Scan/Copy,
 Read, Spectrum, Frequency Analyzer, Wardriver, the Sub-GHz Packet Monitor and
 the `subghz` console verbs all work reliably on this board.**
 
+### The full list of differences
+
+Everything below is in this build and is not in stock Bruce (or is a fix to it).
+
+<details>
+<summary><b>USB console — Developer Options</b></summary>
+
+* One `Developer Mode` switch (`Config > System Config > Developer Options`) arms
+  the console and the speed profile together.
+* `ui`, `ui watch`, `move up|down|left|right|nextpage`, `press ok|back` drive the
+  menus and print the screen you land on — including the pages that build a
+  local option list (Config, System Config, WiFi, Bluetooth, Files, Others).
+* `file read|write|list|delete|stat`, `log show|clear|on|off`, `errors`,
+  `help <command>`.
+* `md5`, `crc32`, `cat` and `storage read` stream in 512-byte chunks — any file
+  size, no 3 KB ceiling, no wedged console.
+* `mem`, `proc`, `sys` report the board (internal vs PSRAM, tasks, version).
+* `livepatch apply <module> <code>` reloads the JavaScript layer without a
+  reflash; `liveboot` runs a script at boot.
+* `display ring on|off` and `display dump` inspect what a screen actually drew;
+  `usbdebug status|proto|on|off`, hot reload and live update rows in the menu.
+* The error ring captures ESP-IDF, Arduino `log_x()` and plain `printf()` /
+  NimBLE lines, not just one of the three.
+* No console command can be blocked by a modal banner, and turning Developer
+  Mode off releases the console's queues, watches and RX buffer.
+
+</details>
+
+<details>
+<summary><b>Sub-GHz / CC1101</b></summary>
+
+* Shared-SPI serialization for every radio transaction (the RF fix above),
+  sweep parking between hops and an adaptive noise floor.
+* **Frequency Analyzer** — Flipper-style: coarse hop over the three CC1101
+  bands, 20 kHz fine pass, big held frequency readout, last three hits, RSSI
+  meter, and a log page with sort (`OK`) and scroll.
+* **SubGHz Wardriver** — whole-burst capture (256 pulses, streamed straight to
+  the card, never cut at a buffer seam), duplicate window, 433/315/868/915
+  band hop, short-pulse noise rejection, a captures browser, verbatim replay
+  and one-pass `Identify & save` to a `_dec.sub`.
+* `subghz rx <timeout>` honours its argument (it used to parse the timeout as a
+  frequency); `subghz wardriver capture|list|identify|identifyall|replay|status|selftest`.
+
+</details>
+
+<details>
+<summary><b>Packet Monitor</b></summary>
+
+* One dashboard fed by **WiFi, BLE, nRF24 and Sub-GHz**, opened from each of
+  those menus with its own radio preselected.
+* Filters (radio, type, MAC-OUI, channel, text, only-new), counters per radio
+  and per type, packets/sec, busiest channel, CSV export and PCAP export of the
+  captured WiFi frames, pause, change source and clear.
+* The WiFi and BLE taps actually capture on this board (they answered “No WiFi
+  radio” / “No BLE radio” before).
+
+</details>
+
+<details>
+<summary><b>BLE</b></summary>
+
+* **BLE Detector** — live table of advertisers with Apple Continuity types
+  decoded, distance estimate, paging, hold and clear.
+* **Capture & Replay** with a live packet counter and Back-to-stop.
+* JS GATT client (connect, services, characteristics, read/write/notify) and the
+  capture/replay bindings.
+* A failed BLE bring-up no longer holds ~34 KB of internal RAM for the rest of
+  the boot, the memory guard tests the real requirement, and WiFi now hands BLE
+  memory back — so a BLE tool started after another radio does not have to be
+  refused.
+
+</details>
+
+<details>
+<summary><b>Infrared</b></summary>
+
+* **Universal Remote** — the Flipper IR database's TV / AC / fans / audio /
+  projectors / LEDs libraries (2,858 codes), sweep-per-button with pause and
+  cancel.
+* **Brand AC remotes** for twelve makes, sending a full state frame (power,
+  mode, 16–30 °C, fan).
+* Hand-written encoders for RCA and NEC42, protocols the ESP32 IR library lacks.
+* Button lists build in one pass, so a category opens immediately and the
+  sweep's progress bar is sized before the first code is sent.
+* `ir uni list|buttons|send`, `ir ac list|send`, `ir rx <timeout>`; GPI02 is
+  claimed before use and the LED is switched off afterwards.
+
+</details>
+
+<details>
+<summary><b>WiFi</b></summary>
+
+* One flat `Wifi Atks` menu and one flat `Target Atks` menu — the duplicate
+  nested pages and duplicate Beacon Flood entry are gone.
+* ARP spoofing, DNS spoofing and HTTP interception/modification that reach
+  WPA2/WPA3 clients (the frames go out on the encrypted station link).
+* Evil-twin captive portal hardened: it refuses with a readable error instead of
+  crashing when DMA memory is short.
+* Headless, deadline-bounded attacks so scripts can run them; `moreatk` verb.
+
+</details>
+
+<details>
+<summary><b>BadUSB / HID</b></summary>
+
+* `BadUSB Settings` menu: USB footprint (VID, PID, manufacturer, product,
+  serial), keyboard layout (including Finnish and custom layout import/export),
+  HID device type, attack timing, payload manager, show output.
+* A character a layout cannot type no longer abandons the rest of the payload.
+* `Apple/BLE Patch` and `BadBLE Name` in the same menu, so the BLE keyboard is
+  listed by iOS and macOS and pairs Just Works.
+* `badusb config|set|layout-import|layout-export|layout-copy|mouse|click`.
+
+</details>
+
+<details>
+<summary><b>JavaScript API</b></summary>
+
+* `arpSpoof`, `dnsSpoof` and `httpInterceptor` for the MITM engines.
+* `wifi.injectPacket`, `sendRaw80211`, `captureStart`, `captureStop`,
+  `getCapturedPackets`, `packetInfo`, `injectDns`, `injectHttp`, `portal`.
+* BLE GATT client plus advertisement capture/replay.
+* `nrf24.captureRaw`, `replayRaw`, signal analysis and save/load.
+* `scriptFolder.*` (create, load, run, split, background, stop, kill) and
+  `setShared`/`getShared` for passing state into a job.
+* Bindings hardened against the interpreter's moving GC, so building containers
+  in a script can no longer corrupt the heap.
+
+</details>
+
+<details>
+<summary><b>Menus and navigation</b></summary>
+
+* Breadcrumb path (`WiFi > Wifi Atks > Target Atks`), `n/total` counter and a
+  scrollbar on long lists, plus an encoder hint bar (`TURN` / `SEL` / `BACK`).
+* A child menu no longer overwrites its parent's rows — the “USB Footprint does
+  nothing / Bad BLE does not open / the page flashes straight back” class of
+  bugs.
+* Back returns to the parent menu instead of redrawing the page you left.
+* Capture screens show live progress and `Press BACK to stop`; only Back aborts,
+  and presses queued during the capture are dropped before the result screen.
+* `JS Interpreter` is now **Apps** with an app-drawer icon (the stored setting
+  is migrated), and `BadUSB Config` is now **BadUSB Settings**.
+* `ui` / `nav` readback reports the menu that is actually on screen, not the one
+  you left.
+
+</details>
+
+<details>
+<summary><b>Fixes that apply everywhere</b></summary>
+
+* `USBSerial::vprintf()` no longer prints garbage for `%d` / `%s`.
+* The TFT screen-stream task no longer races a fast `display stop` / `start`
+  into a reboot.
+* NimBLE's asynchronous scan start is handled, so BLE capture and the dashboard
+  do not cancel themselves.
+* `i2c scan` takes its argument and prints one device per line; `proc` shows
+  `any` for no-affinity tasks; the CC1101 driver no longer prints `setMHZ` /
+  `SetTx` / `SetRx` chatter on the console.
+
+</details>
+
+<details>
+<summary><b>Branding and build</b></summary>
+
+* Boot screen reads **Vandeta** with the crown drawn in your UI colour; the
+  version string is `vandeta 1.1` on the splash, in `info` and in the web UI.
+* USB product id `VANDETA`; web-UI titles are Vandeta's.
+* Default `platformio.ini` env is `lilygo-t-embed-cc1101`; `build.py` merges
+  bootloader + partitions + app into `vandeta.bin` for a single flash at `0x0`.
+* No C identifier, file name or console verb was renamed — `/BruceJS`, the
+  `bruce` verbs, the BruceNet AP and the upstream menus stay as they are — and
+  AGPL-3.0 plus upstream credit are unchanged.
+
+</details>
+
 ---
 
-## Hardware
+## :electric_plug: Hardware
 
 | | |
 |---|---|
@@ -125,7 +314,7 @@ the `subghz` console verbs all work reliably on this board.**
 
 ---
 
-## Installing
+## :building_construction: Installing
 
 The image is **pre-merged** (bootloader + partition table + app), so it is one
 `write_flash` at offset **`0x0`**. Download it from the
@@ -155,7 +344,7 @@ so it matches the rest of the theme.
 
 ---
 
-## Using it from a PC
+## :keyboard: Using it from a PC
 
 Turn on **Config → System Config → Developer Options**, then talk to the board
 over the same USB cable:
@@ -179,7 +368,7 @@ mis-typed command can never leave the board in an unusable state.
 
 ---
 
-## Building from source
+## :hammer_and_wrench: Building from source
 
 PlatformIO Core 6.1.19+ and python3; the first build needs network access to
 resolve `lib_deps` (Arduino-ESP32 3.3.9, pioarduino platform 55.03.39,
@@ -196,13 +385,13 @@ invalidates the build cache — expect a 15-25 minute rebuild.
 
 ---
 
-## Community
+## :speech_balloon: Community
 
 Questions, builds and feedback: **Discord** — <https://discord.gg/dhPXgVerqD>
 
 ---
 
-## Credits and licence
+## :clap: Credits and licence
 
 * **Bruce** — <https://github.com/BruceDevices/firmware> (upstream:
   <https://github.com/pr3y/Bruce>). Vandeta is a reskin of Bruce 1.16.1; the
@@ -213,7 +402,7 @@ Questions, builds and feedback: **Discord** — <https://discord.gg/dhPXgVerqD>
 
 ---
 
-## About the upstream project
+## :bookmark_tabs: About the upstream project
 
 Everything below this line is the upstream Bruce project — feature list,
 supported devices, credits and license — kept intact on purpose.
