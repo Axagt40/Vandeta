@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Flash Vandeta in your browser — Vandeta</title>
-<meta name="description" content="Flash Vandeta to a LilyGo T-Embed CC1101 from Chrome or Edge over Web Serial. The image is checksum-verified before it is written at 0x0.">
+<title>Install Vandeta — browser flasher</title>
+<meta name="description" content="Install the latest Vandeta release on a LilyGo T-Embed CC1101 from Chrome or Edge. One button: the image is downloaded, checksum-verified and written at 0x0.">
 <meta name="theme-color" content="#0a0a0f">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -17,7 +17,7 @@
     <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
     <nav class="site-nav" id="site-nav" aria-label="Main">
       <a href="index.html">Overview</a>
-      <a href="flash.html">Flash</a>
+      <a href="flash.html">Install</a>
       <a href="console.html">Console</a>
       <a href="docs.html">Docs</a>
       <a class="nav-cta" href="https://github.com/Axagt40/Vandeta" rel="noopener">GitHub</a>
@@ -29,12 +29,12 @@
   <section class="page-head">
     <div class="wrap">
       <p class="eyebrow">Browser flasher</p>
-      <h1>Flash it from this page</h1>
+      <h1>Install the latest Vandeta</h1>
       <p>
-        Chrome or Edge on desktop, a USB-C cable, and the board. The image is
-        downloaded here, checked against its published SHA-256, written at
-        <code>0x0</code> and the board is reset. Nothing is installed on your
-        computer.
+        Plug the board in, press one button. The page reads the newest release
+        from GitHub, downloads it, checks its SHA-256 against the published
+        checksum, writes it at <code>0x0</code> and resets the board. Nothing is
+        installed on your computer.
       </p>
     </div>
   </section>
@@ -42,57 +42,60 @@
   <div class="wrap tool">
     <div>
       <div class="panel">
-        <h2 style="font-size:1.05rem">1 &middot; The image</h2>
-        <div class="status" style="justify-content:space-between;flex-wrap:wrap">
-          <span id="fw-name" class="file-meta">firmware/vandeta.bin</span>
-          <span id="fw-state" class="badge">loading</span>
+        <div class="status" style="justify-content:space-between;flex-wrap:wrap;gap:0.5rem">
+          <h2 style="font-size:0.78rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--dim);margin:0">Latest release</h2>
+          <span id="fw-state" class="badge">checking</span>
         </div>
-        <div class="file-meta" style="margin-top:0.6rem">
+
+        <p id="version-name" style="font-size:1.55rem;font-weight:650;letter-spacing:-0.02em;margin:0.6rem 0 0.2rem">Checking GitHub…</p>
+        <p class="file-meta" style="margin:0 0 1rem">for the LilyGo T-Embed CC1101 (ESP32-S3)</p>
+
+        <div class="file-meta" style="display:grid;gap:0.3rem">
+          <div>tag <span id="version-tag">—</span></div>
+          <div>published <span id="version-date">—</span></div>
           <div>size <span id="fw-size">—</span></div>
-          <div>sha256 <span id="fw-sha">—</span></div>
-          <div>expected <span id="fw-expected">—</span></div>
+          <div>sha256 <span id="fw-expected">—</span></div>
+          <div>checked <span id="fw-sha">at download</span></div>
+          <div>source <span id="fw-source">GitHub release via jsDelivr</span></div>
         </div>
 
-        <div class="field" style="margin-top:1.1rem">
-          <label for="file">Or use a downloaded vandeta.bin</label>
-          <input id="file" type="file" accept=".bin,application/octet-stream">
+        <div class="btn-row" style="margin-top:1.25rem;gap:0.6rem">
+          <button class="btn btn-primary btn-block" id="install-btn" type="button" disabled>Install Vandeta</button>
+          <button class="btn btn-ghost btn-small" id="refresh-btn" type="button">Check for updates</button>
         </div>
-        <p class="file-meta" style="margin:0">
-          A file that does not match the published hash is refused &mdash; the
-          page will not write an image it cannot identify.
-        </p>
 
-        <hr style="margin:1.5rem 0">
-
-        <h2 style="font-size:1.05rem">2 &middot; The board</h2>
-        <div class="field">
-          <label for="baud">Link speed</label>
-          <select id="baud">
-            <option value="115200" selected>115200 (safe default)</option>
-            <option value="460800">460800</option>
-            <option value="921600">921600 (fast, fails on some boards)</option>
-          </select>
-        </div>
-        <div class="btn-row">
-          <button class="btn btn-primary" id="connect-btn" type="button">Connect board</button>
-          <button class="btn btn-ghost" id="disconnect-btn" type="button" disabled>Disconnect</button>
-        </div>
-        <div class="status" style="margin-top:0.9rem">
-          <span class="dot" id="conn-dot"></span>
-          <span id="conn-status">Not connected.</span>
-        </div>
-        <div class="file-meta" style="margin-top:0.4rem">chip <span id="chip">—</span></div>
-
-        <hr style="margin:1.5rem 0">
-
-        <h2 style="font-size:1.05rem">3 &middot; Write</h2>
-        <label class="file-meta" style="display:flex;gap:0.5rem;align-items:flex-start;margin-bottom:0.9rem">
-          <input type="checkbox" id="erase-all">
-          <span>Erase the whole flash first (removes saved settings and the config partition)</span>
-        </label>
-        <button class="btn btn-primary" id="flash-btn" type="button" disabled>Flash Vandeta 1.1</button>
         <div class="progress" aria-hidden="true"><i id="progress"></i></div>
         <div class="progress-label"><span id="progress-note">idle</span><span id="progress-pct">0%</span></div>
+
+        <div class="status" style="margin-top:1rem">
+          <span class="dot" id="conn-dot"></span>
+          <span id="conn-status">Checking the latest release…</span>
+        </div>
+        <div class="file-meta" style="margin-top:0.35rem">chip <span id="chip">—</span></div>
+
+        <details style="margin-top:1.25rem">
+          <summary>Advanced</summary>
+          <div class="field" style="margin-top:0.9rem">
+            <label for="baud">Link speed</label>
+            <select id="baud">
+              <option value="115200" selected>115200 (safe default)</option>
+              <option value="460800">460800</option>
+              <option value="921600">921600 (fast, fails on some boards)</option>
+            </select>
+          </div>
+          <label class="file-meta" style="display:flex;gap:0.5rem;align-items:flex-start;margin-bottom:0.9rem">
+            <input type="checkbox" id="erase-all">
+            <span>Erase the whole flash first (removes saved settings and the config partition)</span>
+          </label>
+          <div class="field">
+            <label for="file">Flash a file you already have instead</label>
+            <input id="file" type="file" accept=".bin,application/octet-stream">
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-ghost btn-small" id="connect-btn" type="button">Connect only</button>
+            <button class="btn btn-ghost btn-small" id="disconnect-btn" type="button" disabled>Disconnect</button>
+          </div>
+        </details>
       </div>
     </div>
 
@@ -100,25 +103,26 @@
       <div class="terminal">
         <div class="terminal-bar"><span class="dot"></span> flasher log</div>
         <pre class="term-log" id="log"></pre>
-      </div>        <div class="callout warn" style="margin:0">
+      </div>
+
+      <div class="callout warn" style="margin:0">
         <strong>0x0, or it will not boot.</strong> The image is merged
         (bootloader + partition table + app). This page always writes at
         <code>0x0</code>.
       </div>
 
       <div class="callout" style="margin:0">
-        <strong>If a flash stops part-way</strong> (<code>The chip stopped
-        responding</code>), the app partition is left incomplete and the board
-        will not boot until it is flashed again. Retry at <strong>115200</strong>:
-        this board's USB-Serial-JTAG link is what limits the speed, and a write
-        at 921600 failed on it during testing.
+        <strong>Requirements.</strong> Desktop Chrome or Edge 89+, a data-capable
+        USB-C cable, and nothing else holding the port (close serial monitors or
+        esptool sessions). Opening the port resets the board once &mdash; that is
+        normal.
       </div>
 
       <div class="callout" style="margin:0">
-        <strong>Requirements.</strong> Desktop Chrome or Edge 89+, a data-capable
-        USB-C cable, and nothing else holding the port (close any serial monitor
-        or esptool session). Opening the port resets the board once &mdash; that
-        is normal.
+        <strong>If a flash stops part-way</strong> (<code>The chip stopped
+        responding</code>), the app partition is incomplete and the board will
+        not boot until it is written again. Retry at <strong>115200</strong> in
+        Advanced: the write at 921600 failed on this board during testing.
       </div>
 
       <details>
@@ -127,24 +131,25 @@
           Check the cable first. <code>303a:1001</code> is console/JTAG mode and
           is what flashing needs; <code>303a:0002</code> is USB Mass Storage mode
           and must be left on the device. On Linux, if <code>lsusb</code> shows
-          the board but no port appears, load the driver:
-          <code>sudo modprobe cdc_acm</code>.
+          the board but no port appears: <code>sudo modprobe cdc_acm</code>.
         </p>
       </details>
 
       <details>
-        <summary>Prefer the command line?</summary>
+        <summary>Where the image comes from</summary>
         <p style="margin:0;color:var(--muted)">
-          <code>sha256sum -c vandeta.bin.sha256</code> then
-          <code>esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write_flash 0x0 vandeta.bin</code>.
-          The <a href="docs.html#install">docs page</a> has the full procedure.
+          GitHub's release assets cannot be fetched from a page on another
+          origin, so the image is read from the repository: the release tag
+          first, then <code>main</code>, then the copy bundled in this site. A
+          tag snapshots the repository as it was when it was cut, so any copy
+          that does not match the digest GitHub reports for the release asset is
+          skipped and the next source is tried.
         </p>
       </details>
 
       <p class="file-meta" style="margin:0">
         Flashing uses <a href="https://github.com/espressif/esptool-js" rel="noopener">esptool-js</a>
-        0.7.0 from unpkg, pinned. Everything else on this page is served from
-        this site.
+        0.7.0 from unpkg, pinned.
       </p>
     </div>
   </div>

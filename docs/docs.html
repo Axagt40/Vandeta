@@ -20,7 +20,7 @@
     <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
     <nav class="site-nav" id="site-nav" aria-label="Main">
       <a href="index.html">Overview</a>
-      <a href="flash.html">Flash</a>
+      <a href="flash.html">Install</a>
       <a href="console.html">Console</a>
       <a href="docs.html">Docs</a>
       <a class="nav-cta" href="https://github.com/Axagt40/Vandeta" rel="noopener">GitHub</a>
@@ -534,17 +534,19 @@ esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 115200 \
       </div>
 
       <div class="callout warn">
-        <strong>One external request.</strong> The flasher imports the pinned
-        <code>esptool-js</code> 0.7.0 bundle from unpkg, so that page needs
-        internet access even when the site itself is served locally. Everything
-        else is in this folder, including the
-        <code>firmware/vandeta.bin</code> copy it flashes.
+        <strong>Internet, but no account.</strong> The flasher reads the latest
+        release from the GitHub API, pulls the image from the repository and
+        imports the pinned <code>esptool-js</code> 0.7.0 bundle from unpkg. With
+        no connection it falls back to the copy in
+        <code>docs/firmware/</code>, labelled as an offline copy.
       </div>
 
       <p class="file-meta">
-        Keep <code>docs/firmware/vandeta.bin</code> and its
-        <code>.sha256</code> in step with each release: the page refuses to
-        flash an image whose hash does not match the one it publishes.
+        The flasher always installs the newest published release, so a release
+        needs no site edit. Keep <code>docs/firmware/vandeta.bin</code> and its
+        <code>.sha256</code> current anyway: that is what an offline visitor
+        gets, and the page still refuses any image whose hash does not match the
+        release digest.
       </p>
     </div>
   </section>

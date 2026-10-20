@@ -301,6 +301,12 @@ hr {
   border-radius: 8px;
 }
 
+.btn-block {
+  width: 100%;
+  padding: 0.85rem 1.2rem;
+  font-size: 1rem;
+}
+
 .btn:disabled,
 .btn[aria-disabled="true"] {
   opacity: 0.45;
