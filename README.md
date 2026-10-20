@@ -12,16 +12,15 @@
 > · **[What's new in 1.1](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.1)**
 > · **[Discord](https://discord.gg/dhPXgVerqD)**
 
-Vandeta is a **reskin of [Bruce](https://github.com/BruceDevices/firmware)** — the
-open-source ESP32 offensive-security firmware — built on **Bruce 1.16.1** and
-tuned for one board: the **LilyGo T-Embed CC1101**. The code underneath is
-Bruce's code: same architecture, same menus, same tools, same licence.
-Upstream credit and the AGPL-3.0 `LICENSE` are untouched, and the whole
-upstream feature list applies here too (it is reproduced further down).
+Vandeta is custom firmware for one board, the **LilyGo T-Embed CC1101**, built
+on **[Bruce](https://github.com/BruceDevices/firmware) 1.16.1** — the
+open-source ESP32 offensive-security firmware. It keeps Bruce's architecture,
+menus and tools as its foundation and adds the tooling listed below on top of
+them. Upstream credit and the AGPL-3.0 `LICENSE` are untouched, and the whole
+upstream feature list still applies here (it is reproduced further down).
 
 > **All credit for the firmware belongs to the Bruce project and its
-> contributors.** Vandeta changes branding and adds the tooling listed below; it
-> is not a fork that hides where it comes from.
+> contributors.** Vandeta would not exist without it.
 
 ---
 
@@ -102,14 +101,13 @@ still here, and no C identifier, file name or console verb was renamed.
 
 | | Bruce | Vandeta |
 |---|---|---|
-| Branding | Bruce | Vandeta boot screen and crown logo, `vandeta 1.1` version, web-UI titles, USB product `VANDETA` |
 | Control from a PC | stock serial CLI | **Developer Options**: `ui` / `ui watch` / `move` / `press`, `file`, `mem` / `proc` / `sys` / `errors`, `livepatch`, `liveboot`, framed binary transfers |
 | **Sub-GHz / CC1101 RF** | stock driver sharing the display's SPI, so scans can hang or reset | **fixed** — every CC1101 access is serialized against the display; scans, reads, spectrum and the wardriver run reliably |
 | Radio tools | Bruce's scanner and spectrum | + Frequency Analyzer, SubGHz Wardriver, Packet Monitor (WiFi/BLE/nRF24/Sub-GHz), BLE Detector, BLE Capture & Replay |
 | nRF24 | spectrum, MouseJack, jammer | + **Raw Capture**: pseudo-promiscuous listen, 126-channel hop, RGB presets, channel scan, multi-frequency detect, packet analysis, save/load, replay |
 | IR | TV-B-Gone, custom codes | + Universal Remote: 2,858 library codes, RCA/NEC42 encoders and 12 brand AC remotes |
 | WiFi | Bruce's attack set | + ARP/DNS/HTTP interception on WPA2, hardened evil-twin portal, headless attacks, one flat attack menu |
-| BadUSB / HID | basic payloads | + `BadUSB Settings` (footprint, layouts incl. Finnish and custom, HID type, timing, payloads), `Apple/BLE Patch` |
+| BadUSB / HID | basic payloads | + `BadUSB Settings` (footprint, layouts incl. extra layouts and custom, HID type, timing, payloads), `Apple/BLE Patch` |
 | JavaScript | Bruce's interpreter | + script folders, background jobs, ARP/DNS/HTTP spoofing, WiFi inject/capture/portal, BLE GATT, nRF24 raw capture |
 | Menus and UI | title only | + breadcrumb path, `n/total` counter, scrollbar, encoder hint bar, live capture screens, nested-menu guard |
 
@@ -264,7 +262,7 @@ Everything below is in this build and is not in stock Bruce (or is a fix to it).
 <summary><b>BadUSB / HID</b></summary>
 
 * `BadUSB Settings` menu: USB footprint (VID, PID, manufacturer, product,
-  serial), keyboard layout (including Finnish and custom layout import/export),
+  serial), keyboard layout (extra layouts and custom import/export),
   HID device type, attack timing, payload manager, show output.
 * A character a layout cannot type no longer abandons the rest of the payload.
 * `Apple/BLE Patch` and `BadBLE Name` in the same menu, so the BLE keyboard is
@@ -358,11 +356,8 @@ Everything below is in this build and is not in stock Bruce (or is a fix to it).
 </details>
 
 <details>
-<summary><b>Branding and build</b></summary>
+<summary><b>Build and release</b></summary>
 
-* Boot screen reads **Vandeta** with the crown drawn in your UI colour; the
-  version string is `vandeta 1.1` on the splash, in `info` and in the web UI.
-* USB product id `VANDETA`; web-UI titles are Vandeta's.
 * Default `platformio.ini` env is `lilygo-t-embed-cc1101`; `build.py` merges
   bootloader + partitions + app into `vandeta.bin` for a single flash at `0x0`.
 * The universal IR libraries ship in `sd_files/infrared/Universal/` and on the
@@ -467,7 +462,7 @@ Questions, builds and feedback: **Discord** — <https://discord.gg/dhPXgVerqD>
 ## :clap: Credits and licence
 
 * **Bruce** — <https://github.com/BruceDevices/firmware> (upstream:
-  <https://github.com/pr3y/Bruce>). Vandeta is a reskin of Bruce 1.16.1; the
+  <https://github.com/pr3y/Bruce>). Vandeta is built on Bruce 1.16.1; the
   firmware is Bruce's work and the whole upstream feature list, device support
   and documentation further down this file are its authors'.
 * Licence: **AGPL-3.0** (`LICENSE`), third-party notices in `THIRD_PARTY.md`.
@@ -684,7 +679,7 @@ Also, [read our FAQ](https://wiki.bruce.computer/faq/)
 - [x] Megalodon
 - [x] [BADUsb (New features, LittleFS and SDCard)](https://wiki.bruce.computer/features/others/#badusb)
   - [x] BadUSB config menu: USB footprint (VID/PID/manufacturer/product/serial), keyboard layout, HID device type, attack speed and timing, payload folder
-  - [x] Finland (fi-FI) layout, plus import/export/copy of custom layout files
+  - [x] Extra Nordic layout, plus import/export/copy of custom layout files
 - [x] USB Keyboard - Cardputer and T-Deck Only
 - [x] [iButton](https://wiki.bruce.computer/features/others/#ibutton)
 - [x] LED Control

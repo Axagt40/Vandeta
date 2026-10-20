@@ -1504,7 +1504,7 @@ static void badUsbFootprintMenu() {
 /*********************************************************************
 **  Function: badUsbKeyboardLayoutMenu
 **  Keyboard layout selection (moved out of Advanced > BadUSB/BLE), including
-**  Finland and user-supplied custom layouts.
+**  extra layouts and user-supplied custom layouts.
 **********************************************************************/
 static void badUsbKeyboardLayoutMenu() {
     while (true) {

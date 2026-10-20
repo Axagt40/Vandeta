@@ -1,7 +1,7 @@
 /*
- * Finnish keyboard layout (fi_FI).
+ * Nordic keyboard layout.
  *
- * Finland uses the shared Nordic physical layout (same key caps as the Swedish
+ * This is the shared Nordic physical layout (the same key caps as the Swedish
  * layout), so the ASCII mapping below is identical to KeyboardLayout_sv_SE:
  * the letters a-z sit on the same scan codes and the punctuation that differs
  * from a US keyboard (+, ?, ´, å, ä, ö, @, $, {, }, [, ], \, |, <, >) is
@@ -21,7 +21,7 @@
 
 #include "KeyboardLayout.h"
 
-extern const uint8_t KeyboardLayout_fi_FI[128] PROGMEM = {
+extern const uint8_t KeyboardLayout_nordic[128] PROGMEM = {
     0x00, // NUL
     0x00, // SOH
     0x00, // STX

@@ -66,7 +66,7 @@ void cleanupDuckyBLE(HIDInterface *&hid);
 // badusb.setLayout console/JS helpers).
 //   indices 0..14  on-flash layouts (0 US, 1 Danish, 2 UK, 3 FR, 4 DE, 5 HU,
 //                  6 IT, 7 US-alt, 8 PT-BR, 9 PT, 10 SI, 11 ES, 12 SV,
-//                  13 TR, 14 Finnish)
+//                  13 TR, 14 Nordic)
 //   index 15       user supplied custom layout held in RAM
 // ---------------------------------------------------------------------------
 #define BADUSB_LAYOUT_CUSTOM_INDEX 15

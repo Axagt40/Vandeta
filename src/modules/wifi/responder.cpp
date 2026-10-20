@@ -1043,7 +1043,7 @@ void responder() {
                                                 smbState.client.write(resp, 4 + smb2Len);
                                                 smbState.client.stop();
                                                 smbState.active = false;
-                                                Serial.println(F("Session SMB finnished."));
+                                                Serial.println(F("Session SMB finished."));
                                             }
                                         }
                                     }

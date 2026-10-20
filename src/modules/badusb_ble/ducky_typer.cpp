@@ -294,7 +294,7 @@ const uint8_t *keyboardLayouts[] PROGMEM = {
     KeyboardLayout_es_ES, // 11 Spanish
     KeyboardLayout_sv_SE, // 12 Swedish
     KeyboardLayout_tr_TR, // 13 Turkish
-    KeyboardLayout_fi_FI  // 14 Finnish
+    KeyboardLayout_nordic  // 14 Nordic
 };
 
 // Layout index space used by bruceConfig.badUSBBLEKeyboardLayout. Indices 0..14
@@ -325,7 +325,7 @@ const char *badusbLayoutName(int idx) {
         case 11: return "Spanish";
         case 12: return "Swedish";
         case 13: return "Turkish";
-        case 14: return "Finnish";
+        case 14: return "Nordic";
         case BADUSB_LAYOUT_CUSTOM: return "Custom";
         default: return "US International";
     }
