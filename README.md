@@ -26,11 +26,6 @@ upstream feature list still applies here (it is reproduced further down).
 
 ## :sparkles: Why this exists
 
-Bruce already runs on this board, but out of the box you have to be at the
-device to use most of it: the screen is small, the encoder is fiddly, and the
-interesting parts (capture, replay, scripted attacks, radio analysis) are hard to
-watch or automate from a laptop.
-
 Vandeta's goal is to be the **only firmware you need for the T-Embed CC1101**:
 everything Bruce does, plus a full **USB console** that can drive and inspect the
 device from a PC — screens, menus, files, radios, memory and JavaScript — with no
