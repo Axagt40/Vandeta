@@ -54,6 +54,12 @@ WiFi, no reflash and no extra hardware.
 * **Frequency Analyzer.** A Flipper Zero style analyser for the CC1101 —
   coarse hop, 20 kHz fine pass, held readout, hit log — drawn in the theme
   colours.
+* **nRF24 raw capture.** `NRF24 > Raw Capture` listens in the pseudo-promiscuous
+  configuration (CRC off, auto-ack off, shortest address width, noise addresses
+  on every pipe), so a 2.4 GHz remote with an address the chip does not know can
+  be captured at all: 3-second captures or a 126-channel hop, RGB-remote presets,
+  channel scan, multi-frequency detection, packet analysis, save/load, raw
+  replay — and the same engine from `nrfcap` and `nrf24.*` in JavaScript.
 * **Universal IR remotes.** TV, AC, fans, audio, projectors and LED libraries
   from the Flipper IR database — 2,858 codes on the card. Pick a category, pick a
   button, and it sends the candidates in turn until the device reacts, exactly
@@ -101,6 +107,7 @@ still here, and no C identifier, file name or console verb was renamed.
 | Control from a PC | stock serial CLI | **Developer Options**: `ui` / `ui watch` / `move` / `press`, `file`, `mem` / `proc` / `sys` / `errors`, `livepatch`, `liveboot`, framed binary transfers |
 | **Sub-GHz / CC1101 RF** | stock driver sharing the display's SPI, so scans can hang or reset | **fixed** — every CC1101 access is serialized against the display; scans, reads, spectrum and the wardriver run reliably |
 | Radio tools | Bruce's scanner and spectrum | + Frequency Analyzer, SubGHz Wardriver, Packet Monitor (WiFi/BLE/nRF24/Sub-GHz), BLE Detector, BLE Capture & Replay |
+| nRF24 | spectrum, MouseJack, jammer | + **Raw Capture**: pseudo-promiscuous listen, 126-channel hop, RGB presets, channel scan, multi-frequency detect, packet analysis, save/load, replay |
 | IR | TV-B-Gone, custom codes | + Universal Remote: 2,858 library codes, RCA/NEC42 encoders and 12 brand AC remotes |
 | WiFi | Bruce's attack set | + ARP/DNS/HTTP interception on WPA2, hardened evil-twin portal, headless attacks, one flat attack menu |
 | BadUSB / HID | basic payloads | + `BadUSB Settings` (footprint, layouts incl. Finnish and custom, HID type, timing, payloads), `Apple/BLE Patch` |
@@ -131,20 +138,18 @@ Everything below is in this build and is not in stock Bruce (or is a fix to it).
 <details>
 <summary><b>USB console — Developer Options</b></summary>
 
-* One `Developer Mode` switch (`Config > System Config > Developer Options`) arms
-  the console and the speed profile together.
+* One `Developer Mode` switch (`Config > System Config > Developer Options`)
+  arms the console and the speed profile together.
 * `ui`, `ui watch`, `move up|down|left|right|nextpage`, `press ok|back` drive the
   menus and print the screen you land on — including the pages that build a
   local option list (Config, System Config, WiFi, Bluetooth, Files, Others).
 * `file read|write|list|delete|stat`, `log show|clear|on|off`, `errors`,
   `help <command>`.
-* `md5`, `crc32`, `cat` and `storage read` stream in 512-byte chunks — any file
-  size, no 3 KB ceiling, no wedged console.
-* `mem`, `proc`, `sys` report the board (internal vs PSRAM, tasks, version).
+* `usbdebug status|proto|on|off`, hot reload and live update rows in the menu,
+  and a framed binary protocol for reliable transfers over the same cable.
 * `livepatch apply <module> <code>` reloads the JavaScript layer without a
-  reflash; `liveboot` runs a script at boot.
-* `display ring on|off` and `display dump` inspect what a screen actually drew;
-  `usbdebug status|proto|on|off`, hot reload and live update rows in the menu.
+  reflash; `liveboot enable|disable|status` runs a script at boot.
+* `display ring on|off` and `display dump` inspect what a screen actually drew.
 * The error ring captures ESP-IDF, Arduino `log_x()` and plain `printf()` /
   NimBLE lines, not just one of the three.
 * No console command can be blocked by a modal banner, and turning Developer
@@ -166,6 +171,35 @@ Everything below is in this build and is not in stock Bruce (or is a fix to it).
   and one-pass `Identify & save` to a `_dec.sub`.
 * `subghz rx <timeout>` honours its argument (it used to parse the timeout as a
   frequency); `subghz wardriver capture|list|identify|identifyall|replay|status|selftest`.
+* Replay waits for the train's own duration (capped at 30 s) instead of a fixed
+  2 s, and a capture bigger than the replay buffer is refused instead of
+  crashing.
+
+</details>
+
+<details>
+<summary><b>nRF24 (2.4 GHz)</b></summary>
+
+* **Raw Capture** page (`NRF24 > Raw Capture`): receive in the
+  **pseudo-promiscuous** configuration — CRC off, auto-ack off, the shortest
+  address width and degenerate noise addresses on all six pipes — so a remote
+  with an unknown address can actually be captured (the stock 3-byte fixed
+  address only ever saw remotes whose address it already knew).
+* Capture 3 s on the current channel or **hop 0-125**, **RGB remote capture**
+  with presets (MiLight RGBW, CCT, RGB+CCT, RGB, FUT020), set capture channel,
+  frequency range, promiscuous on/off and data rate (1 Mbps / 2 Mbps /
+  250 kbps).
+* **Channel scan** (126 channels with an activity level), **Multi-freq detect**
+  (dual-frequency remotes), **Frequency analysis**, capture list, save/load
+  profiles, **Replay capture** and **Analyze packet** (length, unique bytes,
+  bit transitions, byte range, repetition, code length, kind).
+* Live progress screen with `Press BACK to stop`; only Back aborts.
+* Console: `nrfcap` / `nrf`
+  `info|init|promisc|channel|rate|power|freqrange|scan|capture|capch|lock|rgb|multifreq|profile|profiles|repeat|list|replay|save|load|analyze`.
+* JavaScript: `nrf24.captureRaw`, `replayRaw`, channel scan, multi-frequency
+  detection, signal analysis, save/load and the raw receive/send bindings.
+* Capture buffers come from PSRAM: the seven 5 KB copies that used to sit in
+  `.bss` cost the board the internal RAM WiFi and BLE need.
 
 </details>
 
@@ -189,11 +223,11 @@ Everything below is in this build and is not in stock Bruce (or is a fix to it).
   decoded, distance estimate, paging, hold and clear.
 * **Capture & Replay** with a live packet counter and Back-to-stop.
 * JS GATT client (connect, services, characteristics, read/write/notify) and the
-  capture/replay bindings.
+  capture/replay bindings, plus headless advertisement spam.
 * A failed BLE bring-up no longer holds ~34 KB of internal RAM for the rest of
-  the boot, the memory guard tests the real requirement, and WiFi now hands BLE
-  memory back — so a BLE tool started after another radio does not have to be
-  refused.
+  the boot, the memory guard tests the real requirement, `stopBLEStack()` tears
+  the controller down on every path, and WiFi hands BLE memory back — so a BLE
+  feature started after another radio is no longer refused with “Low RAM”.
 
 </details>
 
@@ -201,13 +235,14 @@ Everything below is in this build and is not in stock Bruce (or is a fix to it).
 <summary><b>Infrared</b></summary>
 
 * **Universal Remote** — the Flipper IR database's TV / AC / fans / audio /
-  projectors / LEDs libraries (2,858 codes), sweep-per-button with pause and
-  cancel.
+  projectors / LEDs libraries (2,858 codes, shipped on the card under
+  `/infrared/Universal/`), sweep-per-button with pause and cancel.
 * **Brand AC remotes** for twelve makes, sending a full state frame (power,
   mode, 16–30 °C, fan).
 * Hand-written encoders for RCA and NEC42, protocols the ESP32 IR library lacks.
 * Button lists build in one pass, so a category opens immediately and the
   sweep's progress bar is sized before the first code is sent.
+* TV-B-Gone and the universal sweep share one pause/cancel policy.
 * `ir uni list|buttons|send`, `ir ac list|send`, `ir rx <timeout>`; GPI02 is
   claimed before use and the LED is switched off afterwards.
 
@@ -244,13 +279,32 @@ Everything below is in this build and is not in stock Bruce (or is a fix to it).
 
 * `arpSpoof`, `dnsSpoof` and `httpInterceptor` for the MITM engines.
 * `wifi.injectPacket`, `sendRaw80211`, `captureStart`, `captureStop`,
-  `getCapturedPackets`, `packetInfo`, `injectDns`, `injectHttp`, `portal`.
-* BLE GATT client plus advertisement capture/replay.
-* `nrf24.captureRaw`, `replayRaw`, signal analysis and save/load.
-* `scriptFolder.*` (create, load, run, split, background, stop, kill) and
-  `setShared`/`getShared` for passing state into a job.
+  `getCapturedPackets`, `packetInfo`, `injectDns`, `injectHttp`,
+  `injectHttpRedirect`, `injectHtml`, `portal`, `setPromiscuous`.
+* BLE GATT client plus advertisement capture/replay and headless spam.
+* `nrf24.captureRaw`, `replayRaw`, channel scan, multi-frequency detect, signal
+  analysis, save/load, `receive`/`send` and the radio settings.
+* `scriptFolder.create|list|load|run|close|isRunning|getAllScripts|stop|kill`,
+  with `setShared`/`getShared` for passing state into a background job.
+* `ir.transmitRaw`, `subghz.scan`, `storage.exists|size|copy`,
+  `serial.available|read`.
 * Bindings hardened against the interpreter's moving GC, so building containers
   in a script can no longer corrupt the heap.
+
+</details>
+
+<details>
+<summary><b>Files, storage and settings</b></summary>
+
+* `md5`, `crc32`, `cat` and `storage read` stream in 512-byte chunks — any file
+  size, no 3 KB ceiling, no wedged console.
+* `file read|write|list|delete|stat` with paths resolved against the console's
+  working directory.
+* New persisted settings in `bruce.conf`: the Developer Mode switch, the
+  protocol preference, the whole BadUSB footprint and the Wardriver frequency,
+  duplicate window, minimum pulse count and band hop — all validated on load.
+* Renames migrate stored values (`JS Interpreter` → `Apps` stays hidden if it
+  was hidden before).
 
 </details>
 
@@ -265,10 +319,26 @@ Everything below is in this build and is not in stock Bruce (or is a fix to it).
 * Back returns to the parent menu instead of redrawing the page you left.
 * Capture screens show live progress and `Press BACK to stop`; only Back aborts,
   and presses queued during the capture are dropped before the result screen.
-* `JS Interpreter` is now **Apps** with an app-drawer icon (the stored setting
-  is migrated), and `BadUSB Config` is now **BadUSB Settings**.
+* `JS Interpreter` is now **Apps** with an app-drawer icon, and `BadUSB Config`
+  is now **BadUSB Settings**.
 * `ui` / `nav` readback reports the menu that is actually on screen, not the one
   you left.
+
+</details>
+
+<details>
+<summary><b>Board support and memory</b></summary>
+
+* The CC1101 and the display share one SPI bus; a `TFT_eSPI` bus lock
+  (`busLock()` / `busUnlock()`) lets the RF layer take the bus for a whole radio
+  operation.
+* nRF24 capture buffers live in PSRAM instead of `.bss` (≈36 KB of internal DRAM
+  returned), and every console/JS path shares one allocator.
+* WiFi brings its radio up through the raw IDF calls and releases the driver on
+  exit, so leaving a tap no longer strands ~60 KB.
+* `ensureMemForWifi()` releases BLE, the web UI and stale captures before a WiFi
+  feature gives up, and `radioHasMemForBle()` checks the real ~56 KB
+  requirement instead of one contiguous block.
 
 </details>
 
@@ -277,12 +347,14 @@ Everything below is in this build and is not in stock Bruce (or is a fix to it).
 
 * `USBSerial::vprintf()` no longer prints garbage for `%d` / `%s`.
 * The TFT screen-stream task no longer races a fast `display stop` / `start`
-  into a reboot.
+  into a reboot, and `display dump` no longer overflows the serial task's stack.
 * NimBLE's asynchronous scan start is handled, so BLE capture and the dashboard
   do not cancel themselves.
 * `i2c scan` takes its argument and prints one device per line; `proc` shows
   `any` for no-affinity tasks; the CC1101 driver no longer prints `setMHZ` /
   `SetTx` / `SetRx` chatter on the console.
+* A read-only console command can no longer wedge the console on a blocking
+  banner.
 
 </details>
 
@@ -294,6 +366,8 @@ Everything below is in this build and is not in stock Bruce (or is a fix to it).
 * USB product id `VANDETA`; web-UI titles are Vandeta's.
 * Default `platformio.ini` env is `lilygo-t-embed-cc1101`; `build.py` merges
   bootloader + partitions + app into `vandeta.bin` for a single flash at `0x0`.
+* The universal IR libraries ship in `sd_files/infrared/Universal/` and on the
+  card under `/infrared/Universal/`.
 * No C identifier, file name or console verb was renamed — `/BruceJS`, the
   `bruce` verbs, the BruceNet AP and the upstream menus stay as they are — and
   AGPL-3.0 plus upstream credit are unchanged.
