@@ -61,9 +61,8 @@ WiFi, no reflash and no extra hardware.
 * **BLE Detector.** A live table of every advertiser in range — name, address,
   RSSI and estimated distance, strongest first, with Apple's Continuity
   types (AirDrop, AirPods, Watch, Find My, ...) decoded instead of shown as
-  `<?>`. Receive-only. It is the newest screen here and still rough: distances
-  are an estimate, rotating addresses can duplicate rows, and it needs free
-  internal RAM (see the 1.1 release notes for the full caveat).
+  `<?>`. Receive-only. It is the newest screen here and may not work properly
+  yet: distances are an estimate and rotating addresses can duplicate rows.
 * **More radio work from JavaScript.** Raw nRF24 capture (including the five
   documented 2.4 GHz LED-controller protocols, channel-lock capture and a repeat
   finder), BLE advertisement capture/replay and a GATT client, plus
@@ -77,8 +76,41 @@ WiFi, no reflash and no extra hardware.
 * **A wider JavaScript API** (WiFi inject/capture/portal, BLE, nRF24, IR, Sub-GHz,
   display, storage, dialog, keyboard) with split scripts and background jobs.
 
-Everything else — the menus, the apps, the Sub-GHz/IR/RFID/NFC tooling, the
-upstream script ecosystem — is Bruce, unchanged.
+Everything else — the menus, the apps, the IR/RFID/NFC tooling, the upstream
+script ecosystem — is Bruce, unchanged.
+
+---
+
+## How Vandeta differs from Bruce
+
+Vandeta is not a rewrite. It is Bruce 1.16.1 with a new face, a handful of fixes
+and extra tools on top; every menu, app, script and file format Bruce has is
+still here, and no C identifier, file name or console verb was renamed.
+
+| | Bruce | Vandeta |
+|---|---|---|
+| Branding | Bruce | Vandeta boot screen, `vandeta 1.1` version, web-UI titles, USB product `VANDETA` |
+| Control from a PC | stock serial CLI | **Developer Options**: `ui` / `move` / `press`, `file` / `mem` / `proc` / `errors`, `livepatch`, framed binary transfers |
+| **Sub-GHz / CC1101 RF** | **not reliable on this board** | **works** — see below |
+| Radio tools | Bruce's scanner and spectrum | + Frequency Analyzer, SubGHz Wardriver, Packet Monitor (WiFi/BLE/nRF24/Sub-GHz), BLE Detector |
+| IR | TV-B-Gone, custom codes | + Universal Remote: 2,858 library codes and 12 brand AC remotes |
+| JavaScript | Bruce's interpreter | + WiFi inject/capture/portal, BLE GATT client, nRF24 raw capture, script folders, background jobs |
+
+### The RF fix, specifically
+
+On the T-Embed CC1101 the CC1101 sits on the **same SPI bus as the display**.
+Bruce's driver opens and closes an SPI transaction around every register access,
+so when a radio read lands while the screen is mid-draw, `endTransaction()`
+releases an SPI mutex owned by the *other* task: FreeRTOS asserts
+(`xTaskPriorityDisinherit`) and the board reboots, or the screen stops updating.
+That is why stock Bruce's Sub-GHz screens can hang or reset on this board.
+
+Vandeta serializes every CC1101 access against the display with one recursive
+lock (`rf_spi_lock()` in `src/modules/rf/rf_utils.cpp`) that holds the display's
+bus for the whole radio operation, parks sweeps between hops and uses an
+adaptive noise floor instead of a fixed threshold. The result: **Scan/Copy,
+Read, Spectrum, Frequency Analyzer, Wardriver, the Sub-GHz Packet Monitor and
+the `subghz` console verbs all work on this board.**
 
 ---
 
@@ -162,6 +194,12 @@ This produces `vandeta-lilygo-t-embed-cc1101.bin` and a merged copy named
 `vandeta.bin` in the project root (`build.py` runs `esptool merge-bin` as a
 post-action). `BRUCE_VERSION` is a `build_flags` define, so changing it
 invalidates the build cache — expect a 15-25 minute rebuild.
+
+---
+
+## Community
+
+Questions, builds and feedback: **Discord** — <https://discord.gg/dhPXgVerqD>
 
 ---
 
