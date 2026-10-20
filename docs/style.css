@@ -52,9 +52,26 @@ body::before {
   inset: 0;
   z-index: -1;
   background:
+    radial-gradient(760px 520px at 50% 22%, rgba(255, 47, 135, 0.10), transparent 72%),
     radial-gradient(600px 320px at 12% -6%, rgba(255, 47, 135, 0.16), transparent 70%),
     radial-gradient(520px 280px at 92% 0%, rgba(88, 101, 242, 0.12), transparent 70%);
   pointer-events: none;
+}
+
+/* The crown as a watermark: a black silhouette that multiplies into the
+   background glow, so the gradient shows around and through its cut-outs. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: #000;
+  -webkit-mask: url("img/crown.png") center 14% / clamp(340px, 58vw, 780px) no-repeat;
+  mask: url("img/crown.png") center 14% / clamp(340px, 58vw, 780px) no-repeat;
+  mix-blend-mode: multiply;
+  filter: drop-shadow(0 0 90px rgba(255, 47, 135, 0.10));
+  opacity: 0.9;
 }
 
 img,
@@ -192,12 +209,13 @@ hr {
 }
 
 .brand-mark {
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  background: linear-gradient(135deg, var(--accent), #8b5cf6);
-  box-shadow: 0 0 0 1px rgba(255, 47, 135, 0.35), 0 6px 18px rgba(255, 47, 135, 0.25);
-  transform: rotate(8deg);
+  width: 25px;
+  height: 21px;
+  background: linear-gradient(135deg, #ff2f87 10%, #b14cff 55%, #8b5cf6 100%);
+  -webkit-mask: url("img/crown.png") center / contain no-repeat;
+  mask: url("img/crown.png") center / contain no-repeat;
+  filter: drop-shadow(0 0 5px rgba(255, 47, 135, 0.55)) drop-shadow(0 0 14px rgba(139, 92, 246, 0.35));
+  flex: none;
 }
 
 .nav-toggle {
