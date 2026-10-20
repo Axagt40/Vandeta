@@ -14,10 +14,9 @@
 
 Vandeta is a **reskin of [Bruce](https://github.com/BruceDevices/firmware)** — the
 open-source ESP32 offensive-security firmware — built on **Bruce 1.16.1** and
-tuned for one board: the **LilyGo T-Embed CC1101**. It ships with its own boot
-screen and Vandeta branding in the web UI and on the console. The code
-underneath is Bruce's code: same architecture, same menus, same tools, same
-licence. Upstream credit and the AGPL-3.0 `LICENSE` are untouched, and the whole
+tuned for one board: the **LilyGo T-Embed CC1101**. The code underneath is
+Bruce's code: same architecture, same menus, same tools, same licence.
+Upstream credit and the AGPL-3.0 `LICENSE` are untouched, and the whole
 upstream feature list applies here too (it is reproduced further down).
 
 > **All credit for the firmware belongs to the Bruce project and its
