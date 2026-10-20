@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Documentation — Vandeta</title>
+<meta name="description" content="Vandeta documentation: installation at 0x0, SD card layout, USB console reference, feature list, building from source and troubleshooting.">
+<meta name="theme-color" content="#0a0a0f">
+<meta property="og:title" content="Documentation — Vandeta">
+<meta property="og:description" content="Install, SD layout, console reference, features, build and troubleshooting for Vandeta firmware.">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span>Vandeta</a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Main">
+      <a href="index.html">Overview</a>
+      <a href="flash.html">Flash</a>
+      <a href="console.html">Console</a>
+      <a href="docs.html">Docs</a>
+      <a class="nav-cta" href="https://github.com/Axagt40/Vandeta" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section class="page-head">
+    <div class="wrap">
+      <p class="eyebrow">Documentation</p>
+      <h1>Everything the firmware does</h1>
+      <p>
+        Install, card layout, the USB console, the feature list, building from
+        source and what to do when something does not answer. Written for
+        Vandeta 1.1 on the LilyGo T-Embed CC1101.
+      </p>
+      <ul style="columns:2;max-width:34rem;margin-top:1.25rem;font-size:0.92rem">
+        <li><a href="#install">Installation</a></li>
+        <li><a href="#sd-card">SD card layout</a></li>
+        <li><a href="#console">USB console</a></li>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#build">Build from source</a></li>
+        <li><a href="#troubleshoot">Troubleshooting</a></li>
+        <li><a href="#hosting">Hosting this site</a></li>
+        <li><a href="#credits">Credits and licence</a></li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="section" id="install">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Installation</h2>
+        <p>
+          The release image is pre-merged &mdash; bootloader, partition table and
+          application in one file &mdash; so it is a single write at offset
+          <code>0x0</code>.
+        </p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><th>File</th><td><code>vandeta.bin</code> and <code>vandeta.bin.sha256</code></td></tr>
+            <tr><th>Size</th><td>4,609,024 bytes</td></tr>
+            <tr><th>sha256</th><td><code>b467cdf2bfe39cab264bd0fc7bc0ba9040109e72ec7697bd9638b689877f170e</code></td></tr>
+            <tr><th>Offset</th><td><code>0x0</code> &mdash; never another offset</td></tr>
+            <tr><th>Chip</th><td>ESP32-S3, 16 MB flash</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>1. Verify the download</h3>
+<pre><code>sha256sum -c vandeta.bin.sha256</code></pre>
+
+      <h3>2. Flash it</h3>
+<pre><code>esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 115200 \
+    write_flash 0x0 vandeta.bin</code></pre>
+      <p>
+        <strong>Keep 115200.</strong> The board's USB-Serial-JTAG link, not the
+        host, sets the real speed; a write at <code>921600</code> stopped
+        part-way during testing and left the app partition incomplete. If a
+        flash stops, the board will not boot until it is flashed again — retry
+        at 115200.
+      </p>
+      <p>
+        On Windows the port is something like <code>COM5</code>. The board
+        exposes USB-Serial-JTAG while it is in console mode, which is the port
+        esptool talks to. Prefer a browser?
+        <a href="flash.html">The flasher on this site</a> does the same write,
+        after checking the image hash.
+      </p>
+
+      <h3>Port modes</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>USB ID</th><th>What it is</th><th>What to do</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code>303a:1001</code></td>
+              <td>USB-Serial-JTAG console</td>
+              <td>Correct for flashing and for the console.</td>
+            </tr>
+            <tr>
+              <td><code>303a:0002</code></td>
+              <td>USB Mass Storage mode</td>
+              <td>Leave that mode on the device; no host command can switch it.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Clean install</h3>
+      <p>
+        Erase first when you want to drop saved settings and the configuration
+        partition:
+      </p>
+<pre><code>esptool.py --chip esp32s3 --port /dev/ttyACM0 erase_flash
+esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 115200 \
+    write_flash 0x0 vandeta.bin</code></pre>
+      <p>
+        Flashing this image does not touch the SD card. If the flash cannot
+        start, hold <strong>BOOT</strong> while plugging the cable in and retry.
+      </p>
+
+      <div class="callout">
+        <strong>Linux:</strong> if <code>lsusb</code> shows <code>303a:1001</code>
+        but no <code>/dev/ttyACM0</code> appears, the driver is not loaded:
+        <code>sudo modprobe cdc_acm</code>.
+      </div>
+
+      <div class="callout warn">
+        <strong>Wrong offset, wrong boot.</strong> A merged image written at any
+        offset other than <code>0x0</code> will not start. Re-flash at
+        <code>0x0</code> after an <code>erase_flash</code> to recover.
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="sd-card">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>SD card layout</h2>
+        <p>
+          The firmware runs without a card, but scripts, the universal IR
+          libraries, portals and wardriver captures live on it.
+        </p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Path</th><th>What goes there</th><th>Optional</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code>/scripts</code>, <code>/BruceScripts</code>, <code>/BruceJS</code></td>
+              <td>JavaScript files (<code>.js</code> / <code>.bjs</code>) picked up by the interpreter, listed as <strong>Apps</strong>.</td>
+              <td>Yes, but nothing to run without it</td>
+            </tr>
+            <tr>
+              <td><code>/infrared/Universal/</code></td>
+              <td>The Flipper IR libraries (TV, AC, fans, audio, projectors, LEDs) behind Universal Remote. The same files ship in <code>sd_files/infrared/Universal/</code> in the repository.</td>
+              <td>Yes &mdash; Universal Remote lists only the categories it finds</td>
+            </tr>
+            <tr>
+              <td><code>/bruce/subghz/wardriver</code></td>
+              <td>Wardriver recordings, one <code>.sub</code> file per burst, plus <code>_dec.sub</code> files written by <strong>Identify &amp; save</strong>.</td>
+              <td>Created by the wardriver</td>
+            </tr>
+            <tr>
+              <td><code>/portals/en/</code></td>
+              <td>Captive-portal pages; <code>/portals/en/rickroll.html</code> is the one the rickroller script looks for, falling back to its built-in copy.</td>
+              <td>Yes</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Card files can be inspected on the device (<strong>Files</strong>, or
+        <code>ls</code> / <code>cat</code> / <code>storage read</code> on the
+        console) or written over USB with
+        <code>file write &lt;path&gt; &lt;text&gt;</code>.
+      </p>
+    </div>
+  </section>
+
+  <section class="section" id="console">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>USB console</h2>
+        <p>
+          Turn on <strong>Config &rarr; System Config &rarr; Developer
+          Options</strong> &rarr; <strong>Developer Mode</strong>, then talk to
+          the board over the same USB cable at 115200 baud. One switch arms the
+          console and the speed profile together.
+        </p>
+      </div>
+
+      <div class="callout">
+        The console boots in plain text and only switches modes when asked, so a
+        mis-typed command cannot leave the board unusable. Every command answers
+        immediately &mdash; none waits on a modal banner. The
+        <a href="console.html">live console</a> on this site is the same
+        connection in a browser tab.
+      </div>
+
+      <h3>Menus and screen</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td><code>ui</code></td><td>Prints the menu that is on screen: title, every row and the highlighted row.</td></tr>
+            <tr><td><code>ui down</code>, <code>ui up</code>, <code>ui select</code></td><td>Moves the highlight or opens the row, then prints the screen you land on.</td></tr>
+            <tr><td><code>ui watch on|off</code></td><td>Streams every screen change as it happens.</td></tr>
+            <tr><td><code>move up|down|left|right|nextpage</code></td><td>Key injection with the same readback.</td></tr>
+            <tr><td><code>press ok|back</code></td><td>Presses the encoder or Back and reports the new screen.</td></tr>
+            <tr><td><code>display ring on|off</code>, <code>display dump</code></td><td>Inspect what a screen actually drew.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Files, logs and system</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td><code>file read|write|list|delete|stat</code></td><td>File operations relative to the console's working directory.</td></tr>
+            <tr><td><code>log show|clear|on|off</code></td><td>The serial log ring.</td></tr>
+            <tr><td><code>errors</code></td><td>The error ring: ESP-IDF, Arduino <code>log_x()</code> and plain <code>printf()</code> / NimBLE lines in one place.</td></tr>
+            <tr><td><code>mem</code>, <code>proc</code>, <code>sys</code>, <code>info</code></td><td>Free memory, task list, system information and the firmware version.</td></tr>
+            <tr><td><code>md5</code>, <code>crc32</code>, <code>cat</code>, <code>storage read</code></td><td>Streamed in 512-byte chunks, so any file size works.</td></tr>
+            <tr><td><code>help &lt;command&gt;</code></td><td>Usage for one command; bare <code>help</code> lists them.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Developer features</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td><code>usbdebug status|proto|on|off</code></td><td>Console state, and the framed binary protocol for reliable transfers.</td></tr>
+            <tr><td><code>livepatch apply &lt;module&gt; &lt;code&gt;</code></td><td>Reloads the JavaScript layer without a reflash.</td></tr>
+            <tr><td><code>liveboot enable|disable|status</code></td><td>Runs a script at boot through the Startup App mechanism.</td></tr>
+            <tr><td><code>js run &lt;file&gt;</code>, <code>js stop</code></td><td>Start or stop the interpreter headlessly.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Radios, IR and BadUSB</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td><code>subghz rx &lt;seconds&gt;</code></td><td>Listens for a timed window on the CC1101.</td></tr>
+            <tr><td><code>subghz wardriver capture|list|identify|identifyall|replay|status|selftest</code></td><td>Drives the wardriver headlessly: record, browse, decode and replay captures.</td></tr>
+            <tr><td><code>nrfcap</code> / <code>nrf</code> <code>info|init|promisc|channel|rate|power|freqrange|scan|capture|capch|lock|rgb|multifreq|profile|profiles|repeat|list|replay|save|load|analyze</code></td><td>The nRF24 side: pseudo-promiscuous capture, channel runs, profiles, replay and packet analysis.</td></tr>
+            <tr><td><code>ir uni list|buttons|send</code></td><td>Universal Remote: categories, button names and a code sweep.</td></tr>
+            <tr><td><code>ir ac list|send</code></td><td>The twelve brand AC encoders.</td></tr>
+            <tr><td><code>ir rx &lt;seconds&gt;</code></td><td>Records an IR frame for a timed window.</td></tr>
+            <tr><td><code>badusb config|set|layout-import|layout-export|layout-copy|mouse|click</code></td><td>USB footprint, layout handling, HID device type and pointer input.</td></tr>
+            <tr><td><code>moreatk</code></td><td>Runs the WiFi attacks headlessly, with a deadline.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout warn">
+        <strong>Opening the serial port resets the board.</strong> That is the
+        USB-Serial-JTAG bridge, not a firmware fault &mdash; every session starts
+        with one boot.
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="features">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Features</h2>
+        <p>
+          Bruce's menus, apps, radios and script ecosystem are unchanged and
+          still present. These are the layers Vandeta adds on top.
+        </p>
+      </div>
+
+      <details open>
+        <summary><b>USB console &mdash; Developer Options</b></summary>
+        <ul>
+          <li>A single <strong>Developer Mode</strong> switch arms the console and the speed profile.</li>
+          <li><code>ui</code>, <code>move</code> and <code>press</code> drive the menus and print the screen you land on, including pages that build a local option list.</li>
+          <li>The error ring collects ESP-IDF, Arduino and plain <code>printf()</code> lines; turning Developer Mode off releases the console's queues and RX buffer.</li>
+        </ul>
+      </details>
+
+      <details>
+        <summary><b>Sub-GHz / CC1101</b></summary>
+        <ul>
+          <li>Serialized SPI access to the radio the display shares, so scans, reads, spectrum, the analyzer and the wardriver run reliably.</li>
+          <li>Flipper-style Frequency Analyzer: coarse hop over the three CC1101 bands, 20 kHz fine pass, held readout, last three hits and a sortable log page.</li>
+          <li>SubGHz Wardriver records whole bursts straight to the card, rejects short-pulse noise, replays verbatim and can decode a capture to <code>_dec.sub</code>.</li>
+        </ul>
+      </details>
+
+      <details>
+        <summary><b>nRF24 (2.4 GHz)</b></summary>
+        <ul>
+          <li>Raw capture in the pseudo-promiscuous configuration: CRC off, auto-ack off, shortest address width, degenerate addresses on all six pipes.</li>
+          <li>3 s capture or a hop over 0&ndash;125, RGB-remote presets (MiLight RGBW / CCT / RGB+CCT / RGB, FUT020), channel scan, multi-frequency detect, save/load, replay and packet analysis.</li>
+          <li>Capture buffers come from PSRAM, keeping about 36 KB of internal DRAM free for WiFi and BLE.</li>
+        </ul>
+      </details>
+
+      <details>
+        <summary><b>Packet Monitor</b></summary>
+        <ul>
+          <li>One dashboard fed by WiFi, BLE, nRF24 and sub-GHz, opened from each menu with its radio preselected.</li>
+          <li>Filters, per-radio and per-type counters, packets per second, busiest channel, CSV export and PCAP export of captured WiFi frames.</li>
+        </ul>
+      </details>
+
+      <details>
+        <summary><b>BLE</b></summary>
+        <ul>
+          <li><strong>BLE Detector</strong>: live, RSSI-sorted table with Apple Continuity types decoded, distance estimate, paging, hold and clear. Receive-only.</li>
+          <li>Capture &amp; replay with a live counter, a JavaScript GATT client, and headless advertisement spam.</li>
+          <li>Bring-up and teardown keep internal DRAM available, and WiFi features free BLE memory first.</li>
+        </ul>
+      </details>
+
+      <details>
+        <summary><b>Infrared</b></summary>
+        <ul>
+          <li>Universal Remote over the Flipper libraries &mdash; 2,858 codes across TV, AC, fans, audio, projectors and LEDs &mdash; with pause and cancel during a sweep.</li>
+          <li>Brand AC remotes for twelve makes send a full state frame: power, mode, 16&ndash;30 &deg;C, fan.</li>
+          <li>Hand-written RCA and NEC42 encoders, and TV-B-Gone shares the same pause policy.</li>
+        </ul>
+      </details>
+
+      <details>
+        <summary><b>WiFi</b></summary>
+        <ul>
+          <li>One flat <strong>Wifi Atks</strong> page and one <strong>Target Atks</strong> page, with no nested duplicate menus.</li>
+          <li>ARP spoofing, DNS spoofing and HTTP interception that reach WPA2/WPA3 clients over the encrypted station link.</li>
+          <li>Evil-twin portal refuses with a readable error when DMA memory is short, and attacks can run headlessly with a deadline.</li>
+        </ul>
+      </details>
+
+      <details>
+        <summary><b>BadUSB / HID</b></summary>
+        <ul>
+          <li>Footprint (VID, PID, manufacturer, product, serial), layouts with import/export, HID device type, timing and a payload manager.</li>
+          <li>Payloads keep typing past characters the active layout cannot express.</li>
+          <li>Apple/BLE patch and BadBLE name, so the BLE keyboard is listed by iOS and macOS and pairs Just Works.</li>
+        </ul>
+      </details>
+
+      <details>
+        <summary><b>JavaScript API</b></summary>
+        <ul>
+          <li><code>arpSpoof</code>, <code>dnsSpoof</code> and <code>httpInterceptor</code>, plus the <code>wifi</code> injection and capture bindings.</li>
+          <li>BLE GATT client, nRF24 capture and replay, IR, sub-GHz and storage bindings.</li>
+          <li><code>scriptFolder</code> runs background jobs, with <code>setShared</code>/<code>getShared</code> for state.</li>
+        </ul>
+      </details>
+
+      <details>
+        <summary><b>Menus and navigation</b></summary>
+        <ul>
+          <li>Breadcrumb path, <code>n/total</code> counter and scrollbar on long lists, plus an encoder hint bar.</li>
+          <li>A child menu works on its own copy of the option list, so it cannot disturb the page it was opened from.</li>
+          <li>Capture screens show progress and <strong>Press BACK to stop</strong>; only Back aborts.</li>
+        </ul>
+      </details>
+
+      <details>
+        <summary><b>Board support and memory</b></summary>
+        <ul>
+          <li>The CC1101 and the display share one SPI bus, guarded by a <code>TFT_eSPI</code> bus lock for whole radio operations.</li>
+          <li>The WiFi tap brings the radio up directly and releases the driver when it closes; starting a WiFi feature frees BLE, the Web UI and stale captures first.</li>
+          <li>BLE bring-up is checked against the full ~56 KB it needs, instead of the largest contiguous block alone.</li>
+        </ul>
+      </details>
+    </div>
+  </section>
+
+  <section class="section" id="build">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Build from source</h2>
+        <p>
+          PlatformIO Core 6.1.19 or newer and <code>python3</code>. The first
+          build needs network access to resolve <code>lib_deps</code>; they are
+          cached under <code>.pio/</code> afterwards.
+        </p>
+      </div>
+
+<pre><code>pio run -e lilygo-t-embed-cc1101</code></pre>
+
+      <p>
+        This produces <code>vandeta-lilygo-t-embed-cc1101.bin</code> and a
+        merged copy named <code>vandeta.bin</code> in the project root
+        (<code>build.py</code> runs <code>esptool merge-bin</code> as a
+        post-action). The default environment is
+        <code>lilygo-t-embed-cc1101</code>.
+      </p>
+
+      <div class="callout">
+        <code>BRUCE_VERSION</code> is a <code>build_flags</code> define, so
+        changing it invalidates the build cache &mdash; expect a 15&ndash;25
+        minute rebuild.
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Requirement</th><th>Version used</th></tr></thead>
+          <tbody>
+            <tr><td>PlatformIO Core</td><td>6.1.19 or compatible</td></tr>
+            <tr><td>Platform</td><td><code>pioarduino/platform-espressif32 @ 55.03.39</code></td></tr>
+            <tr><td>Framework</td><td>Arduino-ESP32 3.3.9</td></tr>
+            <tr><td>Toolchain</td><td><code>toolchain-xtensa-esp-elf @ 14.2.0</code></td></tr>
+            <tr><td>Target</td><td>16 MB flash, 8 MB PSRAM</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="troubleshoot">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Troubleshooting</h2>
+        <p>Start with the cable and the offset; those account for most failures.</p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Device boots to a blank screen</td>
+              <td>The merged image was written at the wrong offset.</td>
+              <td><code>erase_flash</code>, then write at <code>0x0</code>.</td>
+            </tr>
+            <tr>
+              <td>No <code>/dev/ttyACM0</code> (or no port at all)</td>
+              <td>Mass Storage mode (<code>303a:0002</code>), a power-only cable, or the host driver is not loaded.</td>
+              <td>Leave Mass Storage mode on the device, change the cable, and on Linux run <code>sudo modprobe cdc_acm</code>.</td>
+            </tr>
+            <tr>
+              <td>esptool cannot connect</td>
+              <td>The board is not in download mode.</td>
+              <td>Hold <strong>BOOT</strong> while plugging the cable in, and confirm the port with <code>lsusb | grep 303a</code>.</td>
+            </tr>
+            <tr>
+              <td>Scripts list is empty</td>
+              <td>No scripts on the card, or the wrong folder.</td>
+              <td>Put <code>.js</code> files under <code>/scripts</code>, <code>/BruceScripts</code> or <code>/BruceJS</code>; verify with the SD Card Manager.</td>
+            </tr>
+            <tr>
+              <td>Console commands are refused</td>
+              <td>Developer Mode is off.</td>
+              <td>Turn on <strong>Config &rarr; System Config &rarr; Developer Options &rarr; Developer Mode</strong>, then check <code>usbdebug status</code>.</td>
+            </tr>
+            <tr>
+              <td>Injection &ldquo;works&rdquo; but nothing reaches the victim</td>
+              <td>Application-layer injection only lands on OPEN/WEP networks.</td>
+              <td>Use the target pages against a network you are authorised to test, or use the encrypted-link engines (ARP/DNS/HTTP) as designed.</td>
+            </tr>
+            <tr>
+              <td>A radio tool says it has no memory</td>
+              <td>Only one radio stack fits at a time on this board.</td>
+              <td>Leave the other radio's screen first; WiFi bring-up frees BLE and stale captures automatically.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="hosting">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Hosting this site</h2>
+        <p>
+          Three free options, and the one constraint that decides between them:
+          browsers only expose Web Serial &mdash; which the flasher needs &mdash;
+          on a <strong>secure origin</strong>. That means <code>https://</code>
+          or <code>http://localhost</code>. A plain
+          <code>http://192.168.x.x</code> page loads fine but its
+          <em>Connect</em> button will not work.
+        </p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Where</th><th>How</th><th>Flasher works?</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>GitHub Pages</strong></td>
+              <td>Free for public repositories: <em>Settings &rarr; Pages &rarr;
+              Deploy from a branch &rarr; <code>main</code> &rarr;
+              <code>/docs</code></em>. The site is then served over HTTPS at
+              <code>axagt40.github.io/Vandeta/</code>.</td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td><strong>This computer</strong></td>
+              <td><code>python3 -m http.server 8000 --directory docs</code>, then
+              open <code>http://localhost:8000</code>. No account, no upload,
+              works on a train.</td>
+              <td>Yes &mdash; <code>localhost</code> is a secure origin</td>
+            </tr>
+            <tr>
+              <td><strong>Phone (Termux / proot)</strong></td>
+              <td><code>python3 -m http.server 8000 --directory docs</code> in
+              Termux or Debian; other devices open
+              <code>http://&lt;phone-ip&gt;:8000</code>. For HTTPS, run a free
+              tunnel (for example a cloudflared quick tunnel) in front of it.</td>
+              <td>Only through the tunnel &mdash; plain LAN HTTP is not secure</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout">
+        <strong>The board plugs into the computer, not the phone.</strong> The
+        page may be served from anywhere, but <code>navigator.serial</code> only
+        sees devices attached to the machine running Chrome. Serving this folder
+        from a phone is fine for reading the docs; flashing wants the board on
+        the same computer as the browser.
+      </div>
+
+      <div class="callout warn">
+        <strong>One external request.</strong> The flasher imports the pinned
+        <code>esptool-js</code> 0.7.0 bundle from unpkg, so that page needs
+        internet access even when the site itself is served locally. Everything
+        else is in this folder, including the
+        <code>firmware/vandeta.bin</code> copy it flashes.
+      </div>
+
+      <p class="file-meta">
+        Keep <code>docs/firmware/vandeta.bin</code> and its
+        <code>.sha256</code> in step with each release: the page refuses to
+        flash an image whose hash does not match the one it publishes.
+      </p>
+    </div>
+  </section>
+
+  <section class="section" id="credits">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Credits and licence</h2>
+      </div>
+      <div class="panel">
+        <p>
+          Vandeta is <strong>custom firmware built on
+          <a href="https://github.com/BruceDevices/firmware" rel="noopener">Bruce</a>
+          1.16.1</strong> (upstream:
+          <a href="https://github.com/pr3y/Bruce" rel="noopener">pr3y/Bruce</a>).
+          The firmware is Bruce's work and its authors'; the whole upstream
+          feature list, device support and documentation still apply.
+        </p>
+        <p>
+          All credit for the firmware belongs to the Bruce project and its
+          contributors. Licence <strong>AGPL-3.0</strong> &mdash;
+          <code>LICENSE</code> &mdash; with third-party notices in
+          <code>THIRD_PARTY.md</code>. Both are unchanged from upstream.
+        </p>
+        <p style="margin-bottom:0">
+          This is an offensive-security tool. Use it only on hardware you own or
+          have written authorisation to test. The developers accept no liability
+          for misuse.
+        </p>
+        <div class="btn-row" style="margin-top:1.25rem">
+          <a class="btn btn-ghost" href="https://github.com/Axagt40/Vandeta" rel="noopener">Repository</a>
+          <a class="btn btn-ghost" href="https://github.com/Axagt40/Vandeta/releases/latest" rel="noopener">Releases</a>
+          <a class="btn btn-primary" href="https://discord.gg/dhPXgVerqD" rel="noopener">Discord</a>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-bottom">
+      <span>&copy; <span data-year>2026</span> Vandeta contributors &middot; AGPL-3.0</span>
+      <span>Built on Bruce &middot; use only on hardware you own or are authorised to test</span>
+    </div>
+  </div>
+</footer>
+
+<script src="app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live USB console — Vandeta</title>
+<meta name="description" content="A live text console for Vandeta over USB: send ui, mem, errors and any other console verb from the browser, and read the board's output.">
+<meta name="theme-color" content="#0a0a0f">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span>Vandeta</a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Main">
+      <a href="index.html">Overview</a>
+      <a href="flash.html">Flash</a>
+      <a href="console.html">Console</a>
+      <a href="docs.html">Docs</a>
+      <a class="nav-cta" href="https://github.com/Axagt40/Vandeta" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section class="page-head">
+    <div class="wrap">
+      <p class="eyebrow">Live console</p>
+      <h1>Talk to the board</h1>
+      <p>
+        This is the firmware's own text console, not a shell: every line goes
+        straight to the board over USB and its answer is printed here. Turn on
+        <strong>Config &rarr; System Config &rarr; Developer Options</strong> on
+        the device first, or the developer verbs will be refused.
+      </p>
+    </div>
+  </section>
+
+  <div class="wrap tool">
+    <div>
+      <div class="panel" style="padding:1rem">
+        <div class="status" style="justify-content:space-between;flex-wrap:wrap;margin-bottom:0.8rem">
+          <span class="status"><span class="dot" id="serial-dot"></span><span id="serial-status">Not connected.</span></span>
+          <span class="file-meta">opening the port resets the board</span>
+        </div>
+        <div class="btn-row" style="align-items:flex-end">
+          <div class="field" style="margin:0;min-width:170px">
+            <label for="baud">Baud</label>
+            <select id="baud">
+              <option value="115200" selected>115200</option>
+              <option value="230400">230400</option>
+              <option value="921600">921600</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" id="connect-btn" type="button">Connect</button>
+          <button class="btn btn-ghost" id="disconnect-btn" type="button" disabled>Disconnect</button>
+        </div>
+
+        <div class="terminal" style="margin-top:1rem">
+          <div class="terminal-bar">
+            <span class="dot" id="term-dot"></span>
+            <span>USB-Serial-JTAG</span>
+            <span style="margin-left:auto" class="file-meta">text console</span>
+          </div>
+          <pre class="term-log" id="console-log" aria-live="polite"></pre>
+          <form class="term-input" id="cmd-form" autocomplete="off">
+            <input id="cmd" type="text" placeholder="ui" aria-label="Command" spellcheck="false">
+            <button class="btn btn-primary btn-small" type="submit">Send</button>
+          </form>
+        </div>
+
+        <div class="quick-row">
+          <button class="btn btn-ghost btn-small" type="button" data-cmd="ui">ui</button>
+          <button class="btn btn-ghost btn-small" type="button" data-cmd="ui watch on">ui watch on</button>
+          <button class="btn btn-ghost btn-small" type="button" data-cmd="ui watch off">ui watch off</button>
+          <button class="btn btn-ghost btn-small" type="button" data-cmd="mem">mem</button>
+          <button class="btn btn-ghost btn-small" type="button" data-cmd="errors">errors</button>
+          <button class="btn btn-ghost btn-small" type="button" data-cmd="info">info</button>
+          <button class="btn btn-ghost btn-small" type="button" data-fill="ui select ">ui select …</button>
+          <button class="btn btn-ghost btn-small" type="button" data-fill="ui move ">ui move …</button>
+        </div>
+
+        <div class="btn-row" style="margin-top:0.9rem">
+          <button class="btn btn-ghost btn-small" id="copy-btn" type="button">Copy log</button>
+          <button class="btn btn-ghost btn-small" id="save-btn" type="button">Download log</button>
+          <button class="btn btn-ghost btn-small" id="clear-btn" type="button">Clear</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="tool-side">
+      <div class="callout" style="margin:0">
+        <strong>What this is.</strong> The same console a serial monitor shows:
+        one command per line, answers printed as the firmware writes them. No
+        files are uploaded and nothing is stored on the board.
+      </div>
+      <div class="callout warn" style="margin:0">
+        <strong>Developer Options must be on.</strong> Without it, the board
+        answers plain-text commands only, and <code>ui</code>,
+        <code>move</code>, <code>file</code>, <code>livepatch</code> and the rest
+        are refused by the gate.
+      </div>
+
+      <div class="panel">
+        <h2 style="font-size:1rem">Try this</h2>
+<pre><code>ui                  screen you are on, and its rows
+ui move down        move the highlight, read the new screen
+ui select           open the highlighted row
+mem                 heap, internal DRAM, PSRAM
+errors              the error ring (ESP-IDF, Arduino, printf)
+info                firmware version and board
+help                every verb this build knows</code></pre>
+        <p class="file-meta" style="margin:0">
+          Full reference: <a href="docs.html#console">console documentation</a>.
+        </p>
+      </div>
+
+      <details>
+        <summary>Nothing appears after connecting</summary>
+        <p style="margin:0;color:var(--muted)">
+          The board resets when the port opens, so give it a second and watch
+          for its boot lines. If the log stays empty, another program is holding
+          the port &mdash; close serial monitors, the <code>bruceapp</code>
+          mirror, or an esptool session.
+        </p>
+      </details>
+
+      <details>
+        <summary>Commands are refused</summary>
+        <p style="margin:0;color:var(--muted)">
+          That is the Developer Mode gate, not a browser problem. Turn on
+          <strong>Config &rarr; System Config &rarr; Developer Options</strong>
+          and try again; <code>usbdebug status</code> reports the current state.
+        </p>
+      </details>
+    </div>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-bottom">
+      <span>&copy; <span data-year>2026</span> Vandeta contributors &middot; AGPL-3.0</span>
+      <span>Built on Bruce &middot; use only on hardware you own or are authorised to test</span>
+    </div>
+  </div>
+</footer>
+
+<script src="app.js" defer></script>
+<script type="module" src="console.js"></script>
+</body>
+</html>

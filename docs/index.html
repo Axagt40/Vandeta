@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vandeta — firmware for the LilyGo T-Embed CC1101</title>
+<meta name="description" content="Vandeta is custom ESP32 firmware for the LilyGo T-Embed CC1101, built on Bruce 1.16.1: sub-GHz, nRF24, BLE, IR, WiFi and a USB console that lets a PC drive the device.">
+<meta name="theme-color" content="#0a0a0f">
+<meta property="og:title" content="Vandeta — firmware for the LilyGo T-Embed CC1101">
+<meta property="og:description" content="One board, one cable, one firmware. Custom firmware built on Bruce 1.16.1, with a full USB console.">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span>Vandeta</a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Main">
+      <a href="index.html">Overview</a>
+      <a href="flash.html">Flash</a>
+      <a href="console.html">Console</a>
+      <a href="docs.html">Docs</a>
+      <a class="nav-cta" href="https://github.com/Axagt40/Vandeta" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <p class="eyebrow">ESP32-S3 &middot; LilyGo T-Embed CC1101</p>
+        <h1>One board.<br>One cable.<br>One firmware.</h1>
+        <p class="lede">
+          Vandeta is custom firmware for the LilyGo T-Embed CC1101, built on
+          Bruce 1.16.1. Everything Bruce does, plus a USB console that lets a PC
+          drive the menus, radios, files and scripts &mdash; with no WiFi, no
+          reflash and no extra hardware.
+        </p>
+        <div class="btn-row hero-actions">
+          <a class="btn btn-primary" href="flash.html">Flash in your browser</a>
+          <a class="btn btn-ghost" href="https://github.com/Axagt40/Vandeta/releases/latest" rel="noopener">Download 1.1</a>
+          <a class="btn btn-ghost" href="docs.html">Read the docs</a>
+        </div>
+        <p class="hero-note">vandeta 1.1 &middot; 4,609,024 bytes &middot; sha256 b467cdf2&hellip;f170e &middot; AGPL-3.0</p>
+      </div>
+
+      <aside class="device-card" aria-label="Hardware">
+        <h2>The target</h2>
+        <dl style="margin:0">
+          <div class="spec"><dt>Board</dt><dd>LilyGo T-Embed CC1101</dd></div>
+          <div class="spec"><dt>MCU</dt><dd>ESP32-S3</dd></div>
+          <div class="spec"><dt>Memory</dt><dd>16 MB flash / 8 MB PSRAM</dd></div>
+          <div class="spec"><dt>Display</dt><dd>320 &times; 170, encoder</dd></div>
+          <div class="spec"><dt>Radios</dt><dd>CC1101, nRF24, WiFi, BLE</dd></div>
+          <div class="spec"><dt>Base</dt><dd>Bruce 1.16.1</dd></div>
+        </dl>
+      </aside>
+    </div>
+  </section>
+
+  <div class="wrap">
+    <div class="stats">
+      <div class="stat"><b>4 radios</b><span>sub-GHz, 2.4 GHz, WiFi, BLE</span></div>
+      <div class="stat"><b>One image</b><span>merged, flashed at 0x0</span></div>
+      <div class="stat"><b>USB control</b><span>menus and radios from a PC</span></div>
+      <div class="stat"><b>AGPL-3.0</b><span>upstream credit kept</span></div>
+    </div>
+  </div>
+
+  <section class="section">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>What is on top of Bruce</h2>
+        <p>
+          Bruce's menus, apps, radios and script ecosystem are unchanged and
+          still there. This is the extra layer.
+        </p>
+      </div>
+
+      <div class="cards">
+        <article class="card">
+          <span class="card-tag">Developer Options</span>
+          <h3>A USB console over the same cable</h3>
+          <p>
+            <code>ui</code>, <code>move</code>, <code>press</code> drive the
+            menus and print the screen you land on; <code>file</code>,
+            <code>errors</code>, <code>mem</code>, <code>proc</code> and
+            <code>livepatch</code> cover the rest. One switch arms it.
+          </p>
+        </article>
+        <article class="card">
+          <span class="card-tag">Sub-GHz</span>
+          <h3>CC1101 that shares the display's SPI bus</h3>
+          <p>
+            A Flipper-style Frequency Analyzer, a wardriver that records whole
+            bursts and replays them verbatim, and a <code>subghz</code> console
+            path for headless testing.
+          </p>
+        </article>
+        <article class="card">
+          <span class="card-tag">nRF24</span>
+          <h3>Pseudo-promiscuous 2.4 GHz capture</h3>
+          <p>
+            CRC off, auto-ack off, degenerate addresses on every pipe, channel
+            hops and RGB-remote presets &mdash; with capture buffers in PSRAM so
+            WiFi and BLE still fit.
+          </p>
+        </article>
+        <article class="card">
+          <span class="card-tag">Packet Monitor</span>
+          <h3>One dashboard, four taps</h3>
+          <p>
+            WiFi, BLE, nRF24 and sub-GHz feed the same table, with filters,
+            per-radio counters, CSV export and PCAP export of captured frames.
+          </p>
+        </article>
+        <article class="card">
+          <span class="card-tag">Infrared</span>
+          <h3>Universal remote, 2,858 codes</h3>
+          <p>
+            The Flipper libraries for TV, AC, fans, audio, projectors and LEDs,
+            twelve brand AC encoders, and hand-written RCA and NEC42.
+          </p>
+        </article>
+        <article class="card">
+          <span class="card-tag">BLE</span>
+          <h3>A radar for what is advertising</h3>
+          <p>
+            A live, RSSI-sorted table with Apple Continuity types decoded and a
+            distance estimate, plus capture &amp; replay and a GATT client.
+          </p>
+        </article>
+        <article class="card">
+          <span class="card-tag">WiFi</span>
+          <h3>MITM that reaches WPA2 clients</h3>
+          <p>
+            ARP spoofing, DNS spoofing and HTTP interception on the encrypted
+            station link, exposed to menus and to scripts.
+          </p>
+        </article>
+        <article class="card">
+          <span class="card-tag">BadUSB</span>
+          <h3>HID that iOS and macOS accept</h3>
+          <p>
+            USB footprint, layouts with import/export, timing, a payload
+            manager, and a BLE keyboard that advertises one complete HID
+            payload.
+          </p>
+        </article>
+        <article class="card">
+          <span class="card-tag">JavaScript</span>
+          <h3>Scripts that reach the radios</h3>
+          <p>
+            <code>arpSpoof</code>, <code>dnsSpoof</code>,
+            <code>httpInterceptor</code>, <code>nrf24</code>,
+            <code>scriptFolder</code> and the rest &mdash; with hot reload from
+            the console.
+          </p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>From download to driven in three steps</h2>
+        <p>The image is pre-merged, so it is one write at offset 0x0.</p>
+      </div>
+      <ol class="steps">
+        <li>
+          <h3>Download the image</h3>
+          <p>
+            <code>vandeta.bin</code> plus its <code>.sha256</code> from the
+            latest release. Any OS; the browser flasher needs Chrome or Edge.
+          </p>
+        </li>
+        <li>
+          <h3>Flash it at 0x0</h3>
+          <p>
+            Use <a href="flash.html">the flasher</a> over Web Serial, or
+            <code>esptool.py write_flash 0x0 vandeta.bin</code>. Wrong offset,
+            wrong boot.
+          </p>
+        </li>
+        <li>
+          <h3>Drive it from the PC</h3>
+          <p>
+            Turn on Config &rarr; System Config &rarr; Developer Options, then
+            send <code>ui</code> over the same cable and read the screen back.
+          </p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap">
+      <div class="panel">
+        <h2>Straight from the console</h2>
+        <div class="code-head">
+          <span>serial &middot; 115200 &middot; Developer Mode on</span>
+          <button class="btn btn-ghost btn-small" type="button" data-copy="ui
+ui down
+mem
+errors
+livepatch apply hello console.log('hi')">Copy</button>
+        </div>
+<pre><code>ui
+ui down
+mem
+errors
+livepatch apply hello console.log('hi')</code></pre>
+        <p style="color:var(--muted);margin:0">
+          Every command answers immediately &mdash; none waits on a modal
+          banner. Try the same thing in the
+          <a href="console.html">live console</a>.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap">
+      <div class="panel" style="display:flex;flex-wrap:wrap;gap:1.5rem;align-items:center;justify-content:space-between">
+        <div style="max-width:60ch">
+          <h2 style="margin-bottom:0.35rem">Built on Bruce</h2>
+          <p style="margin:0;color:var(--muted)">
+            All credit for the firmware belongs to the Bruce project and its
+            contributors. Vandeta keeps the AGPL-3.0 licence, the upstream
+            documentation and the third-party notices untouched.
+          </p>
+        </div>
+        <div class="btn-row">
+          <a class="btn btn-ghost" href="https://github.com/BruceDevices/firmware" rel="noopener">Bruce on GitHub</a>
+          <a class="btn btn-primary" href="https://discord.gg/dhPXgVerqD" rel="noopener">Join the Discord</a>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span>Vandeta</a>
+        <p style="margin-top:0.75rem;max-width:32ch">
+          Custom firmware for the LilyGo T-Embed CC1101, built on Bruce 1.16.1.
+        </p>
+      </div>
+      <div>
+        <h3>Site</h3>
+        <div class="footer-links">
+          <a href="flash.html">Browser flasher</a>
+          <a href="console.html">Live console</a>
+          <a href="docs.html">Documentation</a>
+        </div>
+      </div>
+      <div>
+        <h3>Project</h3>
+        <div class="footer-links">
+          <a href="https://github.com/Axagt40/Vandeta" rel="noopener">Repository</a>
+          <a href="https://github.com/Axagt40/Vandeta/releases/latest" rel="noopener">Releases</a>
+          <a href="https://discord.gg/dhPXgVerqD" rel="noopener">Discord</a>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>&copy; <span data-year>2026</span> Vandeta contributors &middot; AGPL-3.0</span>
+      <span>Built on Bruce &middot; use only on hardware you own or are authorised to test</span>
+    </div>
+  </div>
+</footer>
+
+<script src="app.js" defer></script>
+</body>
+</html>

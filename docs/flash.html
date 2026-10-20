@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flash Vandeta in your browser — Vandeta</title>
+<meta name="description" content="Flash Vandeta to a LilyGo T-Embed CC1101 from Chrome or Edge over Web Serial. The image is checksum-verified before it is written at 0x0.">
+<meta name="theme-color" content="#0a0a0f">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span>Vandeta</a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Main">
+      <a href="index.html">Overview</a>
+      <a href="flash.html">Flash</a>
+      <a href="console.html">Console</a>
+      <a href="docs.html">Docs</a>
+      <a class="nav-cta" href="https://github.com/Axagt40/Vandeta" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section class="page-head">
+    <div class="wrap">
+      <p class="eyebrow">Browser flasher</p>
+      <h1>Flash it from this page</h1>
+      <p>
+        Chrome or Edge on desktop, a USB-C cable, and the board. The image is
+        downloaded here, checked against its published SHA-256, written at
+        <code>0x0</code> and the board is reset. Nothing is installed on your
+        computer.
+      </p>
+    </div>
+  </section>
+
+  <div class="wrap tool">
+    <div>
+      <div class="panel">
+        <h2 style="font-size:1.05rem">1 &middot; The image</h2>
+        <div class="status" style="justify-content:space-between;flex-wrap:wrap">
+          <span id="fw-name" class="file-meta">firmware/vandeta.bin</span>
+          <span id="fw-state" class="badge">loading</span>
+        </div>
+        <div class="file-meta" style="margin-top:0.6rem">
+          <div>size <span id="fw-size">—</span></div>
+          <div>sha256 <span id="fw-sha">—</span></div>
+          <div>expected <span id="fw-expected">—</span></div>
+        </div>
+
+        <div class="field" style="margin-top:1.1rem">
+          <label for="file">Or use a downloaded vandeta.bin</label>
+          <input id="file" type="file" accept=".bin,application/octet-stream">
+        </div>
+        <p class="file-meta" style="margin:0">
+          A file that does not match the published hash is refused &mdash; the
+          page will not write an image it cannot identify.
+        </p>
+
+        <hr style="margin:1.5rem 0">
+
+        <h2 style="font-size:1.05rem">2 &middot; The board</h2>
+        <div class="field">
+          <label for="baud">Link speed</label>
+          <select id="baud">
+            <option value="115200" selected>115200 (safe default)</option>
+            <option value="460800">460800</option>
+            <option value="921600">921600 (fast, fails on some boards)</option>
+          </select>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="connect-btn" type="button">Connect board</button>
+          <button class="btn btn-ghost" id="disconnect-btn" type="button" disabled>Disconnect</button>
+        </div>
+        <div class="status" style="margin-top:0.9rem">
+          <span class="dot" id="conn-dot"></span>
+          <span id="conn-status">Not connected.</span>
+        </div>
+        <div class="file-meta" style="margin-top:0.4rem">chip <span id="chip">—</span></div>
+
+        <hr style="margin:1.5rem 0">
+
+        <h2 style="font-size:1.05rem">3 &middot; Write</h2>
+        <label class="file-meta" style="display:flex;gap:0.5rem;align-items:flex-start;margin-bottom:0.9rem">
+          <input type="checkbox" id="erase-all">
+          <span>Erase the whole flash first (removes saved settings and the config partition)</span>
+        </label>
+        <button class="btn btn-primary" id="flash-btn" type="button" disabled>Flash Vandeta 1.1</button>
+        <div class="progress" aria-hidden="true"><i id="progress"></i></div>
+        <div class="progress-label"><span id="progress-note">idle</span><span id="progress-pct">0%</span></div>
+      </div>
+    </div>
+
+    <div class="tool-side">
+      <div class="terminal">
+        <div class="terminal-bar"><span class="dot"></span> flasher log</div>
+        <pre class="term-log" id="log"></pre>
+      </div>        <div class="callout warn" style="margin:0">
+        <strong>0x0, or it will not boot.</strong> The image is merged
+        (bootloader + partition table + app). This page always writes at
+        <code>0x0</code>.
+      </div>
+
+      <div class="callout" style="margin:0">
+        <strong>If a flash stops part-way</strong> (<code>The chip stopped
+        responding</code>), the app partition is left incomplete and the board
+        will not boot until it is flashed again. Retry at <strong>115200</strong>:
+        this board's USB-Serial-JTAG link is what limits the speed, and a write
+        at 921600 failed on it during testing.
+      </div>
+
+      <div class="callout" style="margin:0">
+        <strong>Requirements.</strong> Desktop Chrome or Edge 89+, a data-capable
+        USB-C cable, and nothing else holding the port (close any serial monitor
+        or esptool session). Opening the port resets the board once &mdash; that
+        is normal.
+      </div>
+
+      <details>
+        <summary>The board does not show up</summary>
+        <p style="margin:0;color:var(--muted)">
+          Check the cable first. <code>303a:1001</code> is console/JTAG mode and
+          is what flashing needs; <code>303a:0002</code> is USB Mass Storage mode
+          and must be left on the device. On Linux, if <code>lsusb</code> shows
+          the board but no port appears, load the driver:
+          <code>sudo modprobe cdc_acm</code>.
+        </p>
+      </details>
+
+      <details>
+        <summary>Prefer the command line?</summary>
+        <p style="margin:0;color:var(--muted)">
+          <code>sha256sum -c vandeta.bin.sha256</code> then
+          <code>esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write_flash 0x0 vandeta.bin</code>.
+          The <a href="docs.html#install">docs page</a> has the full procedure.
+        </p>
+      </details>
+
+      <p class="file-meta" style="margin:0">
+        Flashing uses <a href="https://github.com/espressif/esptool-js" rel="noopener">esptool-js</a>
+        0.7.0 from unpkg, pinned. Everything else on this page is served from
+        this site.
+      </p>
+    </div>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-bottom">
+      <span>&copy; <span data-year>2026</span> Vandeta contributors &middot; AGPL-3.0</span>
+      <span>Built on Bruce &middot; flash only hardware you own</span>
+    </div>
+  </div>
+</footer>
+
+<script src="app.js" defer></script>
+<script type="module" src="flash.js"></script>
+</body>
+</html>
