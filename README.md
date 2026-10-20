@@ -89,7 +89,7 @@ still here, and no C identifier, file name or console verb was renamed.
 |---|---|---|
 | Branding | Bruce | Vandeta boot screen, `vandeta 1.1` version, web-UI titles, USB product `VANDETA` |
 | Control from a PC | stock serial CLI | **Developer Options**: `ui` / `move` / `press`, `file` / `mem` / `proc` / `errors`, `livepatch`, framed binary transfers |
-| **Sub-GHz / CC1101 RF** | **not reliable on this board** | **works** — see below |
+| **Sub-GHz / CC1101 RF** | stock driver sharing the display's SPI, so scans can hang or reset | **fixed** — every CC1101 access is serialized against the display; scans, reads, spectrum and the wardriver run reliably |
 | Radio tools | Bruce's scanner and spectrum | + Frequency Analyzer, SubGHz Wardriver, Packet Monitor (WiFi/BLE/nRF24/Sub-GHz), BLE Detector |
 | IR | TV-B-Gone, custom codes | + Universal Remote: 2,858 library codes and 12 brand AC remotes |
 | JavaScript | Bruce's interpreter | + WiFi inject/capture/portal, BLE GATT client, nRF24 raw capture, script folders, background jobs |
@@ -101,14 +101,15 @@ Bruce's driver opens and closes an SPI transaction around every register access,
 so when a radio read lands while the screen is mid-draw, `endTransaction()`
 releases an SPI mutex owned by the *other* task: FreeRTOS asserts
 (`xTaskPriorityDisinherit`) and the board reboots, or the screen stops updating.
-That is why stock Bruce's Sub-GHz screens can hang or reset on this board.
+That is why stock Bruce's Sub-GHz screens can hang or reset: the radio and the
+board are fine, the driver is not.
 
 Vandeta serializes every CC1101 access against the display with one recursive
 lock (`rf_spi_lock()` in `src/modules/rf/rf_utils.cpp`) that holds the display's
 bus for the whole radio operation, parks sweeps between hops and uses an
 adaptive noise floor instead of a fixed threshold. The result: **Scan/Copy,
 Read, Spectrum, Frequency Analyzer, Wardriver, the Sub-GHz Packet Monitor and
-the `subghz` console verbs all work on this board.**
+the `subghz` console verbs all work reliably on this board.**
 
 ---
 
