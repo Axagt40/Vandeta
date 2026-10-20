@@ -33,99 +33,11 @@ WiFi, no reflash and no extra hardware.
 
 ---
 
-## :zap: What it adds on top of Bruce
+## :computer: Vandeta feature list
 
-* **Developer Options (USB console).** A persisted toggle that turns the USB
-  serial link into a real control surface: `ui` / `move` / `press` drive the menus
-  and print the screen you land on, `file` / `storage` / `md5` / `crc32` work on
-  the card, `mem` / `proc` / `sys` report the board, `errors` / `log show` dump
-  the error ring, `livepatch` reloads the JavaScript layer without a reflash and
-  `hotreload` re-runs a script when it changes on the card. It also speaks a
-  framed binary protocol for reliable transfers over the same cable.
-* **Packet Monitor.** One dashboard with a real capture ring fed by WiFi, BLE,
-  nRF24 and Sub-GHz, with filters, counters, CSV export and PCAP export.
-* **Frequency Analyzer.** A Flipper Zero style analyser for the CC1101 —
-  coarse hop, 20 kHz fine pass, held readout, hit log — drawn in the theme
-  colours.
-* **nRF24 raw capture.** `NRF24 > Raw Capture` listens in the pseudo-promiscuous
-  configuration (CRC off, auto-ack off, shortest address width, noise addresses
-  on every pipe), so a 2.4 GHz remote with an address the chip does not know can
-  be captured at all: 3-second captures or a 126-channel hop, RGB-remote presets,
-  channel scan, multi-frequency detection, packet analysis, save/load, raw
-  replay — and the same engine from `nrfcap` and `nrf24.*` in JavaScript.
-* **Universal IR remotes.** TV, AC, fans, audio, projectors and LED libraries
-  from the Flipper IR database — 2,858 codes on the card. Pick a category, pick a
-  button, and it sends the candidates in turn until the device reacts, exactly
-  like the Flipper/Momentum flow, in Vandeta's own menus. The AC page also has
-  **brand remotes** for twelve makes (Daikin, Gree, Midea, Panasonic, Samsung,
-  Toshiba, TCL, Mitsubishi, Hitachi, Kelvinator, Whirlpool, Coolix): set power,
-  mode, 16-30 °C and fan on screen and exactly that state frame is sent.
-* **SubGHz Wardriver.** Continuous capture of whatever the CC1101 hears: whole
-  bursts (never cut at a buffer seam), silent-noise rejection, a duplicate
-  window, optional 433/315/868/915 hopping, and one `.sub` file per signal under
-  `/bruce/subghz/wardriver`. Afterwards each capture can be replayed verbatim or
-  identified once into a decoded KeeLoq/OOK file.
-* **BLE Detector.** A live table of every advertiser in range — name, address,
-  RSSI and estimated distance, strongest first, with Apple's Continuity
-  types (AirDrop, AirPods, Watch, Find My, ...) decoded instead of shown as
-  `<?>`. Receive-only. It is the newest screen here and may not work properly
-  yet: distances are an estimate and rotating addresses can duplicate rows.
-* **More radio work from JavaScript.** Raw nRF24 capture (including the five
-  documented 2.4 GHz LED-controller protocols, channel-lock capture and a repeat
-  finder), BLE advertisement capture/replay and a GATT client, plus
-  `wifi.captureStart()`/`getCapturedPackets()` and packet decoding.
-* **Attacks that work on protected networks.** ARP spoofing, DNS spoofing and
-  HTTP interception/modification against WPA2 clients, with a captive-portal
-  (evil-twin) engine and a headless, deadline-bounded WiFi attack set.
-* **BadUSB, scriptable.** Layouts, VID/PID, manufacturer/product strings and
-  payloads are settable from the console and from scripts, and the BLE
-  keyboard's `Apple/BLE Patch` makes it appear to iOS and macOS.
-* **A wider JavaScript API** (WiFi inject/capture/portal, BLE, nRF24, IR, Sub-GHz,
-  display, storage, dialog, keyboard) with split scripts and background jobs.
-
-Everything else — the menus, the apps, the IR/RFID/NFC tooling, the upstream
-script ecosystem — is Bruce, unchanged.
-
----
-
-## :vs: How Vandeta differs from Bruce
-
-Vandeta is not a rewrite. It is Bruce 1.16.1 with a new face, a handful of fixes
-and extra tools on top; every menu, app, script and file format Bruce has is
-still here, and no C identifier, file name or console verb was renamed.
-
-| | Bruce | Vandeta |
-|---|---|---|
-| Control from a PC | stock serial CLI | **Developer Options**: `ui` / `ui watch` / `move` / `press`, `file`, `mem` / `proc` / `sys` / `errors`, `livepatch`, `liveboot`, framed binary transfers |
-| **Sub-GHz / CC1101 RF** | stock driver sharing the display's SPI, so scans can hang or reset | **fixed** — every CC1101 access is serialized against the display; scans, reads, spectrum and the wardriver run reliably |
-| Radio tools | Bruce's scanner and spectrum | + Frequency Analyzer, SubGHz Wardriver, Packet Monitor (WiFi/BLE/nRF24/Sub-GHz), BLE Detector, BLE Capture & Replay |
-| nRF24 | spectrum, MouseJack, jammer | + **Raw Capture**: pseudo-promiscuous listen, 126-channel hop, RGB presets, channel scan, multi-frequency detect, packet analysis, save/load, replay |
-| IR | TV-B-Gone, custom codes | + Universal Remote: 2,858 library codes, RCA/NEC42 encoders and 12 brand AC remotes |
-| WiFi | Bruce's attack set | + ARP/DNS/HTTP interception on WPA2, hardened evil-twin portal, headless attacks, one flat attack menu |
-| BadUSB / HID | basic payloads | + `BadUSB Settings` (footprint, layouts incl. extra layouts and custom, HID type, timing, payloads), `Apple/BLE Patch` |
-| JavaScript | Bruce's interpreter | + script folders, background jobs, ARP/DNS/HTTP spoofing, WiFi inject/capture/portal, BLE GATT, nRF24 raw capture |
-| Menus and UI | title only | + breadcrumb path, `n/total` counter, scrollbar, encoder hint bar, live capture screens, nested-menu guard |
-
-### The RF fix, specifically
-
-On the T-Embed CC1101 the CC1101 sits on the **same SPI bus as the display**.
-Bruce's driver opens and closes an SPI transaction around every register access,
-so when a radio read lands while the screen is mid-draw, `endTransaction()`
-releases an SPI mutex owned by the *other* task: FreeRTOS asserts
-(`xTaskPriorityDisinherit`) and the board reboots, or the screen stops updating.
-That is why stock Bruce's Sub-GHz screens can hang or reset: the radio and the
-board are fine, the driver is not.
-
-Vandeta serializes every CC1101 access against the display with one recursive
-lock (`rf_spi_lock()` in `src/modules/rf/rf_utils.cpp`) that holds the display's
-bus for the whole radio operation, parks sweeps between hops and uses an
-adaptive noise floor instead of a fixed threshold. The result: **Scan/Copy,
-Read, Spectrum, Frequency Analyzer, Wardriver, the Sub-GHz Packet Monitor and
-the `subghz` console verbs all work reliably on this board.**
-
-### The full list of differences
-
-Everything below is in this build and is not in stock Bruce (or is a fix to it).
+Everything below is in Vandeta and **not** in stock Bruce. Bruce's own menus,
+apps, radios and script ecosystem are unchanged and still present — this is the
+extra layer on top of them.
 
 <details>
 <summary><b>USB console — Developer Options</b></summary>
@@ -152,8 +64,11 @@ Everything below is in this build and is not in stock Bruce (or is a fix to it).
 <details>
 <summary><b>Sub-GHz / CC1101</b></summary>
 
-* Shared-SPI serialization for every radio transaction (the RF fix above),
-  sweep parking between hops and an adaptive noise floor.
+* **Working CC1101 RF.** On this board the radio shares the display's SPI bus,
+  and stock Bruce's driver can hang or reset the board when a read lands during
+  a draw. Vandeta serializes every radio transaction against the display
+  (`rf_spi_lock()`), parks sweeps between hops and uses an adaptive noise floor,
+  so scans, reads, spectrum, the analyzer and the wardriver run reliably.
 * **Frequency Analyzer** — Flipper-style: coarse hop over the three CC1101
   bands, 20 kHz fine pass, big held frequency readout, last three hits, RSSI
   meter, and a log page with sort (`OK`) and scroll.
