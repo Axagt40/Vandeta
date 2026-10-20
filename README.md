@@ -2,8 +2,6 @@
 
 **The only firmware you need for the LilyGo T-Embed CC1101.**
 
-![Vandeta](media/pictures/vandeta_crown.png)
-
 Vandeta is a **reskin of [Bruce](https://github.com/BruceDevices/firmware)** — the
 open-source ESP32 offensive-security firmware — built on **Bruce 1.16.1** and
 tuned for one board: the **LilyGo T-Embed CC1101**. It ships with its own boot
