@@ -8,8 +8,10 @@
 [![Licence](https://img.shields.io/badge/licence-AGPL--3.0-green)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20server-5865F2?logo=discord&logoColor=white)](https://discord.gg/dhPXgVerqD)
 
-> **[Download Vandeta 1.1](https://github.com/Axagt40/Vandeta/releases/latest)** — one merged image, flash it at `0x0`
+> **[Install in your browser](https://axagt40.github.io/Vandeta/flash.html)** — no tools, one button, Chrome or Edge
+> · **[Download Vandeta 1.1](https://github.com/Axagt40/Vandeta/releases/latest)** — one merged image, flash it at `0x0`
 > · **[What's new in 1.1](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.1)**
+> · **[Docs](https://axagt40.github.io/Vandeta/docs.html)**
 > · **[Discord](https://discord.gg/dhPXgVerqD)**
 
 Vandeta is custom firmware for one board, the **LilyGo T-Embed CC1101**, built
@@ -284,8 +286,14 @@ extra layer on top of them.
 
 ## :building_construction: Installing
 
-The image is **pre-merged** (bootloader + partition table + app), so it is one
-`write_flash` at offset **`0x0`**. Download it from the
+**Fastest: the [browser flasher](https://axagt40.github.io/Vandeta/flash.html).**
+Plug the board into a computer running Chrome or Edge, open that page and press
+**Install**. It reads the newest release from GitHub, checks the image against
+the release's SHA-256 and writes it at `0x0` — nothing to install on the
+computer.
+
+Or do it by hand: the image is **pre-merged** (bootloader + partition table +
+app), so it is one `write_flash` at offset **`0x0`**. Download it from the
 [latest release](https://github.com/Axagt40/Vandeta/releases/latest) —
 `vandeta.bin` — together with `vandeta.bin.sha256`.
 
@@ -294,7 +302,8 @@ The image is **pre-merged** (bootloader + partition table + app), so it is one
 sha256sum -c vandeta.bin.sha256
 
 # 2. flash it (board in console mode: lsusb shows 303a:1001)
-esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 921600 \
+# keep 115200: a 921600 write stopped part-way on this board during testing
+esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 115200 \
     write_flash 0x0 vandeta.bin
 ```
 
