@@ -191,7 +191,7 @@ void cacheSameSSIDAPs() {
     sameSSID_APs.clear();
     String currentSSID = WiFi.SSID();
     if (currentSSID.length() == 0) return;
-    int n = WiFi.scanNetworks(false, false);
+    int n = wifiScanNets(false);
     for (int i = 0; i < n; i++) {
         if (WiFi.SSID(i) == currentSSID) {
             APInfo info;
@@ -235,7 +235,7 @@ int getAPChannel(const uint8_t *target_bssid, bool *found) {
     }
     int found_channel = 0;
     bool matched = false;
-    int numNetworks = WiFi.scanNetworks(false, false);
+    int numNetworks = wifiScanNets(false);
     for (int i = 0; i < numNetworks; i++) {
         uint8_t *bssid_ptr = WiFi.BSSID((uint8_t)i);
         if (macCompare(bssid_ptr, target_bssid)) {
@@ -814,7 +814,7 @@ void deauthAllFromScan() {
     drawMainBorderWithTitle("Select AP");
 
     displayTextLine("Scanning for networks...");
-    int n = WiFi.scanNetworks(false, false);
+    int n = wifiScanNets(false);
     if (n == 0) {
         displayError("No networks found", true);
         return;
@@ -1003,7 +1003,7 @@ void showAPSelectionForClientDeauth() {
     drawMainBorderWithTitle("Select AP");
 
     displayTextLine("Scanning for networks...");
-    int n = WiFi.scanNetworks(false, false);
+    int n = wifiScanNets(false);
     if (n == 0) {
         displayError("No networks found", true);
         return;
@@ -1188,7 +1188,7 @@ void showTargetSelection() {
 
     displayTextLine("Scanning for networks...");
 
-    int n = WiFi.scanNetworks(false, true);
+    int n = wifiScanNets(true);
     if (n == 0) {
         displayError("No networks found", true);
         return;
@@ -1234,7 +1234,7 @@ void showTargetSelection() {
 
 std::vector<Host> buildTargetListFromScan() {
     std::vector<Host> targets;
-    int n = WiFi.scanNetworks(false, true);
+    int n = wifiScanNets(true);
 
     for (int i = 0; i < n; i++) {
         String bssid = WiFi.BSSIDstr(i);

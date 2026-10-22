@@ -17,6 +17,29 @@
 static TaskHandle_t timezoneTaskHandle = NULL;
 static bool wifiTransitioning = false;
 
+// Scan dwell. The Arduino default is min 100 ms / max 300 ms per channel, and
+// the driver waits the MAX on every channel of a 13-channel 2.4 GHz sweep, so a
+// scan blocks for ~3.9 s (measured 3.81 s on the board). The MAX is therefore
+// the only knob that matters; 150 ms brings the same sweep to ~2.4 s (measured,
+// repeatedly) at the cost of the weakest AP: a -90 dBm neighbour appeared in
+// 3 of 5 sweeps at 150 ms and in 4 of 4 at 300 ms, so a list that looks short
+// needs one more sweep (ESC refreshes). Passive scanning at 200 ms was measured
+// too - 3.0 s and no better discovery - so active at 150 ms is the setting.
+// The hidden-SSID flag is passed through: it changes what is reported, never
+// how long the sweep takes.
+#define WIFI_SCAN_MIN_MS 100
+#define WIFI_SCAN_MAX_MS 150
+
+int wifiScanNets(bool showHidden) {
+    static bool timingsSet = false;
+    if (!timingsSet) {
+        WiFi.setScanActiveMinTime(WIFI_SCAN_MIN_MS);
+        timingsSet = true;
+    }
+    int16_t nets = WiFi.scanNetworks(false, showHidden, false, WIFI_SCAN_MAX_MS);
+    return nets > 0 ? (int)nets : 0;
+}
+
 // Wi-Fi and BLE share the same DMA-capable internal DRAM, and this board does
 // not have enough of it for both at once. When a Wi-Fi bring-up is refused for
 // lack of a contiguous block, BLE is almost always the reason; give its memory
@@ -237,7 +260,7 @@ bool wifiConnectMenu(wifi_mode_t mode) {
             bool refresh_scan = false;
             do {
                 displayTextLine("Scanning..");
-                nets = WiFi.scanNetworks();
+                nets = wifiScanNets();
 
                 String selSsid = "";
                 int selEnc = 0;
@@ -337,7 +360,7 @@ void wifiConnectTask(void *pvParameters) {
     }
 
     WiFi.mode(WIFI_MODE_STA);
-    int nets = WiFi.scanNetworks();
+    int nets = wifiScanNets();
     String ssid;
     String pwd;
 
@@ -397,7 +420,7 @@ bool wifiConnecttoKnownNet(void) {
     displayTextLine("Scanning Networks..");
     WiFi.disconnect(true, true);
     vTaskDelay(10 / portTICK_PERIOD_MS);
-    nets = WiFi.scanNetworks();
+    nets = wifiScanNets();
     for (int i = 0; i < nets; i++) {
         vTaskDelay(10 / portTICK_PERIOD_MS);
         String ssid = WiFi.SSID(i);

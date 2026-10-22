@@ -95,7 +95,7 @@ JSValue native_wifiScan(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
         return JS_PopGCRef(ctx, &empty_ref);
     }
     WiFi.mode(WIFI_MODE_STA);
-    int nets = WiFi.scanNetworks();
+    int nets = wifiScanNets(false);
 
     // Same GC hazard as wifiGetCapturedPackets(): the result array and the entry
     // being built must be pinned in JSGCRefs, because each JS_NewString() below
@@ -613,7 +613,7 @@ JSValue native_wifiDeauthAll(JSContext *ctx, JSValue *this_val, int argc, JSValu
     uint8_t chans[MAX_APS];
     int n = 0;
 
-    int nets = WiFi.scanNetworks(false, true);
+    int nets = wifiScanNets(true);
     for (int i = 0; i < nets && n < MAX_APS; i++) {
         int ch = WiFi.channel(i);
         if (onlyChannel != 0 && ch != onlyChannel) continue;

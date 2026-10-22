@@ -440,7 +440,7 @@ void Wardriving::enforceRegisteredMACLimit() {
 
 int Wardriving::scanWiFiNetworks() {
     wifiConnected = true;
-    int network_amount = WiFi.scanNetworks();
+    int network_amount = wifiScanNets();
     return network_amount;
 }
 

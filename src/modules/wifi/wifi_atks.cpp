@@ -285,7 +285,7 @@ void wifi_atk_menu() {
     if (scanAtks) {
         int nets;
         displayTextLine("Scanning..");
-        nets = WiFi.scanNetworks(false, showHiddenNetworks);
+        nets = wifiScanNets(showHiddenNetworks);
         ap_records.clear();
         options = {};
         for (int i = 0; i < nets; i++) {
@@ -356,7 +356,7 @@ void deauthFloodAttack() {
     int nets;
 ScanNets:
     displayTextLine("Scanning..");
-    nets = WiFi.scanNetworks(false, showHiddenNetworks);
+    nets = wifiScanNets(showHiddenNetworks);
     ap_records.clear();
     for (int i = 0; i < nets; i++) {
         wifi_ap_record_t record;

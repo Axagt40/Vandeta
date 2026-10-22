@@ -684,7 +684,7 @@ static void mitmPickNetwork() {
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
     tft.drawString("Scanning...", 10, 50);
 
-    int found = WiFi.scanNetworks(false, false);
+    int found = wifiScanNets(false);
     if (found <= 0) {
         mitmAttackNote = "err: no networks found";
         return;

@@ -255,7 +255,7 @@ struct MoreAp {
 
 static int moreScanAps(std::vector<MoreAp> &aps, int maxAps = 24) {
     aps.clear();
-    int nets = WiFi.scanNetworks(false, showHiddenNetworks);
+    int nets = wifiScanNets(showHiddenNetworks);
     for (int i = 0; i < nets && (int)aps.size() < maxAps; i++) {
         uint8_t ch = (uint8_t)WiFi.channel(i);
         if (ch == 0) continue;

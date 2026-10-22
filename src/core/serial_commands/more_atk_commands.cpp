@@ -1,4 +1,5 @@
 #include "more_atk_commands.h"
+#include "core/wifi/wifi_common.h"
 #include "helpers.h"
 #include "modules/wifi/more_atks.h"
 #include "modules/wifi/wifi_atks.h"
@@ -47,11 +48,15 @@ uint32_t moreAtkCallback(cmd *c) {
     if (mode == "scan") {
         int nets = 0;
         {
-            if (!wifi_atk_setWifi()) {
-                serialDevice->println("ERR wifi start failed");
+            // A scan needs the station interface, not the attacker AP: starting
+            // the softAP first cost ~0.4 s per call and had to be torn down again
+            // afterwards, for a radio (and RSSI list) that is identical either way.
+            if (!wifiEnsureRadioMem()) {
+                serialDevice->println("ERR low RAM for wifi");
                 return false;
             }
-            nets = WiFi.scanNetworks(false, false);
+            WiFi.mode(WIFI_MODE_STA);
+            nets = wifiScanNets(false);
             for (int i = 0; i < nets; i++) {
                 serialDevice->println(
                     String("ap=") + (WiFi.SSID(i).length() ? WiFi.SSID(i) : String("<hidden>")) +
@@ -60,7 +65,8 @@ uint32_t moreAtkCallback(cmd *c) {
             }
             serialDevice->println(String("count=") + String(nets));
             WiFi.scanDelete();
-            wifi_atk_unsetWifi();
+            WiFi.mode(WIFI_MODE_NULL); // the scan brought the station up; release it
+
         }
         return true;
     }
