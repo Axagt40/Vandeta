@@ -7,6 +7,7 @@
 #include "gpio_commands.h"
 #include "interpreter_commands.h"
 #include "ir_commands.h"
+#include "mitm_commands.h"
 #include "nrf_commands.h"
 #include "power_commands.h"
 #include "rf_commands.h"
@@ -54,7 +55,8 @@ void SerialCli::setup() {
 #endif
 #ifndef LITE_VERSION
     createInterpreterCommands(&_cli);
-    createMoreCommands(&_cli); // More-style WiFi attacks (console driver)
+    createMoreCommands(&_cli);  // More-style WiFi attacks (console driver)
+    createMitmCommands(&_cli); // DNS Inject / HTML Intercept (console driver)
 #endif
     createNrfCommands(&_cli); // NRF24 capture/replay console driver
 #ifdef HAS_SCREEN

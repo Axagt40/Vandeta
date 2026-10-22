@@ -71,6 +71,7 @@ JsonDocument BruceConfig::toJson() const {
     setting["usbDebug"] = usbDebug;
     setting["usbDebugDevMode"] = usbDebugDevMode;
     setting["usbDebugBinary"] = usbDebugBinary;
+    setting["uiGradient"] = uiGradient;
     setting["colorInverted"] = colorInverted;
 
     setting["badUSBBLEKeyboardLayout"] = badUSBBLEKeyboardLayout;
@@ -420,6 +421,9 @@ void BruceConfig::fromFile(bool checkFS) {
         count++;
         log_e("Fail");
     }
+    // New key: a bruce.conf written before it existed simply has no entry, so
+    // it is not a failure - keep the default (on) instead of logging/counting.
+    if (!setting["uiGradient"].isNull()) { uiGradient = setting["uiGradient"].as<int>() != 0; }
     if (!setting["colorInverted"].isNull()) {
         colorInverted = setting["colorInverted"].as<int>();
     } else {
@@ -961,6 +965,7 @@ void BruceConfig::setColorInverted(int value) {
 void BruceConfig::validateColorInverted() {
     if (colorInverted > 1) colorInverted = 1;
 }
+
 
 void BruceConfig::setBadUSBBLEKeyboardLayout(int value) {
     badUSBBLEKeyboardLayout = value;

@@ -13,6 +13,7 @@ typedef enum emv_vendor {
 typedef struct EMVCard {
     bool parsed = true;
     uint8_t *aid = nullptr;
+    size_t aid_len = 0; // AIDs are looked up with a 7 byte memcmp: never compare a shorter one
     EMV_Vendor vendor = EMV_UNKNOWN;
     size_t pan_len = 0;
     uint8_t *pan = nullptr;
@@ -66,7 +67,9 @@ private:
     void emv_read_visa(std::vector<uint8_t> *pdol_data, EMVCard *card);
     std::vector<uint8_t> emv_read_record(uint8_t p1, uint8_t p2);
 
-    PN532 *_rfid;
+    // Initialised: setup() returns early for an unsupported module, and the
+    // destructor must not delete whatever was on the stack there.
+    PN532 *_rfid = nullptr;
     Adafruit_PN532 *nfc = nullptr;
     bool _cancelled = false;
     EMVCard read_emv_card();
@@ -75,7 +78,9 @@ private:
 
 public:
     EMVReader() { setup(); };
-    ~EMVReader() {};
+    // The PN532 object is created with new in setup() and was never released, so
+    // every visit to the EMV reader leaked it out of the internal heap.
+    ~EMVReader() { delete _rfid; };
     void setup();
 };
 

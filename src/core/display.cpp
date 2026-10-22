@@ -4,6 +4,7 @@
 #include "mykeyboard.h"
 #include "settings.h" //for timeStr
 #include "utils.h"
+#include "core/ui_gradient.h" // splash pink->purple ramp for the UI chrome
 #include <JPEGDecoder.h>
 #include <interface.h> //for charging ischarging to print charging indicator
 #include <memory>
@@ -103,7 +104,7 @@ static void drawMenuPath(int index, int total, const char *fallbackTitle) {
     // produced the same string again - an infinite loop inside the draw pass.
     // The main loop never came back, so the previous screen stayed frozen and
     // SELECT/scroll did nothing: that is what "the USB Footprint menu does not
-    // work" was (the path Config > System Config > Advanced > BadUSB Settings is
+    // work" was (the path Config > System Config > Advanced > HID Settings is
     // the first one wide enough to trigger it). Every branch below is strictly
     // shorter, and there is a hard guard besides.
     while ((int)(path.length() * FP * LW) > maxW && path.length() > 4) {
@@ -857,6 +858,12 @@ int loopOptionsImpl(
                 chosen = forceMenuOption;
                 forceMenuOption = -1; // reset SerialCommand navigation option
                 Serial.print("Forcely ");
+                // Move the cursor onto the forced row as well: the value this
+                // function returns is the hovered index, and callers use it to
+                // rebuild the menu with the cursor where it was. Without this a
+                // headless `ui select <n>` looked like the menu had jumped back
+                // to row 0 even when the page preserved its index correctly.
+                index = chosen;
             }
             if (chosen >= options.size() || !options[chosen].enabled) continue;
             Serial.println("Selected: " + String(options[chosen].label));
@@ -906,7 +913,9 @@ void progressHandler(int progress, size_t total, const String &message) {
         tft.fillRect(18, tftHeight - 47, tftWidth - 36, 19, bruceConfig.bgColor);
         tft.drawRect(18, tftHeight - 47, tftWidth - 36, 17, bruceConfig.priColor);
     }
-    tft.fillRect(20, tftHeight - 45, barWidth, 13, bruceConfig.priColor);
+    // Splash gradient: the bar is drawn column by column from the cached ramp,
+    // so it costs the same pixels as the flat fill it replaces.
+    uiGradientFillRect(20, tftHeight - 45, barWidth, 13);
 }
 
 /***************************************************************************************
@@ -968,9 +977,7 @@ Opt_Coord drawOptions(
             }
             // Draw selection highlight bar
             if (i == index) {
-                tft.fillRoundRect(
-                    tftWidth * 0.10 + 2, cursorY + 2, tftWidth * 0.8 - 4, FM * LH + 2, 3, bruceConfig.priColor
-                );
+                uiGradientFillRoundRect(tftWidth * 0.10 + 2, cursorY + 2, tftWidth * 0.8 - 4, FM * LH + 2, 3);
             }
 
             if (options[i].selected) tft.setTextColor(selcolor, bgcolor); // if selected, change Text color
@@ -990,7 +997,10 @@ Opt_Coord drawOptions(
             tft.setCursor(tftWidth * 0.10 + 5, tft.getCursorY() + 4);
 
             // Draw text with appropriate colors for selection
-            if (i == index) { tft.setTextColor(bgcolor, bruceConfig.priColor); }
+            // Transparent text over the highlight: with a single colour the TFT
+            // paints the glyph cells too, which would punch a flat rectangle
+            // through the gradient bar.
+            if (i == index) { tft.setTextColor(bgcolor); }
             tft.println(text.substring(0, (tftWidth * 0.8 - 10) / (LW * FM) - 1));
 
             // Reset text color for next item
@@ -1055,11 +1065,10 @@ void drawSubmenu(int index, std::vector<Option> &options, const char *title) {
     tft.setTextColor(options[index].enabled ? bruceConfig.priColor : TFT_DARKGREY);
     tft.fillRect(6, middle - FG * LH / 2 - 1, tftWidth - 12, FG * LH + 5, bruceConfig.bgColor);
     tft.drawCentreString(options[index].label, tftWidth / 2, middle - selectedTextSize * LH / 2, SMOOTH_FONT);
-    tft.drawFastHLine(
+    uiGradientHLine(
         tftWidth / 2 - strlen(options[index].label.c_str()) * selectedTextSize * LW / 2,
         middle + selectedTextSize * LH / 2 + 1,
-        strlen(options[index].label.c_str()) * selectedTextSize * LW,
-        bruceConfig.priColor
+        strlen(options[index].label.c_str()) * selectedTextSize * LW
     );
     // Next Item
     int thirdIndex = index + 1 < menuSize ? index + 1 : 0;
@@ -1088,8 +1097,9 @@ void drawStatusBar() {
     if (bat > 0) drawBatteryStatus(bat);
 
     if (bruceConfig.theme.border) {
-        tft.drawRoundRect(5, 5, tftWidth - 10, tftHeight - 10, 5, bruceConfig.priColor);
-        tft.drawLine(5, 25, tftWidth - 6, 25, bruceConfig.priColor);
+        // The screen frame and the status-bar separator carry the splash ramp.
+        uiGradientDrawRoundRect(5, 5, tftWidth - 10, tftHeight - 10, 5);
+        uiGradientHLine(5, 25, tftWidth - 10); // drawLine() reached x = tftWidth - 6 inclusive
     }
 
     if (clock_set) {

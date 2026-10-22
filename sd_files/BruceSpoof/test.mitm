@@ -1,0 +1,21 @@
+# Vandeta MITM test payload - a self-contained page, nothing is forwarded.
+#
+# Use it to prove the attack path end to end:
+#   WiFi > Wifi Atks > MITM Attack > Payload > Pick payload > test.mitm
+#   Network > pick the AP, Target > All devices (or one host), Start attack
+#   then open a plain-HTTP site on the victim, e.g. http://neverssl.com/
+#   or the IP literal http://1.1.1.1/ (no DNS needed).
+#
+# Expected on the victim: the page below, served by the board itself.
+# BACK stops the attack and restores every ARP mapping it changed.
+
+# Serve the test page for every plain-HTTP request.
+page * html/test.html
+
+# Answer every DNS A query with the gateway. Its MAC is already the board's
+# (the ARP poison), so the client's next HTTP request comes here.
+dns * gateway
+
+# If nothing lands in 10 s, answer DNS with the gateway instead. This is the
+# cascade the deleted rickroller script used.
+fallback dns gateway 10

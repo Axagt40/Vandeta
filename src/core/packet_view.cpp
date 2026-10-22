@@ -53,10 +53,24 @@ struct PvEntry {
     char text[20];  // open SSID / device name when advertised
 };
 
-static PvEntry pvRing[PV_RING];
+// The ring is pure scratch (64 x 56 = 3.5 KB) and used to sit in .bss, i.e. it
+// cost internal DRAM from boot even for users who never open the packet
+// monitor. It is allocated when the monitor starts, from PSRAM when available
+// (internal heap as the fallback on a board without it). pvFeed() is also
+// reachable from the CC1101 pulse ISR, which must never allocate - hence the
+// null guards rather than lazy allocation inside the producer.
+static PvEntry *pvRing = nullptr;
 static volatile uint16_t pvWrite = 0;  // next slot to write
 static volatile uint32_t pvSeq = 0;    // total ever produced
 static portMUX_TYPE pvMux = portMUX_INITIALIZER_UNLOCKED;
+
+static bool pvRingAlloc() {
+    if (pvRing) return true;
+    const size_t bytes = sizeof(PvEntry) * PV_RING;
+    pvRing = (PvEntry *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
+    if (!pvRing) pvRing = (PvEntry *)heap_caps_malloc(bytes, MALLOC_CAP_8BIT);
+    return pvRing != nullptr;
+}
 
 // Session counters, unaffected by the ring wrapping.
 static volatile uint32_t pvSrcTotal[4] = {0, 0, 0, 0};
@@ -101,6 +115,9 @@ static volatile uint16_t pvPcapTotal = 0;
 // ===========================================================================
 
 static void pvResetAll() {
+    // Allocates on the first call only; called from packetMonitor() before any
+    // producer is started, so no ISR can be looking at the ring yet.
+    pvRingAlloc();
     portENTER_CRITICAL(&pvMux);
     pvWrite = 0;
     pvSeq = 0;
@@ -123,19 +140,21 @@ static void pvFeed(
     const char *text
 ) {
     portENTER_CRITICAL(&pvMux);
-    PvEntry &e = pvRing[pvWrite];
-    e.seq = ++pvSeq;
-    e.t = millis();
-    e.src = src;
-    e.ch = ch;
-    if (addr) memcpy(e.addr, addr, 6);
-    else memset(e.addr, 0, 6);
-    e.cat = cat;
-    e.len = len;
-    e.rssi = rssi;
-    strlcpy(e.label, label ? label : "", sizeof(e.label));
-    strlcpy(e.text, text ? text : "", sizeof(e.text));
-    pvWrite = (uint16_t)((pvWrite + 1) % PV_RING);
+    if (pvRing) {
+        PvEntry &e = pvRing[pvWrite];
+        e.seq = ++pvSeq;
+        e.t = millis();
+        e.src = src;
+        e.ch = ch;
+        if (addr) memcpy(e.addr, addr, 6);
+        else memset(e.addr, 0, 6);
+        e.cat = cat;
+        e.len = len;
+        e.rssi = rssi;
+        strlcpy(e.label, label ? label : "", sizeof(e.label));
+        strlcpy(e.text, text ? text : "", sizeof(e.text));
+        pvWrite = (uint16_t)((pvWrite + 1) % PV_RING);
+    }
 
     if (src < 4) pvSrcTotal[src]++;
     if (cat < PV_CAT_COUNT) pvCatTotal[cat]++;
@@ -146,6 +165,7 @@ static void pvFeed(
 // Copy one logical entry (0 = oldest available) out of the ring.
 static bool pvGetLogical(uint32_t index, PvEntry *out) {
     bool ok = false;
+    if (!pvRing) return false;
     portENTER_CRITICAL(&pvMux);
     uint32_t avail = pvSeq < PV_RING ? pvSeq : PV_RING;
     if (index < avail) {

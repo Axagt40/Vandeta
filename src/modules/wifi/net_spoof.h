@@ -136,6 +136,18 @@ void netspoof_my_mac(uint8_t mac[6]);
 bool netspoof_arp_start(const IPAddress &target, const IPAddress &gateway, String &err);
 
 /**
+ * @brief Start a pair for a target whose MAC is already known.
+ *
+ * Same as netspoof_arp_start(), but skips the unicast ARP resolve and uses
+ * @p targetMac - which is what an ARP scan already saw. A host that answers the
+ * scan's broadcast request and then ignores the unicast one (phones in doze do)
+ * can only be paired this way.
+ */
+bool netspoof_arp_start_mac(
+    const IPAddress &target, const uint8_t targetMac[6], const IPAddress &gateway, String &err
+);
+
+/**
  * @brief Restore every real ARP mapping and stop poisoning.
  * Sends the correct gateway MAC to each target and the correct target MAC to
  * the gateway (reply + broadcast request, RFC 826) before dropping the pairs.
@@ -192,6 +204,10 @@ uint32_t netspoof_http_injected();
 bool netspoof_http_add_redirect(const String &pattern, const String &url, bool wildcard, String &err);
 bool netspoof_http_add_injection(const String &pattern, const String &html, bool wildcard, String &err);
 void netspoof_http_clear_rules();
+/// Drop only the injection (page) rules, leaving redirects in place.
+void netspoof_http_clear_injections();
+/// Drop only the redirect rules, leaving the page payload in place.
+void netspoof_http_clear_redirects();
 int netspoof_http_redirect_count();
 int netspoof_http_inject_count();
 const NetSpoofRule *netspoof_http_redirect_rule(int idx);

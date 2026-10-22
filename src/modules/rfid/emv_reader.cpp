@@ -23,7 +23,15 @@ void EMVReader::setup() {
 
     displayInfo("Waiting for EMV card...");
     EMVCard card = read_emv_card();
-    if (_cancelled) return;
+    // Esc while waiting for the card used to return here and drop whatever the
+    // partial read had allocated.
+    if (_cancelled) {
+        free(card.pan);
+        free(card.validfrom);
+        free(card.validto);
+        free(card.aid);
+        return;
+    }
     display_emv(card);
 
     free(card.pan);
@@ -33,20 +41,32 @@ void EMVReader::setup() {
 }
 
 void EMVReader::parse_pan(std::vector<uint8_t> *afl_content, EMVCard *card) {
+    // Every read below is bounds checked: a truncated TLV used to make this read
+    // past the end of the vector, take a random length and malloc() it, which is
+    // exactly the kind of "random" out-of-memory the reader showed on some cards.
     auto pos = find(afl_content->begin(), afl_content->end(), 0x5A);
-    uint8_t len = *(pos + 1);
-    uint8_t pan_begin = distance(afl_content->begin(), pos) + 2;
+    if (pos == afl_content->end() || (pos + 1) == afl_content->end()) return;
+    const uint8_t len = *(pos + 1);
+    const size_t pan_begin = distance(afl_content->begin(), pos) + 2;
+    if (len == 0 || pan_begin + len > afl_content->size()) return;
+    if (card->pan != nullptr) free(card->pan);
     card->pan = (uint8_t *)malloc(len);
+    if (card->pan == nullptr) return;
     memcpy(card->pan, &afl_content->data()[pan_begin], len);
     card->pan_len = len;
 }
 
 void EMVReader::parse_validfrom(std::vector<uint8_t> *afl_content, EMVCard *card) {
     bool found = false;
-    for (size_t i = 0; i < afl_content->size() && !found; i++) {
+    // i + 1 and begin + 1 are read below, so both need to be inside the vector:
+    // at() throws std::out_of_range on a short record, which aborts the firmware.
+    for (size_t i = 0; i + 1 < afl_content->size() && !found; i++) {
         if (afl_content->at(i) == 0x5F && afl_content->at(i + 1) == 0x25) {
             size_t begin = i + 3; // The format is 0x5F 0x25 SIZE DATA so skip 3 bytes
+            if (begin + 1 >= afl_content->size()) break;
+            if (card->validfrom != nullptr) free(card->validfrom);
             card->validfrom = (uint8_t *)malloc(2);
+            if (card->validfrom == nullptr) break;
             // The format in card is YEAR/MONTH but I want MONTH/YEAR since is the standard format
             card->validfrom[0] = afl_content->at(begin + 1);
             card->validfrom[1] = afl_content->at(begin);
@@ -57,10 +77,13 @@ void EMVReader::parse_validfrom(std::vector<uint8_t> *afl_content, EMVCard *card
 
 void EMVReader::parse_validto(std::vector<uint8_t> *afl_content, EMVCard *card) {
     bool found = false;
-    for (size_t i = 0; i < afl_content->size() && !found; i++) {
+    for (size_t i = 0; i + 1 < afl_content->size() && !found; i++) {
         if (afl_content->at(i) == 0x5F && afl_content->at(i + 1) == 0x24) {
             size_t begin = i + 3; // The format is 0x5F 0x24 SIZE DATA so skip 3 bytes
+            if (begin + 1 >= afl_content->size()) break;
+            if (card->validto != nullptr) free(card->validto);
             card->validto = (uint8_t *)malloc(2);
+            if (card->validto == nullptr) break;
             // The format in card is YEAR/MONTH but I want MONTH/YEAR since is the standard format
             card->validto[0] = afl_content->at(begin + 1);
             card->validto[1] = afl_content->at(begin);
@@ -213,16 +236,30 @@ void EMVReader::emv_read_visa(std::vector<uint8_t> *pdol_data, EMVCard *card) {
             Serial.println("Can't get Track 2 Equivalent Data(PAN for VISA)");
         } else {
             Serial.println("PAN found in Track 2 Equivalent Data");
-            card->pan = (uint8_t *)malloc(8);
-            memcpy(card->pan, container.data(), 8 * sizeof(uint8_t)); // Copy data from TLV to struct
-            card->pan_len = 8;
-
             // Index 8 is separator 'D' and first digit of ValidTo month
             // Index 9 is second digit of ValidTo month and first digit of ValidTo year
             // Index 10 is second digit of ValidTo year and first digit of Service Code
+            // so the track needs at least 11 bytes before any of it is read.
+            if (container.size() < 11) {
+                Serial.println("EMV: Track 2 data too short");
+                container.clear();
+                return;
+            }
+            free(card->pan);
+            card->pan = (uint8_t *)malloc(8);
+            if (card->pan == nullptr) {
+                container.clear();
+                return;
+            }
+            memcpy(card->pan, container.data(), 8 * sizeof(uint8_t)); // Copy data from TLV to struct
+            card->pan_len = 8;
+
+            free(card->validto);
             card->validto = (uint8_t *)malloc(2);
-            card->validto[0] = ((container[9] & 0x0F) << 4) + ((container[10] & 0xF0) >> 4);
-            card->validto[1] = ((container[8] & 0x0F) << 4) + ((container[9] & 0xF0) >> 4);
+            if (card->validto != nullptr) {
+                card->validto[0] = ((container[9] & 0x0F) << 4) + ((container[10] & 0xF0) >> 4);
+                card->validto[1] = ((container[8] & 0x0F) << 4) + ((container[9] & 0xF0) >> 4);
+            }
 
             container.clear();
         }
@@ -261,7 +298,9 @@ std::vector<uint8_t> EMVReader::emv_read_record(uint8_t p1, uint8_t p2) {
 }
 
 void EMVReader::read_afl(EMVCard *card, std::vector<uint8_t> *afl) {
-    for (size_t i = 0; i < afl->size(); i += 4) {
+    // An AFL entry is 4 bytes; a malformed one used to run at(i + 1) off the end
+    // and throw std::out_of_range (uncaught -> reboot).
+    for (size_t i = 0; i + 3 < afl->size(); i += 4) {
         uint8_t sfi = (afl->at(i) >> 3); // Get SFI from AFL entry
         uint8_t record_start = afl->at(i + 1);
         uint8_t record_end = afl->at(i + 2);
@@ -280,27 +319,45 @@ void EMVReader::read_afl(EMVCard *card, std::vector<uint8_t> *afl) {
                 Serial.println("PAN parsed with workaround");
                 return;
             } else {
+                // Allocate before copying. On this path pan/validfrom/validto are
+                // still null (only the VISA reader filled them), so the old
+                // memcpy() here wrote through a null pointer and rebooted the
+                // board as soon as a card answered with a clean TLV.
+                if (container.empty()) {
+                    Serial.println("EMV: empty PAN TLV");
+                    return;
+                }
+                free(card->pan);
+                card->pan = (uint8_t *)malloc(container.size());
+                if (card->pan == nullptr) {
+                    Serial.println("EMV: no memory for PAN");
+                    return;
+                }
                 memcpy(card->pan, container.data(), container.size()); // Copy data from TLV to struct
+                card->pan_len = container.size();
                 container.clear();
-                if (Tlv.GetValue("5F25", &container) != OK) { // Get ValidFrom date
+                if (Tlv.GetValue("5F25", &container) != OK || container.size() < 2) {
+                    // Get ValidFrom date
                     parse_validfrom(&afl_content, card);
                     parse_validto(&afl_content, card);
                 } else {
-                    memcpy(card->validfrom, container.data(), container.size());
-                    if (Tlv.GetValue("5F24", &container) != OK) { // Get ValidTo date
+                    free(card->validfrom);
+                    card->validfrom = (uint8_t *)malloc(2);
+                    if (card->validfrom != nullptr) {
+                        card->validfrom[0] = container[1];
+                        card->validfrom[1] = container[0];
+                    }
+                    if (Tlv.GetValue("5F24", &container) != OK || container.size() < 2) { // Get ValidTo date
                         parse_validto(&afl_content, card);
                     } else {
-                        memcpy(card->validto, container.data(), container.size());
+                        free(card->validto);
+                        card->validto = (uint8_t *)malloc(2);
+                        if (card->validto != nullptr) {
+                            card->validto[0] = container[1];
+                            card->validto[1] = container[0];
+                        }
                     }
                 }
-                Serial.println("PAN parsed without workaround");
-                return;
-            }
-
-            if (Tlv.GetValue("5A", &container) == OK) { // Get PAN(Credit Card Number)
-                card->pan = (uint8_t *)malloc(container.size());
-                memcpy(card->pan, container.data(), container.size()); // Copy data from TLV to struct
-                card->pan_len = container.size();
                 Serial.println("PAN parsed without workaround");
                 return;
             }
@@ -311,6 +368,7 @@ void EMVReader::read_afl(EMVCard *card, std::vector<uint8_t> *afl) {
 }
 
 bool is_visa(EMVCard *card) {
+    if (card->aid == nullptr || card->aid_len < 7) return false; // memcmp would read past the buffer
     for (size_t i = 0; i < AID_DICT_SIZE; i++) {
         if (memcmp(card->aid, known_aid[i].aid, 7) == 0) {
             if (known_aid[i].vendor == EMV_VISA) return true;
@@ -334,7 +392,13 @@ EMVCard EMVReader::read_emv_card() {
     } else {
         // Copy AID to result card
         res.aid = (uint8_t *)malloc(aid.size());
+        if (res.aid == nullptr) {
+            Serial.println("EMV: no memory for AID");
+            res.parsed = false;
+            return res;
+        }
         memcpy(res.aid, aid.data(), aid.size());
+        res.aid_len = aid.size();
 
         // Initialize Application Process
         std::vector<uint8_t> pdol = emv_ask_for_pdol(&aid); // Check if card require PDOL(for example, VISA)
@@ -395,7 +459,9 @@ void EMVReader::display_emv(EMVCard card) {
 
     if (card.parsed) {
         bool found = false;
-        for (size_t i = 0; i < AID_DICT_SIZE && !found; i++) {
+        // A card can answer with an AID shorter than seven bytes; the lookup
+        // compares seven, so guard it instead of reading past the buffer.
+        for (size_t i = 0; card.aid != nullptr && card.aid_len >= 7 && i < AID_DICT_SIZE && !found; i++) {
             if (memcmp(card.aid, known_aid[i].aid, 7) == 0) {
                 found = true;
                 aid = known_aid[i].name;

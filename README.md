@@ -9,8 +9,8 @@
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20server-5865F2?logo=discord&logoColor=white)](https://discord.gg/dhPXgVerqD)
 
 > **[Install in your browser](https://axagt40.github.io/Vandeta/flash.html)** — no tools, one button, Chrome or Edge
-> · **[Download Vandeta 1.1](https://github.com/Axagt40/Vandeta/releases/latest)** — one merged image, flash it at `0x0`
-> · **[What's new in 1.1](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.1)**
+> · **[Download Vandeta 1.2](https://github.com/Axagt40/Vandeta/releases/latest)** — one merged image, flash it at `0x0`
+> · **[What's new in 1.2](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.2)**
 > · **[Docs](https://axagt40.github.io/Vandeta/docs.html)**
 > · **[Discord](https://discord.gg/dhPXgVerqD)**
 
@@ -161,16 +161,34 @@ extra layer on top of them.
   attack on the **`Target Atks`** page — one page each.
 * ARP spoofing, DNS spoofing and HTTP interception/modification that reach
   WPA2/WPA3 clients (the frames go out on the encrypted station link).
+* **MITM Attack** on the same `Wifi Atks` page — one page for the whole attack:
+  it answers the target's TCP handshake itself, so a poisoned client reaches the
+  payload's page without any other listener (no Web UI) having to run:
+  pick the network to join from a scan (saved password, otherwise it asks), the
+  target mode (`All devices` or one host from the ARP scan), and one payload.
+  Start pairs every chosen host with its gateway and shows a **live activity
+  feed** (`page GET neverssl.com <- 192.168.1.167`, `no HTTP hit - answering DNS
+  with 192.168.1.1`); BACK stops and **restores every ARP mapping**, so a victim
+  is never left cut off.
+* The payload, `/BruceSpoof/mitm.txt`, is the JS MITM API in plain text — `page`
+  (200 + HTML), `redirect` (302), `dns` (answer lookups), `target` and
+  `fallback` (e.g. try DNS injection when no HTTP request landed). A `.html`
+  payload is just `page *` with that file; a page must fit one ethernet frame.
+  `dns` answers accept `gateway` or `this`, resolved on each query, so a payload
+  loads before the board has joined a network. A ready-to-use
+  `/BruceSpoof/test.mitm` (page `html/test.html`) proves the whole path on a
+  victim without any external site.
 * Evil-twin captive portal that refuses with a readable error when DMA memory is
   short.
-* Headless, deadline-bounded attacks so scripts can run them; `moreatk` verb.
+* Headless, deadline-bounded attacks so scripts can run them; `moreatk` verb,
+  plus `mitm` (and the older `dnsinject` / `htmlint`) for the MITM engine.
 
 </details>
 
 <details>
 <summary><b>BadUSB / HID</b></summary>
 
-* `BadUSB Settings` menu: USB footprint (VID, PID, manufacturer, product,
+* `HID Settings` menu: USB footprint (VID, PID, manufacturer, product,
   serial), keyboard layout (extra layouts and custom import/export), HID device
   type, attack timing, payload manager, show output.
 * Payloads keep typing past characters the active layout cannot express.
@@ -225,7 +243,7 @@ extra layer on top of them.
 * Capture screens show live progress and `Press BACK to stop`; only Back aborts,
   and presses queued during a capture are dropped before the result screen.
 * The script interpreter is listed as **Apps** with an app-drawer icon, and the
-  BadUSB page as **BadUSB Settings**.
+  BadUSB page as **HID Settings**.
 * `ui` / `nav` report the menu that is on screen.
 
 </details>
@@ -338,6 +356,8 @@ file read /bruce.conf  md5 /bruce.conf         errors     proc
 # script layer, live
 js run /BruceJS/yourscript.js
 livepatch apply hello console.log('hi')
+# application-layer interception, headlessly
+dnsinject status && htmlint status
 ```
 
 The console boots in plain text and only switches modes when asked, so a

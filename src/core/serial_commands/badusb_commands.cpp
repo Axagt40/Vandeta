@@ -79,7 +79,7 @@ uint32_t badusbBufferCallback(cmd *c) {
 
 // ---------------------------------------------------------------------------
 // BadUSB configuration over the console. These mirror the on-device
-// Others > BadUSB & HID > BadUSB Settings menu so a headless session (USB
+// Others > BadUSB & HID > HID Settings menu so a headless session (USB
 // Debugging mode) can set and verify the whole configuration.
 // ---------------------------------------------------------------------------
 

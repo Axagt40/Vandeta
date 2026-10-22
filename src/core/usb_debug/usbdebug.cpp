@@ -937,7 +937,18 @@ static void handleFrame(uint8_t type, const uint8_t *payload, size_t len) {
                 sendTextFrame(FR_MSG, "ERR seek " + String(offset));
                 break;
             }
-            static uint8_t getBuf[4 + USBDBG_CHUNK];
+            // 2 KB of transfer scratch, allocated once from PSRAM when the
+            // board has it instead of living in .bss for every session.
+            static uint8_t *getBuf = nullptr;
+            if (!getBuf) {
+                getBuf = (uint8_t *)(psramFound() ? ps_malloc(4 + USBDBG_CHUNK)
+                                                  : malloc(4 + USBDBG_CHUNK));
+                if (!getBuf) {
+                    f.close();
+                    sendTextFrame(FR_MSG, "ERR low RAM");
+                    break;
+                }
+            }
             size_t n = f.read(getBuf + 4, want);
             f.close();
             if (n == 0) {

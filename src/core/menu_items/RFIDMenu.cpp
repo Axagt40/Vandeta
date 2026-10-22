@@ -5,6 +5,7 @@
 #include "modules/rfid/PN532KillerTools.h"
 #include "modules/rfid/amiibo.h"
 #include "modules/rfid/chameleon.h"
+#include "modules/rfid/nfc_field_detector.h"
 #include "modules/rfid/pn532ble.h"
 #include "modules/rfid/rfid125.h"
 #include "modules/rfid/srix_tool.h" //added for srix Tool
@@ -16,7 +17,8 @@
 void RFIDMenu::optionsMenu() {
     options = {
 #if !defined(REMOVE_RFID_HW_INTERFACE)  // Remove Hardware interface menu due to lack of external GPIO
-        {"Read tag",    [=]() { TagOMatic(); }                     },
+        {"Read tag",       [=]() { TagOMatic(); }                },
+        {"Field detector", [=]() { nfcFieldDetector(); }         },
 #ifndef LITE_VERSION
         {"Read EMV",    [=]() { EMVReader(); }                     },
         {"Read 125kHz", [=]() { RFID125(); }                       },
@@ -55,8 +57,9 @@ void RFIDMenu::optionsMenu() {
 #if !defined(REMOVE_RFID_HW_INTERFACE)
 #ifndef LITE_VERSION
     if (bruceConfigPins.rfidModule == PN532_I2C_MODULE) {
-        // Added SRIX Menu only if PN is set to i2c mode
-        options.insert(options.begin() + 3, {"SRIX Tool", [=]() { PN532_SRIX(); }});
+        // Added SRIX Menu only if PN is set to i2c mode. Index 4 keeps it after
+        // the three reader rows now that Field detector sits at index 1.
+        options.insert(options.begin() + 4, {"SRIX Tool", [=]() { PN532_SRIX(); }});
     }
 #endif
 #endif

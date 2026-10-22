@@ -422,7 +422,7 @@ const uint8_t *badusbResolveLayout(int idx) {
 }
 
 /// Run a BadUSB payload file through the normal HID/BLE engine. Used by the
-/// BadUSB Settings > Payload Manager menu and by the badusb.runPayload binding.
+/// HID Settings > Payload Manager menu and by the badusb.runPayload binding.
 /// Returns false when the payload is missing or USB HID is unavailable.
 bool badusbRunPayload(const String &filepath) {
 #if defined(USB_as_HID)

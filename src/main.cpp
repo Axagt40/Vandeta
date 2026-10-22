@@ -13,6 +13,7 @@
 #include "esp_task_wdt.h"
 #include "esp_wifi.h"
 #include <functional>
+#include <string.h>
 #include <string>
 #include <vector>
 io_expander ioExpander;
@@ -263,17 +264,109 @@ void begin_tft() {
  **  Function: boot_screen
  **  Draw boot screen
  *********************************************************************/
+// The splash is the only screen with the whole panel to itself, so it is laid
+// out here instead of the status bar. Vertical budget on the 320x170 panel:
+// 8..32 title, 34..42 version, 44..130 logo, then the loading bar.
+static const int BOOT_TITLE_Y = 8;
+static const int BOOT_VERSION_Y = 34;
+
 void boot_screen() {
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
-    tft.setTextSize(FM);
+    tft.setTextSize(FG);
     tft.drawPixel(0, 0, bruceConfig.bgColor);
-    tft.drawCentreString("Vandeta", tftWidth / 2, 10, 1);
+    tft.drawCentreString("Vandeta", tftWidth / 2, BOOT_TITLE_Y, 1);
+    // The wordmark above already says Vandeta, so this line is just "V: 1.2".
+    // BRUCE_VERSION carries the name too ("vandeta 1.2"); take the last word so a
+    // version bump in platformio.ini still shows up here.
+    const char *version = BRUCE_VERSION;
+    const char *lastSpace = strrchr(BRUCE_VERSION, ' ');
+    if (lastSpace != nullptr) version = lastSpace + 1;
     tft.setTextSize(FP);
-    tft.drawCentreString(BRUCE_VERSION, tftWidth / 2, 25, 1);
+    tft.drawCentreString(String("V: ") + version, tftWidth / 2, BOOT_VERSION_Y, 1);
     tft.setTextSize(FM);
-    tft.drawCentreString(
-        "PREDATORY FIRMWARE", tftWidth / 2, tftHeight + 2, 1
-    ); // will draw outside the screen on non touch devices
+    // Battery gauge in the top-right corner, the same place the menus put it.
+    // getBattery() is 0 when the gauge is absent and drawBatteryStatus() then
+    // draws nothing at all.
+    drawBatteryStatus(getBattery());
+}
+
+#if !defined(LITE_VERSION)
+// --- Splash art -----------------------------------------------------------
+// The crown is the same 192x126 mask the old splash drew, but painted as one
+// colour per screen column (pink at the left rim, purple at the right) and
+// scaled to the room between the title band and the loading bar.
+struct BootCrownBox {
+    int x, y, w, h;
+};
+
+static BootCrownBox bootCrownBox() {
+    const int top = 44;
+    const int bottom = tftHeight - 40; // label + bar live under the logo
+    int h = bottom - top;
+    int w = h * bits_width / bits_height;
+    const int maxW = tftWidth - 24;
+    if (w > maxW) {
+        w = maxW;
+        h = w * bits_height / bits_width;
+    }
+    if (h < 1) h = 1;
+    if (w < 1) w = 1;
+    BootCrownBox box;
+    box.w = w;
+    box.h = h;
+    box.x = (tftWidth - w) / 2;
+    box.y = top + (bottom - top - h) / 2; // centre in whatever room is left
+    return box;
+}
+
+/// True when the mask has ink at source pixel (sx, sy).
+///
+/// XBM layout, exactly what TFT_eSPI::drawXBitmap() reads: one byte per eight
+/// pixels ACROSS the row, rows padded to whole bytes, bit (sx & 7) of the byte.
+/// (A column-major index here walks off the end of the array.)
+/// The bitmap is stored inverted, which is why the drawXBitmap() call this
+/// replaces passed bgColor as the foreground: the crown is the CLEAR bits.
+static inline bool bootCrownInk(int sx, int sy) {
+    const int stride = (bits_width + 7) / 8;
+    return (bits[sy * stride + (sx >> 3)] & (1 << (sx & 7))) == 0;
+}
+
+/// Paint destination rows [row0, row1) of the scaled, gradient crown.
+static void bootCrownRows(const BootCrownBox &box, int row0, int row1) {
+    if (row0 < 0) row0 = 0;
+    if (row1 > box.h) row1 = box.h;
+    if (row1 <= row0) return;
+    for (int dx = 0; dx < box.w; dx++) {
+        const int sx = dx * bits_width / box.w;
+        // R 255 -> 128, G 20 -> 0, B 147 -> 255 across the logo.
+        const int t = box.w > 1 ? dx * 255 / (box.w - 1) : 0;
+        const uint16_t colour = tft.color565(
+            (uint8_t)(255 + (128 - 255) * t / 255),
+            (uint8_t)(20 + (0 - 20) * t / 255),
+            (uint8_t)(147 + (255 - 147) * t / 255)
+        );
+        int dy = row0;
+        while (dy < row1) {
+            if (!bootCrownInk(sx, dy * bits_height / box.h)) {
+                dy++;
+                continue;
+            }
+            int run = dy;
+            while (run < row1 && bootCrownInk(sx, run * bits_height / box.h)) run++;
+            tft.drawFastVLine(box.x + dx, box.y + dy, run - dy, colour);
+            dy = run;
+        }
+    }
+}
+#endif
+
+/// Frame plus fill for the boot progress bar. pct is 0..100.
+static void bootDrawBar(int x, int y, int w, int h, int pct) {
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    tft.drawRect(x, y, w, h, bruceConfig.priColor);
+    const int fill = (w - 4) * pct / 100;
+    if (fill > 0) tft.fillRect(x + 2, y + 2, fill, h - 4, bruceConfig.priColor);
 }
 
 /*********************************************************************
@@ -294,73 +387,103 @@ void boot_screen_anim() {
     else if (boot_img == 0 && LittleFS.exists("/boot.gif")) boot_img = 4;
     if (bruceConfig.theme.boot_img) boot_img = 5; // override others
 
-    tft.drawPixel(0, 0, 0);       // Forces back communication with TFT, to avoid ghosting
-                                  // Start image loop
-    while (millis() < i + 7000) { // boot image lasts for 5 secs
-        if ((millis() - i > 2000) && !drawn) {
+    // Splash timing. The crown finishes revealing while the rest of the window
+    // is spent filling the loading bar, so the bar is always moving while the
+    // firmware is still bringing its radios up.
+    static const uint32_t SPLASH_MS = 7000;
+    static const uint32_t CROWN_START_MS = 300;
+    static const uint32_t CROWN_MS = 2200;
+    static const uint32_t BAR_START_MS = 500;
+    static const uint32_t BAR_MS = 6300; // 500 + 6300 = 6800, done before the end
+
+    const int barW = (tftWidth - 24) < 200 ? (tftWidth - 24) : 200;
+    const int barH = 10;
+    const int barX = (tftWidth - barW) / 2;
+    const int barY = tftHeight - 22;
+#if !defined(LITE_VERSION)
+    const BootCrownBox crown = bootCrownBox();
+    int crownRows = 0; // rows of the logo already on screen
+#endif
+    int lastPct = -1;   // bar fill already on screen
+
+    if (boot_img == 0) {
+        // Chrome that stays for the whole splash; a custom boot image owns the
+        // screen on its own, exactly as before.
+        tft.setTextSize(FP);
+        tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+        tft.drawCentreString("Loading...", tftWidth / 2, barY - 14, 1);
+        tft.setTextSize(FM);
+    }
+
+    tft.drawPixel(0, 0, 0); // Forces back communication with TFT, to avoid ghosting
+    while (millis() < i + SPLASH_MS) {
+        const uint32_t elapsed = millis() - i;
+
+        if (boot_img > 0 && elapsed > 2000 && !drawn) {
             tft.fillRect(0, 45, tftWidth, tftHeight - 45, bruceConfig.bgColor);
-            if (boot_img > 0 && !drawn) {
-                tft.fillScreen(bruceConfig.bgColor);
-                if (boot_img == 5) {
-                    drawImg(
-                        *bruceConfig.themeFS(),
-                        bruceConfig.getThemeItemImg(bruceConfig.theme.paths.boot_img),
-                        0,
-                        0,
-                        true,
-                        3600
-                    );
-                    Serial.println("Image from SD theme");
-                } else if (boot_img == 1) {
-                    drawImg(SD, "/boot.jpg", 0, 0, true);
-                    Serial.println("Image from SD");
-                } else if (boot_img == 2) {
-                    drawImg(LittleFS, "/boot.jpg", 0, 0, true);
-                    Serial.println("Image from LittleFS");
-                } else if (boot_img == 3) {
-                    drawImg(SD, "/boot.gif", 0, 0, true, 3600);
-                    Serial.println("Image from SD");
-                } else if (boot_img == 4) {
-                    drawImg(LittleFS, "/boot.gif", 0, 0, true, 3600);
-                    Serial.println("Image from LittleFS");
-                }
-                tft.drawPixel(0, 0, 0); // Forces back communication with TFT, to avoid ghosting
+            tft.fillScreen(bruceConfig.bgColor);
+            if (boot_img == 5) {
+                drawImg(
+                    *bruceConfig.themeFS(),
+                    bruceConfig.getThemeItemImg(bruceConfig.theme.paths.boot_img),
+                    0,
+                    0,
+                    true,
+                    3600
+                );
+                Serial.println("Image from SD theme");
+            } else if (boot_img == 1) {
+                drawImg(SD, "/boot.jpg", 0, 0, true);
+                Serial.println("Image from SD");
+            } else if (boot_img == 2) {
+                drawImg(LittleFS, "/boot.jpg", 0, 0, true);
+                Serial.println("Image from LittleFS");
+            } else if (boot_img == 3) {
+                drawImg(SD, "/boot.gif", 0, 0, true, 3600);
+                Serial.println("Image from SD");
+            } else if (boot_img == 4) {
+                drawImg(LittleFS, "/boot.gif", 0, 0, true, 3600);
+                Serial.println("Image from LittleFS");
             }
+            tft.drawPixel(0, 0, 0); // Forces back communication with TFT, to avoid ghosting
             drawn = true;
         }
+
 #if !defined(LITE_VERSION)
-        if (!boot_img && (millis() - i > 2200) && (millis() - i) < 2700)
-            tft.drawRect(2 * tftWidth / 3, tftHeight / 2, 2, 2, bruceConfig.priColor);
-        if (!boot_img && (millis() - i > 2700) && (millis() - i) < 2900)
-            tft.fillRect(0, 45, tftWidth, tftHeight - 45, bruceConfig.bgColor);
-        if (!boot_img && (millis() - i > 2900) && (millis() - i) < 3400)
-            tft.drawXBitmap(
-                2 * tftWidth / 3 - 30,
-                5 + tftHeight / 2,
-                bruce_small_bits,
-                bruce_small_width,
-                bruce_small_height,
-                bruceConfig.bgColor,
-                bruceConfig.priColor
-            );
-        if (!boot_img && (millis() - i > 3400) && (millis() - i) < 3600) tft.fillScreen(bruceConfig.bgColor);
-        if (!boot_img && (millis() - i > 3600))
-            tft.drawXBitmap(
-                (tftWidth - bits_width) / 2,
-                (tftHeight - bits_height) / 2,
-                bits,
-                bits_width,
-                bits_height,
-                bruceConfig.bgColor,
-                bruceConfig.priColor
-            );
+        if (boot_img == 0) {
+            // Top-to-bottom reveal: only the new rows are ever drawn, so the
+            // gradient columns are painted once.
+            int want = 0;
+            if (elapsed > CROWN_START_MS) {
+                const uint32_t e = elapsed - CROWN_START_MS;
+                want = e >= CROWN_MS ? crown.h : (int)(e * crown.h / CROWN_MS);
+            }
+            if (want > crownRows) {
+                bootCrownRows(crown, crownRows, want);
+                crownRows = want;
+            }
+        }
 #endif
+        if (boot_img == 0) {
+            int pct = 0;
+            if (elapsed > BAR_START_MS) {
+                const uint32_t e = elapsed - BAR_START_MS;
+                pct = e >= BAR_MS ? 100 : (int)(e * 100 / BAR_MS);
+            }
+            if (pct != lastPct) {
+                bootDrawBar(barX, barY, barW, barH, pct);
+                lastPct = pct;
+            }
+        }
+
         if (check(AnyKeyPress)) // If any key or M5 key is pressed, it'll jump the boot screen
         {
             tft.fillScreen(bruceConfig.bgColor);
             delay(10);
             return;
         }
+        // Small pause: the old loop spun at full speed for seven seconds.
+        delay(5);
     }
 
     // Clear splashscreen

@@ -9,6 +9,11 @@
 #include "modules/badusb_ble/ducky_typer.h"
 #include <globals.h>
 
+// Upper bound on how long a `nav` command waits for the UI to consume the
+// previous press of the same key before deciding this screen ignores that key
+// and clearing the stale event (see navCallback).
+static const unsigned long NAV_KEY_WAIT_MS = 300;
+
 uint32_t uptimeCallback(cmd *c) {
     // https://github.com/espressif/arduino-esp32/blob/66c9c0b1a6a36b85d27cdac0fb52098368de1a09/libraries/WebServer/examples/AdvancedWebServer/AdvancedWebServer.ino#L64
 
@@ -355,6 +360,19 @@ uint32_t navCallback(cmd *c) {
         return false;
     }
     // wakeUpScreen(); // Do not wakeup screen if it is dimmed and using Remote control
+    // A press is only delivered while the key flag is clear: the UI clears it as
+    // soon as it consumes the press. A second press that arrived while the menu
+    // was still redrawing found the flag set and was dropped without a word, so
+    // a quick double press moved the cursor once - and the following press then
+    // looked like it moved twice, from that stale screen. Wait for the flag
+    // (bounded) instead of throwing the press away.
+    const unsigned long navWaitStart = millis();
+    while (*var && millis() - navWaitStart < NAV_KEY_WAIT_MS) { vTaskDelay(5 / portTICK_PERIOD_MS); }
+    // Still set: no one consumed it, i.e. this screen does not read this key.
+    // Leaving it set would swallow every later press of the same key, so drop
+    // the stale event and deliver ours.
+    if (*var) *var = false;
+
     unsigned long tmp = millis();
     while (millis() <= tmp + dur) {
         if (*var == false) {

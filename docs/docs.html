@@ -36,7 +36,7 @@
       <p>
         Install, card layout, the USB console, the feature list, building from
         source and what to do when something does not answer. Written for
-        Vandeta 1.1 on the LilyGo T-Embed CC1101.
+        Vandeta 1.2 on the LilyGo T-Embed CC1101.
       </p>
       <ul style="columns:2;max-width:34rem;margin-top:1.25rem;font-size:0.92rem">
         <li><a href="#install">Installation</a></li>
@@ -66,8 +66,8 @@
         <table>
           <tbody>
             <tr><th>File</th><td><code>vandeta.bin</code> and <code>vandeta.bin.sha256</code></td></tr>
-            <tr><th>Size</th><td>4,608,528 bytes</td></tr>
-            <tr><th>sha256</th><td><code>59bcbb6fb2dbbe4fb955fe6d0c08c10aa319b3eef1cdc14505e115badf1d29bc</code></td></tr>
+            <tr><th>Size</th><td>4,648,512 bytes</td></tr>
+            <tr><th>sha256</th><td><code>00cb857fed3b556de94cce432dabef6c694274a639c8b0108c06068790993482</code></td></tr>
             <tr><th>Offset</th><td><code>0x0</code> &mdash; never another offset</td></tr>
             <tr><th>Chip</th><td>ESP32-S3, 16 MB flash</td></tr>
           </tbody>
@@ -264,6 +264,9 @@ esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 115200 \
             <tr><td><code>ir rx &lt;seconds&gt;</code></td><td>Records an IR frame for a timed window.</td></tr>
             <tr><td><code>badusb config|set|layout-import|layout-export|layout-copy|mouse|click</code></td><td>USB footprint, layout handling, HID device type and pointer input.</td></tr>
             <tr><td><code>moreatk</code></td><td>Runs the WiFi attacks headlessly, with a deadline.</td></tr>
+            <tr><td><code>mitm</code> <code>status|payload|target|run|stop</code></td><td>The MITM Attack page without the keypad: load one <code>/BruceSpoof/mitm.txt</code>, set the target mode, run it for N seconds with a deadline.</td></tr>
+            <tr><td><code>dnsinject</code> <code>status|payload|rule|wildcard|rules|clear|example|scan|arp|arpstop|start|stop|captures</code></td><td>DNS injection alone: load <code>/BruceSpoof/dns.txt</code>, pair a target, answer its queries.</td></tr>
+            <tr><td><code>htmlint</code> <code>status|match|payload|redirect|rules|clear|example|scan|arp|arpstop|start|stop|captures</code></td><td>HTML Intercept without the keypad: load a page or redirect list, pair a target, inject it.</td></tr>
           </tbody>
         </table>
       </div>
@@ -344,6 +347,10 @@ esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 115200 \
         <ul>
           <li>One flat <strong>Wifi Atks</strong> page and one <strong>Target Atks</strong> page, with no nested duplicate menus.</li>
           <li>ARP spoofing, DNS spoofing and HTTP interception that reach WPA2/WPA3 clients over the encrypted station link.</li>
+          <li><strong>MITM Attack</strong> on the Wifi Atks page: pick the network from a scan, the target mode (all devices or one host), and one payload from <code>/BruceSpoof/</code>. It pairs each target with its gateway, shows a live activity feed of what the payload is doing, and restores every ARP mapping when you leave the page.</li>
+          <li>The payload is the JS MITM API in plain text: <code>page</code> (200 + HTML), <code>redirect</code> (302), <code>dns</code> (answer lookups), <code>target</code>, and <code>fallback</code> — e.g. answer DNS instead when no HTTP request landed. <code>dns</code> answers accept <code>gateway</code> / <code>this</code> and are resolved per query, so a payload loads before the board has joined a network.</li>
+          <li>A ready-to-use <code>/BruceSpoof/test.mitm</code> (page <code>html/test.html</code>) proves the whole path on a victim without any external site. The board completes the client's TCP handshake itself, so no Web UI or other port-80 listener has to run.</li>
+          <li>Also drivable headlessly with <code>mitm</code> (plus <code>dnsinject</code> / <code>htmlint</code> for one engine at a time).</li>
           <li>Evil-twin portal refuses with a readable error when DMA memory is short, and attacks can run headlessly with a deadline.</li>
         </ul>
       </details>
@@ -351,7 +358,7 @@ esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 115200 \
       <details>
         <summary><b>BadUSB / HID</b></summary>
         <ul>
-          <li>Footprint (VID, PID, manufacturer, product, serial), layouts with import/export, HID device type, timing and a payload manager.</li>
+          <li><strong>HID Settings</strong> page: footprint (VID, PID, manufacturer, product, serial), layouts with import/export, HID device type, timing and a payload manager.</li>
           <li>Payloads keep typing past characters the active layout cannot express.</li>
           <li>Apple/BLE patch and BadBLE name, so the BLE keyboard is listed by iOS and macOS and pairs Just Works.</li>
         </ul>

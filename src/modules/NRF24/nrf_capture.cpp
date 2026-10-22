@@ -53,9 +53,22 @@ static int nrfCurrProfile = NRF_PROFILE_GENERIC;
 // guess from the radio state.
 static uint8_t nrfRxPayloadLen = 0;
 
-static NrfCapturedPacket nrfBuf[NRF_CAP_MAX_PACKETS];
+// The capture ring lives in PSRAM, not in .bss. As a static array it cost 5 KB
+// of INTERNAL DRAM for the whole boot, and internal DRAM is exactly what the
+// Wi-Fi/BLE bring-up (and the MITM page) has to fit into. It is scratch data
+// that only exists between a capture and the next Clear, so it is allocated on
+// first use through nrfAllocPacketBuffer(), which prefers PSRAM.
+static NrfCapturedPacket *nrfBuf = nullptr;
 static int nrfBufCount = 0;
 static int nrfBufDropped = 0;
+
+/// Make sure the capture ring exists; false when neither PSRAM nor internal RAM
+/// could give 5 KB (nothing can be captured then, but nothing crashes).
+static bool nrfEnsureBuf() {
+    if (nrfBuf != nullptr) return true;
+    nrfBuf = nrfAllocPacketBuffer(NRF_CAP_MAX_PACKETS);
+    return nrfBuf != nullptr;
+}
 
 static rf24_datarate_e nrfRateEnum(uint8_t rate) {
     switch (rate) {
@@ -243,13 +256,13 @@ int nrfCaptureDropped() { return nrfBufDropped; }
 
 int nrfCaptureLoad(const NrfCapturedPacket *pkts, int count) {
     nrfCaptureClear();
-    if (pkts == nullptr) return 0;
+    if (pkts == nullptr || !nrfEnsureBuf()) return 0;
     for (int i = 0; i < count && nrfBufCount < NRF_CAP_MAX_PACKETS; i++) nrfBuf[nrfBufCount++] = pkts[i];
     return nrfBufCount;
 }
 
 bool nrfCapturePacket(int index, NrfCapturedPacket *out) {
-    if (index < 0 || index >= nrfBufCount || out == nullptr) return false;
+    if (index < 0 || index >= nrfBufCount || out == nullptr || nrfBuf == nullptr) return false;
     *out = nrfBuf[index];
     return true;
 }
@@ -278,7 +291,7 @@ static void nrfStorePacket(const uint8_t *data, uint8_t len, uint8_t channel) {
         nrfBufDropped++;
         return;
     }
-    if (nrfBufCount >= NRF_CAP_MAX_PACKETS) {
+    if (nrfBufCount >= NRF_CAP_MAX_PACKETS || !nrfEnsureBuf()) {
         nrfBufDropped++;
         return;
     }
@@ -401,6 +414,7 @@ int nrfCaptureRunChannels(
 
 int nrfCaptureChannelSummary(uint8_t *channelsOut, uint8_t *countsOut, int maxOut) {
     int n = 0;
+    if (nrfBuf == nullptr) return 0;
     for (int i = 0; i < nrfBufCount && n < maxOut; i++) {
         int found = -1;
         for (int j = 0; j < n; j++) {
@@ -803,16 +817,6 @@ int nrfChooseReplayChannels(const NrfCapturedPacket *pkts, int count, uint8_t *c
 // Shared menu helpers
 // ============================================================================
 
-static String nrfHexOf(const uint8_t *data, uint8_t len) {
-    String hex;
-    for (int i = 0; i < len; i++) {
-        char h[3];
-        snprintf(h, sizeof(h), "%02X", data[i]);
-        hex += h;
-    }
-    return hex;
-}
-
 /// Drop key presses that arrived while a process was running. Without this a
 /// press that dismisses a result screen also fires on the menu that is rebuilt
 /// behind it (SEL dismissing "Packets: 12" would immediately re-run whatever
@@ -951,26 +955,6 @@ static const char *nrfRateName(uint8_t r) {
     }
 }
 
-static void nrfMenuCapture(uint32_t ms, bool hop) {
-    NrfRunScreen screen;
-    screen.begin(
-        "NRF Capture",
-        hop ? String("Hopping 2400-2525MHz")
-            : String("Channel ") + String(2400 + nrfCaptureGetChannel()) + "MHz"
-    );
-    nrfCaptureRun(ms, hop, 20, [&screen](const NrfCaptureProgress &p) { return screen.update(p); });
-
-    String lines[3];
-    lines[0] = String("Packets: ") + String(nrfCaptureCount()) + " / dropped " + String(nrfCaptureDropped());
-    uint8_t chans[4];
-    uint8_t counts[4];
-    int m = nrfCaptureChannelSummary(chans, counts, 4);
-    if (m > 0) lines[1] = String("Top: ") + String(2400 + chans[0]) + "MHz x" + String(counts[0]);
-    else lines[1] = "No activity";
-    lines[2] = hop ? String("Hopped 0-125") : String("Ch ") + String(2400 + nrfCaptureGetChannel()) + "MHz";
-    screen.finish(lines, 3);
-}
-
 static void nrfMenuSaveCapture() {
     if (nrfCaptureCount() == 0) {
         displayError("Nothing captured", true);
@@ -1042,36 +1026,12 @@ static void nrfMenuReplayCapture() {
     screen.finish(lines, 2);
 }
 
-static void nrfMenuAnalyze() {
-    if (nrfCaptureCount() == 0) {
-        displayError("Nothing captured", true);
-        return;
-    }
-    NrfCapturedPacket p;
-    if (!nrfCapturePacket(0, &p)) return;
-    NrfSignalAnalysis a = nrfAnalyzeSignal(p.data, p.len);
-    String lines[5];
-    lines[0] = String("len=") + String(a.len) + " unique=" + String(a.uniqueBytes);
-    lines[1] = String("transitions=") + String(a.bitTransitions);
-    lines[2] = String("kind=") + a.kind;
-    lines[3] = String("repeats=") + (a.repeats ? "yes" : "no") + " code=" + String(a.repeatLength);
-    lines[4] = nrfHexOf(p.data, p.len).substring(0, 32);
-    nrfShowLines("Analyze", lines, 5);
-}
-
 static void nrfCycleProfile() {
     if (!nrfCaptureReady()) return;
     int next = nrfCaptureGetProfile() + 1;
     if (next >= NRF_PROFILE_COUNT) next = NRF_PROFILE_GENERIC;
     if (next >= 0) nrfCaptureApplyProfile(next, nrfCaptureGetRate());
     else nrfCaptureSetPromiscuous(true);
-}
-
-static void nrfMenuSetChannel() {
-    if (!nrfCaptureReady()) return;
-    String s = num_keyboard(String(nrfCaptureGetChannel()), 3, "Channel 0-125:");
-    if (s.length() == 0 || s == "\x1B") return;
-    nrfCaptureSetChannel((uint8_t)s.toInt());
 }
 
 /// Capture an unknown 3-channel 2.4 GHz remote. A remote of this kind always
@@ -1135,92 +1095,26 @@ static void nrfMenuRgbCapture() {
 
 void nrfRawCaptureMenu() {
     nrfEnsureInit();
+    int last = 0; // keep the cursor on the row that was just used
 AGAIN:
     options = {
-        {String("Capture 3s ch") + String(nrfCaptureGetChannel()),
-         []() { nrfMenuCapture(3000, false); }                                                   },
-        {"Capture hop 0-125",
-         []() { nrfMenuCapture(3000, true); }                                                    },
-        {"RGB remote capture",
-         []() { nrfMenuRgbCapture(); }                                                           },
-        {String("RGB preset: ") +
-             (nrfCaptureGetProfile() >= 0 ? String(NRF_SIGNAL_PROFILES[nrfCaptureGetProfile()].name)
-                                          : String("Generic")),
-         []() { nrfCycleProfile(); }                                                             },
-        {"Set capture ch", []() { nrfMenuSetChannel(); }                                        },
-        {"Channel scan",
-         []() {
-             if (!nrfCaptureReady()) {
-                 displayError("NRF24 not found", true);
-                 return;
-             }
-             NrfRunScreen screen;
-             screen.begin("Channel Scan", "2400-2525MHz, 126 channels");
-             NrfChannelActivity act[126];
-             int n = nrfScanChannelActivity(0, 125, 2, act, 126, [&screen](const NrfCaptureProgress &p) {
-                 return screen.update(p);
-             });
-             String lines[5];
-             int written = 0;
-             for (int i = 0; i < n && written < 5; i++) {
-                 if (act[i].level == 0) continue;
-                 lines[written++] = String(act[i].freqMhz) + "MHz lvl=" + String(act[i].level);
-             }
-             if (written == 0) lines[written++] = "No carrier detected";
-             screen.finish(lines, written);
-         }                                                                                       },
-        {"Multi-freq detect",
-         []() {
-             NrfRunScreen screen;
-             screen.begin("Multi-Freq", "Capturing 4s, hopping all channels");
-             nrfCaptureRun(4000, true, 20, [&screen](const NrfCaptureProgress &p) {
-                 return screen.update(p);
-             });
-             uint8_t chans[8];
-             int n = nrfFilterMultiFreqChannels(chans, 8);
-             String lines[4];
-             lines[0] = String("Signals: ") + String(n);
-             lines[1] = n >= 2 ? String("Dual-frequency: YES") : String("Dual-frequency: no");
-             for (int i = 0; i < n && i + 2 < 4; i++) lines[i + 2] = String(2400 + chans[i]) + "MHz";
-             screen.finish(lines, n + 2 > 4 ? 4 : n + 2);
-         }                                                                                       },
-        {"Frequency analysis", []() { nrfDrawFrequencyAnalysis("Freq Analysis"); }               },
-        {"List capture",
-         []() {
-             String lines[6];
-             int written = 0;
-             for (int i = 0; i < nrfCaptureCount() && written < 6; i++) {
-                 NrfCapturedPacket p;
-                 if (!nrfCapturePacket(i, &p)) continue;
-                 lines[written++] = String(2400 + p.channel) + "M len" + String(p.len) + " " +
-                                    nrfHexOf(p.data, p.len).substring(0, 16);
-             }
-             if (written == 0) lines[written++] = "Empty";
-             nrfShowLines("Capture", lines, written);
-         }                                                                                       },
-        {"Save capture", []() { nrfMenuSaveCapture(); }                                          },
-        {"Replay capture", []() { nrfMenuReplayCapture(); }                                      },
-        {"Analyze packet", []() { nrfMenuAnalyze(); }                                            },
-        {"Frequency range",
-         []() {
-             String s = num_keyboard(String(nrfCaptureStartFreq()), 4, "Start MHz:");
-             if (s.length() == 0 || s == "\x1B") return;
-             String e = num_keyboard(String(nrfCaptureEndFreq()), 4, "End MHz:");
-             if (e.length() == 0 || e == "\x1B") return;
-             nrfCaptureSetFrequencyRange((uint16_t)s.toInt(), (uint16_t)e.toInt());
-         }                                                                                       },
-        {String("Promiscuous: ") + (nrfCaptureIsPromiscuous() ? "ON" : "OFF"),
-         []() { nrfCaptureSetPromiscuous(!nrfCaptureIsPromiscuous()); }                          },
-        {String("Rate: ") + nrfRateName(nrfCaptureGetDataRate()),
-         []() { nrfCaptureSetDataRate((nrfCaptureGetDataRate() + 1) % 3); }                      },
+        {"Capture (press remote)", []() { nrfMenuRgbCapture(); }                                    },
+        {String("Preset: ") + (nrfCaptureGetProfile() >= 0
+                                   ? String(NRF_SIGNAL_PROFILES[nrfCaptureGetProfile()].name)
+                                   : String("Auto (find channels)")),
+         []() { nrfCycleProfile(); }                                                                },
+        {"Replay capture", []() { nrfMenuReplayCapture(); }                                         },
+        {"Save capture", []() { nrfMenuSaveCapture(); }                                             },
     };
     addOptionToMainMenu();
-    int selected = loopOptions(options, MENU_TYPE_SUBMENU, "NRF24 Capture");
+    int selected = loopOptions(options, MENU_TYPE_SUBMENU, "RGB Remote", last);
     // A negative index is the physical Back button: leave this page instead of
     // rebuilding it, which used to look like "Back reloads the current menu".
     if (selected < 0) return;
     // "Main Menu" (pushed by addOptionToMainMenu) bubbles all the way out.
     if (returnToMenu) return;
-    // Any other entry: rebuild, so the Rate/Promiscuous labels stay accurate.
+    // Any other entry: rebuild, so the preset label stays accurate, and keep the
+    // cursor where it was instead of jumping back to the first row.
+    last = selected;
     goto AGAIN;
 }

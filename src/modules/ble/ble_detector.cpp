@@ -13,10 +13,11 @@
 // ---------------------------------------------------------------------------
 // BLE Detector (task 1: "BLE Detector, like the Momentum ESP32 port, restyled")
 //
-// A live radar table over one continuous passive/active scan. The scanner runs
-// on its own task because NimBLEScan::start() is asynchronous in this
-// NimBLE-Arduino and getResults() would block the UI for the whole window
-// (DISCOVERIES 65); the callback feeds a fixed table that the UI samples.
+// A live radar table over one continuous active scan. NimBLEScan::start() is
+// asynchronous in this NimBLE-Arduino (getResults() is the blocking wrapper), so
+// the UI loop arms a scan window and re-arms it when it expires - no scanning
+// task and no blocking call. The scan callback runs on the NimBLE host task and
+// feeds the fixed table that the UI samples under a critical section.
 //
 // The table is static and small on purpose: internal DRAM is the scarce
 // resource on this board and BLE bring-up needs ~56 KB free (DISCOVERIES 64).
@@ -27,6 +28,7 @@
 #define BLE_DET_HOLD_MS 15000 // keep a device listed this long after its last packet
 #define BLE_DET_NEW_MS 5000   // "new" styling window
 #define BLE_DET_WINDOW_MS 3000
+#define BLE_DET_RESTART_MS 150 // pause between windows, so the controller's duplicate cache resets
 
 struct BleDetEntry {
     uint8_t addr[6];
@@ -45,10 +47,6 @@ static int bleDetCount = 0;
 static uint32_t bleDetTotal = 0;
 static uint32_t bleDetStartMs = 0;
 static portMUX_TYPE bleDetMux = portMUX_INITIALIZER_UNLOCKED;
-
-static volatile bool bleDetStop = false;
-static volatile bool bleDetScanning = false;
-static TaskHandle_t bleDetTask = nullptr;
 
 // Row style for the table. Kept local so the detector does not depend on the
 // packet monitor's helpers.
@@ -178,7 +176,11 @@ class BleDetCallbacks : public NimBLEScanCallbacks {
         e.apple = apple;
         e.seen = (e.seen < 0xFFFF) ? e.seen + 1 : e.seen;
         e.lastSeen = now;
-        if (rssi > e.rssi) e.rssi = rssi;
+        // A fresh slot has rssi == 0 from the memset above, and every real BLE
+        // RSSI is negative, so 0 doubles as "no sample yet". Comparing straight
+        // against e.rssi kept every row at 0 dBm (and the distance column at
+        // "--"), because no negative value ever beat the initial zero.
+        if (e.rssi == 0 || rssi > e.rssi) e.rssi = rssi;
         if (e.name[0] == 0 && name.length()) {
             strncpy(e.name, name.c_str(), sizeof(e.name) - 1);
             e.name[sizeof(e.name) - 1] = 0;
@@ -189,22 +191,21 @@ class BleDetCallbacks : public NimBLEScanCallbacks {
 
 static BleDetCallbacks bleDetCallbacks;
 
-// Scan loop. Short windows keep the RSSI averages moving; the table survives
-// between windows, so restarting the scan loses nothing.
-static void bleDetTaskFn(void *) {
-    NimBLEScan *scan = BLEDevice::getScan();
-    while (!bleDetStop && scan != nullptr) {
-        bleDetScanning = true;
-        scan->start(BLE_DET_WINDOW_MS, false, true);
-        scan->stop();
-        bleDetScanning = false;
-        if (bleDetStop) break;
-        scan->clearResults();
-        vTaskDelay(pdMS_TO_TICKS(120));
+// Arm one scan window. This returns as soon as the controller has been asked to
+// scan, and advertisements then arrive in bleDetCallbacks on the NimBLE host
+// task; the UI loop re-arms the window once the controller stops scanning.
+static void bleDetArmScan(NimBLEScan *scan) {
+    if (scan == nullptr) return;
+    if (scan->start(BLE_DET_WINDOW_MS, false, true)) return;
+
+    // Busy (a connection is in progress) or the host is not in sync yet. The UI
+    // loop retries every BLE_DET_RESTART_MS, so only say it once in a while -
+    // this shares the USB console that the host tools read commands from.
+    static uint32_t lastWarnMs = 0;
+    if (millis() - lastWarnMs > 2000) {
+        lastWarnMs = millis();
+        Serial.println("[BLEDET] scan arm failed, will retry");
     }
-    if (scan != nullptr) scan->clearResults();
-    bleDetTask = nullptr;
-    vTaskDelete(nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -329,18 +330,18 @@ void bleDetectorRun() {
     portEXIT_CRITICAL(&bleDetMux);
     bleDetStartMs = millis();
 
-    bleDetStop = false;
-    if (xTaskCreatePinnedToCore(bleDetTaskFn, "bleDet", 4096, nullptr, 1, &bleDetTask, 1) != pdPASS) {
-        bleDetTask = nullptr;
-        displayError("Failed to start scan", true);
-        if (weStarted) stopBLEStack();
-        return;
-    }
+    // Arm the first window here. The scan used to run on a 4 KB task of its own,
+    // but once the BLE stack is up internal DRAM is too fragmented to allocate
+    // that stack: xTaskCreatePinnedToCore() returned pdFALSE and the screen only
+    // ever said "Failed to start scan". Driving the (non-blocking) scan from the
+    // UI loop needs no extra stack at all.
+    bleDetArmScan(scan);
 
     bool full = true;
     bool paused = false;
     int page = 0;
     uint32_t lastDraw = 0;
+    uint32_t lastScanMs = millis();
 
     // The key that launched the app is still down when the scan starts; without
     // this the first poll reads SEL as pressed and jumps straight into the menu
@@ -349,6 +350,17 @@ void bleDetectorRun() {
     delay(150);
 
     while (true) {
+        // Keep a window armed. The old code called start() and then stop() back
+        // to back, which cancelled the scan in the same millisecond and left the
+        // table empty; and because start() never blocks, nothing advanced the
+        // window either. Re-arm whenever the controller is no longer scanning.
+        if (scan->isScanning()) {
+            lastScanMs = millis();
+        } else if (millis() - lastScanMs >= BLE_DET_RESTART_MS) {
+            lastScanMs = millis();
+            bleDetArmScan(scan);
+        }
+
         if (!paused && (millis() - lastDraw > 400)) {
             portENTER_CRITICAL(&bleDetMux);
             int count = bleDetCount;
@@ -412,18 +424,10 @@ void bleDetectorRun() {
         vTaskDelay(pdMS_TO_TICKS(25));
     }
 
-    // Teardown: the scanner task owns the scan object, so it has to be joined
-    // before stopBLEStack() pulls the radio out from under it.
-    bleDetStop = true;
-    if (bleDetTask != nullptr) scan->stop();
-    for (int i = 0; i < 100 && bleDetTask != nullptr; i++) vTaskDelay(pdMS_TO_TICKS(10));
-    if (bleDetTask != nullptr) vTaskDelete(bleDetTask); // last resort, thread is not ours to keep
-    bleDetTask = nullptr;
-
-    if (scan != nullptr) {
-        scan->stop();
-        scan->clearResults();
-    }
+    // Teardown: the scan lives in the controller/host task, so a single stop()
+    // is enough before stopBLEStack() pulls the radio out from under it.
+    scan->stop();
+    scan->clearResults();
     if (weStarted) stopBLEStack();
 
     portENTER_CRITICAL(&bleDetMux);

@@ -258,7 +258,21 @@ extern inline bool check(volatile bool &btn, bool resetButtonStatus = true) {
     // these two flags and only adds latency to every scroll step. Skip it
     // for them; every other flag (SelPress, EscPress, etc.) keeps the
     // original suspend+delay+resume debounce untouched.
+    //
+    // Take the detent out of the bulk queue as well. A step is published twice -
+    // once as this flag (for screens that poll a button), once in
+    // RotaryNetSteps (for loops that apply a whole backlog at once, see
+    // drainRotarySteps()). Without this, a screen that paged through a list
+    // with the encoder left the backlog standing, and the next menu applied
+    // every one of those steps again - the "menu jumps when I come back from a
+    // list" misinput. PrevPress is the positive/clockwise direction, NextPress
+    // the negative one (same convention as the board InputHandler()s).
     if (&btn == &NextPress || &btn == &PrevPress) {
+        if (&btn == &NextPress) {
+            if (RotaryNetSteps < 0) RotaryNetSteps += 1;
+        } else {
+            if (RotaryNetSteps > 0) RotaryNetSteps -= 1;
+        }
         if (resetButtonStatus) {
             btn = false;
             AnyKeyPress = false;

@@ -18,6 +18,7 @@
 void ConfigMenu::optionsMenu() {
     returnToMenu = false;
     while (true) {
+        int last = 0; // keep the cursor on the row that was just used
         // Check if we need to exit to Main Menu (e.g., DevMode disabled)
         if (returnToMenu) {
             returnToMenu = false; // Reset flag
@@ -45,10 +46,11 @@ void ConfigMenu::optionsMenu() {
         localOptions.push_back({"About", showDeviceInfo});
         localOptions.push_back({"Main Menu", []() {}});
 
-        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Config");
+        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Config", last);
 
         // Exit to Main Menu only if user pressed Back
         if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        last = selected;
         // Otherwise rebuild Config menu after submenu returns
     }
 }
@@ -59,6 +61,7 @@ void ConfigMenu::optionsMenu() {
 **********************************************************************/
 void ConfigMenu::displayUIMenu() {
     while (true) {
+        int last = 0; // keep the cursor on the row that was just used
         std::vector<Option> localOptions = {
             {"Brightness",  [this]() { setBrightnessMenu(); }               },
             {"Dim Time",    [this]() { setDimmerTimeMenu(); }               },
@@ -68,10 +71,11 @@ void ConfigMenu::displayUIMenu() {
             {"Back",        []() {}                                         },
         };
 
-        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Display & UI");
+        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Display & UI", last);
 
         // Exit only if user pressed Back or ESC
         if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        last = selected;
         // Otherwise loop continues and menu rebuilds
     }
 }
@@ -83,6 +87,7 @@ void ConfigMenu::displayUIMenu() {
 #ifdef HAS_RGB_LED
 void ConfigMenu::ledMenu() {
     while (true) {
+        int last = 0; // keep the cursor on the row that was just used
         std::vector<Option> localOptions = {
             {"LED Color",
              [this]() {
@@ -108,10 +113,11 @@ void ConfigMenu::ledMenu() {
             {"Back",                                                               []() {}},
         };
 
-        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "LED Config");
+        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "LED Config", last);
 
         // Exit only if user pressed Back or ESC
         if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        last = selected;
         // Menu rebuilds to update toggle label
     }
 }
@@ -122,6 +128,7 @@ void ConfigMenu::ledMenu() {
 **********************************************************************/
 void ConfigMenu::audioMenu() {
     while (true) {
+        int last = 0; // keep the cursor on the row that was just used
         std::vector<Option> localOptions = {
 #if !defined(LITE_VERSION)
 #if defined(BUZZ_PIN) || defined(HAS_NS4168_SPKR)
@@ -140,10 +147,11 @@ void ConfigMenu::audioMenu() {
             {"Back",                                                        []() {}                       },
         };
 
-        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Audio Config");
+        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Audio Config", last);
 
         // Exit only if user pressed Back or ESC
         if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        last = selected;
         // Menu rebuilds to update toggle label
     }
 }
@@ -154,6 +162,7 @@ void ConfigMenu::audioMenu() {
 **********************************************************************/
 void ConfigMenu::systemMenu() {
     while (true) {
+        int last = 0; // keep the cursor on the row that was just used
         std::vector<Option> localOptions = {
             {String("InstaBoot: ") + (bruceConfig.instantBoot ? "ON" : "OFF"),
              [this]() {
@@ -176,10 +185,11 @@ void ConfigMenu::systemMenu() {
             {"Back",                                                                []() {}                              },
         };
 
-        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "System Config");
+        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "System Config", last);
 
         // Exit only if user pressed Back or ESC
         if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        last = selected;
         // Menu rebuilds to update toggle labels
     }
 }
@@ -190,11 +200,12 @@ void ConfigMenu::systemMenu() {
 **********************************************************************/
 void ConfigMenu::advancedMenu() {
     while (true) {
+        int last = 0; // keep the cursor on the row that was just used
         std::vector<Option> localOptions = {
             {"Set Device pins", [this]() { pinsMenu(); }           },
 #if !defined(LITE_VERSION)
             {"Toggle BLE API",  [this]() { enableBLEAPI(); }       },
-            {"BadUSB/BLE",      [this]() { setBadUSBBLEMenu(); }   },
+            {"HID Settings",    [this]() { setBadUSBBLEMenu(); }   },
 #endif
             {"BLE name",
              [this]() {
@@ -224,10 +235,11 @@ void ConfigMenu::advancedMenu() {
             {"Back",            []() {}                            },
         };
 
-        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Advanced");
+        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Advanced", last);
 
         // Exit to System Config menu
         if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        last = selected;
         // Menu rebuilds after each action
     }
 }
@@ -237,6 +249,7 @@ void ConfigMenu::advancedMenu() {
 **********************************************************************/
 void ConfigMenu::powerMenu() {
     while (true) {
+        int last = 0; // keep the cursor on the row that was just used
         std::vector<Option> localOptions = {
             {"Deep Sleep", goToDeepSleep          },
             {"Sleep",      setSleepMode           },
@@ -252,10 +265,11 @@ void ConfigMenu::powerMenu() {
             {"Back",       []() {}                },
         };
 
-        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Power Menu");
+        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Power Menu", last);
 
         // Exit to Config menu
         if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        last = selected;
         // Menu rebuilds after each action
     }
 }
@@ -282,6 +296,7 @@ void ConfigMenu::powerMenu() {
 **********************************************************************/
 void ConfigMenu::usbDebugMenu() {
     while (true) {
+        int last = 0; // keep the cursor on the row that was just used
         std::vector<Option> localOptions = {
             {String("Developer Mode: ") + (bruceConfig.usbDebug ? "ON" : "OFF"),
              [this]() {
@@ -325,10 +340,11 @@ void ConfigMenu::usbDebugMenu() {
             {"Back",                                               []() {}},
         };
 
-        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Developer Options");
+        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Developer Options", last);
 
         // Exit to System Config menu
         if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        last = selected;
         // Menu rebuilds so the toggle labels stay accurate
     }
 }
@@ -339,6 +355,7 @@ void ConfigMenu::usbDebugMenu() {
 **********************************************************************/
 void ConfigMenu::pinsMenu() {
     while (true) {
+        int last = 0; // keep the cursor on the row that was just used
         std::vector<Option> localOptions = {
             {"I2C Finder",     [this]() { find_i2c_addresses(); }                      },
             {"CC1101 Pins",    [this]() { setSPIPinsMenu(bruceConfigPins.CC1101_bus); }},
@@ -357,10 +374,11 @@ void ConfigMenu::pinsMenu() {
             {"Back",           []() {}                                                 },
         };
 
-        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Pins Setup");
+        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Pins Setup", last);
 
         // Exit to Config menu on Back or ESC
         if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        last = selected;
         // Menu rebuilds after each action
     }
 }

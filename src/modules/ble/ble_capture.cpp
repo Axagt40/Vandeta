@@ -610,7 +610,17 @@ static void bleMenuAnalyze() {
 }
 
 static void bleMenuDetailedScan() {
-    static BleScanEntry entries[24];
+    // 24 entries x 56 B = 1.3 KB moved out of .bss; the menu is the only user,
+    // so the table is allocated here (PSRAM first) instead of being resident.
+    static BleScanEntry *entries = nullptr;
+    if (!entries) {
+        entries = (BleScanEntry *)(psramFound() ? ps_malloc(sizeof(BleScanEntry) * 24)
+                                               : malloc(sizeof(BleScanEntry) * 24));
+    }
+    if (!entries) {
+        displayError("Low RAM for BLE scan", true);
+        return;
+    }
     drawMainBorderWithTitle("BLE Scan");
     tft.drawString("Scanning 5s...", 8, 48);
     int n = bleScanDetailed(5000, entries, 24);

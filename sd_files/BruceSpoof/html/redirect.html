@@ -1,0 +1,16 @@
+<!-- HTML Intercept example: sends every plain-HTTP request to
+     https://www.wikipedia.org/ . Copy to /BruceSpoof/html/redirect.html, then
+     HTML Intercept > Pick HTML payload, Match *, Targets & ARP > pair, Start.
+     Max 1100 bytes; plain HTTP only, HTTPS is never intercepted. -->
+<!doctype html><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<meta http-equiv=refresh content="0;url=https://www.wikipedia.org/">
+<title>Redirecting</title>
+<body style="margin:0;font:16px/1.5 system-ui;background:#0f1115;color:#e6e8ee">
+<main style="max-width:30rem;margin:18vh auto;padding:0 1.5rem">
+<h1 style="font-size:1.3rem;margin:0 0 .7rem">Taking you somewhere else</h1>
+<p style="color:#9aa3b2">This network answered with a redirect, so this page is
+not the site you asked for.</p>
+<p><a href="https://www.wikipedia.org/" style="color:#8ab4ff">Continue to
+wikipedia.org</a></p></main>
+<script>location.replace("https://www.wikipedia.org/")</script>

@@ -16,6 +16,7 @@
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "evil_portal.h"
+#include "mitm_menu.h"
 #include "modules/ble/ble_common.h"
 #include "more_atks.h"
 #include "karma_attack.h"
@@ -267,6 +268,13 @@ void wifi_atk_menu() {
         {"Auth Flood",      [=]() { moreAuthFloodMenu(); }    },
         {"Probe Request",   [=]() { moreProbeFloodMenu(); }   },
         {"EAPOL Attack",    [=]() { moreEapolStartMenu(); }   },
+        // One application-layer interception page: target network, target
+        // mode, one payload, one Start. It drives the net_spoof engine - the
+        // same one the arpSpoof / dnsSpoof / httpInterceptor bindings use - and
+        // the payload's page/redirect/dns/fallback lines are that API in plain
+        // text (see mitm_menu.h). The console verbs are still `dnsinject` and
+        // `htmlint`.
+        {"MITM Attack",     [=]() { mitmAttackMenu(); }      },
 #endif
     };
     addOptionToMainMenu();

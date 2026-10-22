@@ -255,6 +255,18 @@ void setUIColor() {
              bruceConfig.colorInverted > 0}
         );
 
+        // Task2: one switch for the boot-splash gradient across the UI. The
+        // drawing helpers in core/ui_gradient.cpp read bruceConfig.uiGradient
+        // directly, so the menu only has to flip the flag and save it; the
+        // next redraw (the while(1) loop rebuilds this menu) picks it up.
+        options.push_back(
+            {String("Gradient: ") + (bruceConfig.uiGradient ? "ON" : "OFF"),
+             [=]() {
+                 bruceConfig.uiGradient = !bruceConfig.uiGradient;
+                 bruceConfig.saveFile();
+             }}
+        );
+
         addOptionToMainMenu();
 
         int selectedOption = loopOptions(options, idx);
@@ -1357,9 +1369,9 @@ void setNetworkCredsMenu() {
 **  BadUSB configuration
 **
 **  One place that owns every BadUSB setting: the USB identity it presents,
-**  the keyboard layout (moved here from the old Advanced > BadUSB/BLE menu),
+**  the keyboard layout (moved here from the old Advanced > HID Settings menu),
 **  the HID device type, attack timing and payload storage. Reachable from
-**  Others > BadUSB & HID > "BadUSB Settings" and from Advanced > BadUSB/BLE.
+**  Others > BadUSB & HID > "HID Settings" and from Advanced > HID Settings.
 **  BadBLE (the BLE HID keyboard) reads the same identity fields, the layout and
 **  the timing from here; "Apple/BLE Patch" switches its advertising and pairing
 **  to the profile iOS/macOS insist on.
@@ -1432,6 +1444,7 @@ static void badUsbFootprintSaved() {
 
 static void badUsbFootprintMenu() {
     while (true) {
+        int last = 0; // keep the cursor on the row that was just used
         char vidStr[8];
         char pidStr[8];
         snprintf(vidStr, sizeof(vidStr), "%04X", bruceConfig.badUSBBLEVid);
@@ -1496,18 +1509,20 @@ static void badUsbFootprintMenu() {
             {"Back", []() {}},
         };
 
-        int sel = loopOptions(localOptions, MENU_TYPE_SUBMENU, "USB Footprint");
+        int sel = loopOptions(localOptions, MENU_TYPE_SUBMENU, "USB Footprint", last);
         if (sel == -1 || sel == (int)localOptions.size() - 1) return;
+        last = sel;
     }
 }
 
 /*********************************************************************
 **  Function: badUsbKeyboardLayoutMenu
-**  Keyboard layout selection (moved out of Advanced > BadUSB/BLE), including
+**  Keyboard layout selection (moved out of Advanced > HID Settings), including
 **  extra layouts and user-supplied custom layouts.
 **********************************************************************/
 static void badUsbKeyboardLayoutMenu() {
     while (true) {
+        int last = 0; // keep the cursor on the row that was just used
         int cur = bruceConfig.badUSBBLEKeyboardLayout;
         std::vector<Option> localOptions;
         for (int i = 0; i < badusbLayoutCount(); i++) {
@@ -1529,8 +1544,9 @@ static void badUsbKeyboardLayoutMenu() {
             }});
         localOptions.push_back({"Back", []() {}});
 
-        int sel = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Keyboard Layout");
+        int sel = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Keyboard Layout", last);
         if (sel == -1 || sel == (int)localOptions.size() - 1) return;
+        last = sel;
     }
 }
 
@@ -1555,6 +1571,7 @@ static void badUsbHidTypeMenu() {
 **********************************************************************/
 static void badUsbTimingMenu() {
     while (true) {
+        int last = 0; // keep the cursor on the row that was just used
         std::vector<Option> localOptions = {
             {String("Key Delay: ") + String(bruceConfig.badUSBBLEKeyDelay) + " ms",
              []() {
@@ -1588,60 +1605,9 @@ static void badUsbTimingMenu() {
             {"Back", []() {}},
         };
 
-        int sel = loopOptions(localOptions, MENU_TYPE_SUBMENU, "BadUSB Timing");
+        int sel = loopOptions(localOptions, MENU_TYPE_SUBMENU, "BadUSB Timing", last);
         if (sel == -1 || sel == (int)localOptions.size() - 1) return;
-    }
-}
-
-/*********************************************************************
-**  Function: badUsbPayloadMenu
-**  Payload storage and management (folder, default payload, run)
-**********************************************************************/
-static void badUsbPayloadMenu() {
-    while (true) {
-        std::vector<Option> localOptions = {
-            {"Run payload...",
-             []() {
-                 FS *fs = setupSdCard() ? (FS *)&SD : (FS *)&LittleFS;
-                 if (fs == nullptr) return;
-                 if (bruceConfig.badUSBBLEPayloadDir.length() && !fs->exists(bruceConfig.badUSBBLEPayloadDir))
-                     fs->mkdir(bruceConfig.badUSBBLEPayloadDir);
-                 String path = loopSD(*fs, true, "*", bruceConfig.badUSBBLEPayloadDir);
-                 if (path.length() == 0 || path == "\x1B") return;
-                 if (!badusbRunPayload(path)) displayError("Payload failed", true);
-             }                                                                          },
-            {"Run default payload",
-             []() {
-                 if (bruceConfig.badUSBBLEDefaultPayload.length() == 0) {
-                     displayError("No default payload set", true);
-                     return;
-                 }
-                 if (!badusbRunPayload(bruceConfig.badUSBBLEDefaultPayload)) displayError("Payload failed", true);
-             }                                                                          },
-            {"Set default payload",
-             []() {
-                 FS *fs = setupSdCard() ? (FS *)&SD : (FS *)&LittleFS;
-                 if (fs == nullptr) return;
-                 if (bruceConfig.badUSBBLEPayloadDir.length() && !fs->exists(bruceConfig.badUSBBLEPayloadDir))
-                     fs->mkdir(bruceConfig.badUSBBLEPayloadDir);
-                 String path = loopSD(*fs, true, "*", bruceConfig.badUSBBLEPayloadDir);
-                 if (path.length() > 0 && path != "\x1B") bruceConfig.setBadUSBBLEDefaultPayload(path);
-             }                                                                          },
-            {String("Payload folder: ") + bruceConfig.badUSBBLEPayloadDir,
-             []() {
-                 String v = keyboard(bruceConfig.badUSBBLEPayloadDir, 48, "Payload folder:");
-                 if (v.length() > 0 && v != "\x1B") {
-                     if (!v.startsWith("/")) v = "/" + v;
-                     bruceConfig.setBadUSBBLEPayloadDir(v);
-                 }
-             }                                                                          },
-            {String("Default: ") + (bruceConfig.badUSBBLEDefaultPayload.length() ? bruceConfig.badUSBBLEDefaultPayload : "(none)"),
-             []() {}}, // informational only
-            {"Back", []() {}},
-        };
-
-        int sel = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Payload Manager");
-        if (sel == -1 || sel == (int)localOptions.size() - 1) return;
+        last = sel;
     }
 }
 
@@ -1650,6 +1616,9 @@ static void badUsbPayloadMenu() {
 **  Main BadUSB configuration menu
 **********************************************************************/
 static void badUsbConfigMenu() {
+    // Keep the cursor where it was: rebuilding the page with index 0 is what
+    // made a switch flip or a name edit look like the menu had restarted.
+    int last = 0;
     while (true) {
         std::vector<Option> localOptions = {
             {"USB Footprint",
@@ -1660,8 +1629,6 @@ static void badUsbConfigMenu() {
              []() { badUsbHidTypeMenu(); }},
             {"Attack Timing",
              []() { badUsbTimingMenu(); }},
-            {"Payload Manager",
-             []() { badUsbPayloadMenu(); }},
             {String("Show Output: ") + (bruceConfig.badUSBBLEShowOutput ? "ON" : "OFF"),
              []() { bruceConfig.setBadUSBBLEShowOutput(!bruceConfig.badUSBBLEShowOutput); }},
             {String("Apple/BLE Patch: ") + (bruceConfig.badUSBBLEApplePatch ? "ON" : "OFF"),
@@ -1682,14 +1649,15 @@ static void badUsbConfigMenu() {
             {"Back", []() {}},
         };
 
-        int sel = loopOptions(localOptions, MENU_TYPE_SUBMENU, "BadUSB Settings");
+        int sel = loopOptions(localOptions, MENU_TYPE_SUBMENU, "HID Settings", last);
         if (sel == -1 || sel == (int)localOptions.size() - 1) return;
+        last = sel;
     }
 }
 
 /*********************************************************************
 **  Function: setBadUSBBLEMenu
-**  Entry point kept for the Advanced > BadUSB/BLE item; now opens the
+**  Entry point kept for the Advanced > HID Settings item; now opens the
 **  unified BadUSB configuration menu.
 **********************************************************************/
 void setBadUSBBLEMenu() { badUsbConfigMenu(); }

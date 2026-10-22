@@ -893,7 +893,15 @@ JSValue native_bleScanDetailed(JSContext *ctx, JSValue *this_val, int argc, JSVa
     if (argc > 1 && JS_IsNumber(ctx, argv[1])) JS_ToInt32(ctx, &max, argv[1]);
     if (max <= 0 || max > 64) max = 64;
 
-    static BleScanEntry entries[64];
+    // 64 entries x 56 B = 3.0 KB that used to sit in .bss for the whole
+    // session. Only this binding uses the table, so it is allocated on first
+    // call, from PSRAM when the board has it.
+    static BleScanEntry *entries = nullptr;
+    if (!entries) {
+        entries = (BleScanEntry *)(psramFound() ? ps_malloc(sizeof(BleScanEntry) * 64)
+                                               : malloc(sizeof(BleScanEntry) * 64));
+        if (!entries) return JS_ThrowOutOfMemory(ctx);
+    }
     int n = bleScanDetailed((uint32_t)seconds * 1000, entries, max);
 
     JSGCRef arr_ref;

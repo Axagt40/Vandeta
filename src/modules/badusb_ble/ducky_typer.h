@@ -62,7 +62,7 @@ void PresenterMode(HIDInterface *&hid, bool ble = true);
 void cleanupDuckyBLE(HIDInterface *&hid);
 
 // ---------------------------------------------------------------------------
-// BadUSB keyboard layout management (backs the BadUSB Settings menu and the
+// BadUSB keyboard layout management (backs the HID Settings menu and the
 // badusb.setLayout console/JS helpers).
 //   indices 0..14  on-flash layouts (0 US, 1 Danish, 2 UK, 3 FR, 4 DE, 5 HU,
 //                  6 IT, 7 US-alt, 8 PT-BR, 9 PT, 10 SI, 11 ES, 12 SV,

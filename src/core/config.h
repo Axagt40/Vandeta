@@ -95,12 +95,16 @@ public:
     int usbDebugDevMode = 0; // alias of usbDebug (speed over stability profile)
     int usbDebugBinary = 0;  // 0 = text CLI, 1 = framed binary protocol
 
+    // UI gradient: paint primary-coloured UI furniture with the boot splash's
+    // pink -> purple ramp instead of one flat colour. Read by ui_gradient.h;
+    // toggle lives in Config > Display & UI > UI Color.
+    bool uiGradient = true;
     int colorInverted = 1;
     int badUSBBLEKeyboardLayout = 0;
     uint16_t badUSBBLEKeyDelay = 10;
     bool badUSBBLEShowOutput = true;
 
-    // BadUSB extended configuration (menu: Others > BadUSB & HID > BadUSB Settings)
+    // BadUSB extended configuration (menu: Others > BadUSB & HID > HID Settings)
     int badUSBBLEHidType = 0;                 // 0 keyboard, 1 keyboard+mouse, 2 mouse
     uint16_t badUSBBLEVid = 0x303A;           // USB vendor id presented by BadUSB
     uint16_t badUSBBLEPid = 0x4004;           // USB product id presented by BadUSB

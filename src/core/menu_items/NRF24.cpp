@@ -10,8 +10,10 @@
 
 void NRF24Menu::optionsMenu() {
     // Rebuild this submenu after an entry returns, and leave it when the user
-    // presses Back: without this the newly added pages (Raw Capture) would drop
-    // straight to the main menu instead of back to NRF24.
+    // presses Back: without this the newly added pages would drop straight to
+    // the main menu instead of back to NRF24. The index is carried across the
+    // rebuild so the cursor stays on the row that was used.
+    int last = 0;
     while (true) {
         options.clear();
         options.push_back({"Information", nrf_info});
@@ -20,7 +22,7 @@ void NRF24Menu::optionsMenu() {
         options.push_back({"MouseJack", nrf_mousejack});
         #endif
         options.push_back({"NRF Jammer", nrf_jammer});
-        options.push_back({"Raw Capture", nrfRawCaptureMenu});
+        options.push_back({"RGB Remote", nrfRawCaptureMenu});
         options.push_back({"Packet Monitor", []() { packetMonitor(PKT_SRC_NRF24); }});
 
 #if defined(ARDUINO_M5STICK_C_PLUS) || defined(ARDUINO_M5STICK_C_PLUS2)
@@ -29,9 +31,10 @@ void NRF24Menu::optionsMenu() {
 
         addOptionToMainMenu();
 
-        int selected = loopOptions(options, MENU_TYPE_SUBMENU, "NRF24");
+        int selected = loopOptions(options, MENU_TYPE_SUBMENU, "NRF24", last);
         if (selected < 0) return; // physical Back -> main menu
         if (returnToMenu) return; // "Main Menu" entry
+        last = selected;
     }
 }
 

