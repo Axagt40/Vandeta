@@ -1,0 +1,19 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - NEC address D3 00 00 00
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: Apps
+type: parsed
+protocol: NEC
+address: D3 00 00 00
+command: 02 00 00 00
+#
+name: Netflix
+type: parsed
+protocol: NEC
+address: D3 00 00 00
+command: 01 00 00 00
+#

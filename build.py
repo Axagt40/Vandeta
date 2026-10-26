@@ -124,11 +124,18 @@ def _merge_bins_callback(target, source, env):
         except FileNotFoundError:
             size = 0
         print(f"[merge_bin] Success -> {out_bin} ({size} bytes)")
-        try:
-            shutil.copyfile(out_bin, release_bin)
-            print(f"[merge_bin] Release copy -> {release_bin} ({release_bin.stat().st_size} bytes)")
-        except OSError as e:
-            print(f"[merge_bin] Warning: could not write {release_bin}: {e}")
+        # Only the shipping environment owns the release name. A fast/dev build
+        # (no LTO, larger image) used to overwrite vandeta.bin, so the next
+        # release could quietly ship the bench build. Dev images keep their
+        # env-suffixed name and vandeta.bin stays the verified one.
+        if pioenv == "lilygo-t-embed-cc1101":
+            try:
+                shutil.copyfile(out_bin, release_bin)
+                print(f"[merge_bin] Release copy -> {release_bin} ({release_bin.stat().st_size} bytes)")
+            except OSError as e:
+                print(f"[merge_bin] Warning: could not write {release_bin}: {e}")
+        else:
+            print(f"[merge_bin] Dev build: vandeta.bin left untouched")
         if ota0_offset:
             if size < (ota0_offset + ota_size):
                 print("[Final bin] Valid bin to upload")

@@ -3,6 +3,8 @@
 #include "script_folder_js.h"
 #include "user_classes_js.h"
 
+#include "core/usb_debug/usbdebug.h"
+
 #include "mbedtls/base64.h"
 
 JSValue js_gc(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
@@ -16,6 +18,13 @@ JSValue js_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
     if (!filename) return JS_EXCEPTION;
 
     FileParamsJS fileParams = js_get_path_from_params(ctx, argv);
+
+    // Developer mode implies hot reload, and the script being loaded is the one
+    // the user is editing: arm a watch on it. The old "Hot Reload: ON/OFF"
+    // setting turned a flag on with nothing in the watch list, which is why it
+    // did nothing. addWatch() is idempotent and silently drops files past the
+    // 8-slot limit.
+    if (UsbDebug::devMode()) UsbDebug::addWatch(fileParams.fs, fileParams.path);
 
     size_t script_len = 0;
     char *script = readBigFile(fileParams.fs, fileParams.path, false, &script_len);

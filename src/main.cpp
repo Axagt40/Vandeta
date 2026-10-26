@@ -275,8 +275,8 @@ void boot_screen() {
     tft.setTextSize(FG);
     tft.drawPixel(0, 0, bruceConfig.bgColor);
     tft.drawCentreString("Vandeta", tftWidth / 2, BOOT_TITLE_Y, 1);
-    // The wordmark above already says Vandeta, so this line is just "V: 1.2".
-    // BRUCE_VERSION carries the name too ("vandeta 1.2"); take the last word so a
+    // The wordmark above already says Vandeta, so this line is just "V: 1.3".
+    // BRUCE_VERSION carries the name too ("vandeta 1.3"); take the last word so a
     // version bump in platformio.ini still shows up here.
     const char *version = BRUCE_VERSION;
     const char *lastSpace = strrchr(BRUCE_VERSION, ' ');
@@ -390,11 +390,18 @@ void boot_screen_anim() {
     // Splash timing. The crown finishes revealing while the rest of the window
     // is spent filling the loading bar, so the bar is always moving while the
     // firmware is still bringing its radios up.
-    static const uint32_t SPLASH_MS = 7000;
-    static const uint32_t CROWN_START_MS = 300;
-    static const uint32_t CROWN_MS = 2200;
-    static const uint32_t BAR_START_MS = 500;
-    static const uint32_t BAR_MS = 6300; // 500 + 6300 = 6800, done before the end
+    //
+    // Everything in setup() before this costs under a second (measured: the
+    // storage, TFT, clock and radio stages are done by 774 ms), so this window
+    // WAS the boot time: 7 s of splash before the first menu. It is now 2.5 s,
+    // which still shows the whole crown and a moving bar but gets the menu up
+    // ~4.5 s sooner. Any key press still jumps it (see below), and
+    // `bruceConfig.instantBoot` skips it entirely.
+    static const uint32_t SPLASH_MS = 2500;
+    static const uint32_t CROWN_START_MS = 120;
+    static const uint32_t CROWN_MS = 1100;
+    static const uint32_t BAR_START_MS = 200;
+    static const uint32_t BAR_MS = 2100; // 200 + 2100 = 2300, done before the end
 
     const int barW = (tftWidth - 24) < 200 ? (tftWidth - 24) : 200;
     const int barH = 10;
@@ -673,7 +680,10 @@ void setup() {
     // #endif
 #if defined(HAS_SCREEN)
     bruceConfig.openThemeFile(bruceConfig.themeFS(), bruceConfig.themePath, false);
-    if (!bruceConfig.instantBoot) {
+    // Developer Options is a debugging mode: a host-driven reset should reach the
+    // menu as fast as possible, so the mode implies instantBoot (splash and
+    // startup sound skipped). Turn the setting off to get the splash back.
+    if (!bruceConfig.instantBoot && !bruceConfig.usbDebug) {
         boot_screen_anim();
         startup_sound();
     }

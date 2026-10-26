@@ -59,6 +59,38 @@ int irUniversalSend(
     volatile bool *stop = nullptr, int totalHint = 0
 );
 
+// One code from a library, for callers that walk the candidates themselves
+// (the Vandeta IR Suite script): every field the Flipper record carries, plus its position
+// among the codes that share the same name.
+struct IrUniversalCode {
+    String name;
+    String type;   // "parsed" | "raw"
+    String protocol;
+    String address;
+    String command;
+    String data;   // raw timings, or the `value:`/`state:` of a parsed code
+    uint16_t bits = 32;
+    uint32_t frequency = 0;
+    uint16_t index = 0;
+};
+
+// Read the `index`-th code named `button` (0-based). false when the library runs
+// out. Reads record by record, so asking for code 300 costs one pass, not an
+// index of the whole file in RAM.
+bool irUniversalCodeAt(FS *fs, const String &path, const String &button, int index, IrUniversalCode &out);
+
+// Transmit exactly that one candidate. false when it does not exist or the
+// protocol cannot be encoded by this firmware.
+bool irUniversalSendAt(FS *fs, const String &path, const String &button, int index);
+
+// Every code in the library that belongs to the same remote: matching protocol
+// AND the same address field. That pair is what identifies one device, so this
+// is how an identified power code is turned back into a usable remote (Power,
+// Vol_up, Mute ... whatever the library holds for that address).
+std::vector<IrUniversalCode> irUniversalFamily(
+    FS *fs, const String &path, const String &protocol, const String &address, int max = 64
+);
+
 // The on-device menu: category -> button -> transmit.
 void irUniversalMenu();
 

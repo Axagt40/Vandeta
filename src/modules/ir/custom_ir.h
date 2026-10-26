@@ -50,4 +50,9 @@ void sendKaseikyoCommand(String address, String command, bool hideDefaultUI = fa
 bool sendDecodedCommand(String protocol, String value, uint8_t bits = 32, bool hideDefaultUI = false);
 void otherIRcodes();
 bool txIrFile(FS *fs, const String &filepath, bool hideDefaultUI = false);
+// Send ONE named button from an IR file (Flipper format .ir; the Vandeta IR
+// Suite saves its remotes with the same format so the IR menu lists them too).
+// Returns false when the file cannot be read or has no such
+// button. Same parser rules as the on-device menu, no UI.
+bool sendIrFileButton(FS *fs, const String &filepath, const String &button, bool hideDefaultUI = true);
 bool chooseCmdIrFile(FS *fs, const String &filepath);

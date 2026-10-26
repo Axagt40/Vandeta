@@ -1,0 +1,235 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - RC5 address 00 00 00 00
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: Power
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 0C 00 00 00
+#
+name: Info
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 0F 00 00 00
+#
+name: Input
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 38 00 00 00
+#
+name: Vol_up
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 10 00 00 00
+#
+name: Vol_dn
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 11 00 00 00
+#
+name: Mute
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 0D 00 00 00
+#
+name: 0
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 00 00 00 00
+#
+name: 1
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 01 00 00 00
+#
+name: 2
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 02 00 00 00
+#
+name: 3
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 03 00 00 00
+#
+name: 4
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 04 00 00 00
+#
+name: 5
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 05 00 00 00
+#
+name: 6
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 06 00 00 00
+#
+name: 7
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 07 00 00 00
+#
+name: 8
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 08 00 00 00
+#
+name: 9
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 09 00 00 00
+#
+name: Text
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 3C 00 00 00
+#
+name: ChDown
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 21 00 00 00
+#
+name: ChUp
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 20 00 00 00
+#
+name: Clear
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 2D 00 00 00
+#
+name: Pdown
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 21 00 00 00
+#
+name: PicInPic_Back
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 22 00 00 00
+#
+name: Pp
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 0E 00 00 00
+#
+name: Pup
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 20 00 00 00
+#
+name: Rc5_00
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 00 00 00 00
+#
+name: Rc5_01
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 01 00 00 00
+#
+name: Rc5_02
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 02 00 00 00
+#
+name: Rc5_03
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 03 00 00 00
+#
+name: Rc5_04
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 04 00 00 00
+#
+name: Rc5_05
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 05 00 00 00
+#
+name: Rc5_06
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 06 00 00 00
+#
+name: Rc5_07
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 07 00 00 00
+#
+name: Rc5_08
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 08 00 00 00
+#
+name: Rc5_09
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 09 00 00 00
+#
+name: Size
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 29 00 00 00
+#
+name: Status
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 0F 00 00 00
+#
+name: VolDown
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 11 00 00 00
+#
+name: VolUp
+type: parsed
+protocol: RC5
+address: 00 00 00 00
+command: 10 00 00 00
+#

@@ -1,0 +1,37 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - SIRC address 11 00 00 00
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: Play
+type: parsed
+protocol: SIRC
+address: 11 00 00 00
+command: 32 00 00 00
+#
+name: Pause
+type: parsed
+protocol: SIRC
+address: 11 00 00 00
+command: 39 00 00 00
+#
+name: Stop
+type: parsed
+protocol: SIRC
+address: 11 00 00 00
+command: 38 00 00 00
+#
+name: Rewind
+type: parsed
+protocol: SIRC
+address: 11 00 00 00
+command: 33 00 00 00
+#
+name: Fastfwd
+type: parsed
+protocol: SIRC
+address: 11 00 00 00
+command: 34 00 00 00
+#

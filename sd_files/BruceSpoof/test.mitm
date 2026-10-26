@@ -17,5 +17,5 @@ page * html/test.html
 dns * gateway
 
 # If nothing lands in 10 s, answer DNS with the gateway instead. This is the
-# cascade the deleted rickroller script used.
+# cascade the earlier example payloads used.
 fallback dns gateway 10

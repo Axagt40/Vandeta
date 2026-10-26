@@ -1098,9 +1098,9 @@ AttackTier determineAttackTier(uint8_t priority) {
     return TIER_NONE;
 }
 
-uint16_t getPortalDuration(AttackTier tier) {
+uint32_t getPortalDuration(AttackTier tier) {
     switch (tier) {
-        case TIER_CLONE: return (uint16_t)attackConfig.cloneDuration;
+        case TIER_CLONE: return attackConfig.cloneDuration;
         case TIER_HIGH: return attackConfig.highTierDuration;
         case TIER_MEDIUM: return attackConfig.mediumTierDuration;
         case TIER_FAST: return attackConfig.fastTierDuration;
@@ -1680,7 +1680,7 @@ void checkCloneAttackOpportunities() {
                 portal.verifyPassword = selectedTemplate.verifyPassword;
                 portal.priority = 100;
                 portal.tier = TIER_CLONE;
-                portal.duration = (uint16_t)attackConfig.cloneDuration;
+                portal.duration = attackConfig.cloneDuration;
                 portal.isCloneAttack = true;
                 portal.probeCount = ssidPair.second;
                 enqueuePendingPortal(portal);

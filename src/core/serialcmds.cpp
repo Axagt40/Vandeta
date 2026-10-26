@@ -52,9 +52,17 @@ void handleSerialCommands(SerialCli &serialCli) {
     // the text CLI must not read it (that would split the framed stream).
     if (UsbDebug::pollSerial()) return;
 
-    if (!serialDevice->available()) return;
-
-    String cmd_str = serialDevice->readStringUntil('\n');
+    // Developer Options also replaces the blocking readStringUntil() with its
+    // line editor: commands run as soon as Enter arrives (no stream timeout) and
+    // Up/Down recall earlier commands. Without Developer Options the stock read
+    // path is untouched, so simple hosts behave exactly as before.
+    String cmd_str;
+    if (UsbDebug::enabled()) {
+        if (!UsbDebug::pollText(cmd_str)) return;
+    } else {
+        if (!serialDevice->available()) return;
+        cmd_str = serialDevice->readStringUntil('\n');
+    }
 
     // Debug layer: history (!, !!, !n) and the history ring. Inert unless the
     // Developer Options setting is on.
@@ -87,7 +95,11 @@ void _serialCmdsTaskLoop(void *pvParameters) {
     while (1) {
         handleSerialCommands(serialCli);
         UsbDebug::loop(); // batch queue drain + hot reload polling + error stream
-        vTaskDelay(pdMS_TO_TICKS(10));
+        // 1 ms instead of 10: this is the floor on console latency (every typed
+        // command, every binary frame and every streamed log line waited up to
+        // 10 ms here). The work per pass is bounded, so the shorter tick costs
+        // the rest of the firmware nothing measurable.
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
 

@@ -1,0 +1,25 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - Kaseikyo address 80 02 20 02
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: Cc
+type: parsed
+protocol: Kaseikyo
+address: 80 02 20 02
+command: D0 01 00 00
+#
+name: eHelp
+type: parsed
+protocol: Kaseikyo
+address: 80 02 20 02
+command: C0 02 00 00
+#
+name: Help
+type: parsed
+protocol: Kaseikyo
+address: 80 02 20 02
+command: C0 02 00 00
+#

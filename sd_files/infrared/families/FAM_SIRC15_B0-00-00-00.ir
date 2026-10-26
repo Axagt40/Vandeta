@@ -1,0 +1,49 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - SIRC15 address B0 00 00 00
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: Menu
+type: parsed
+protocol: SIRC15
+address: B0 00 00 00
+command: 77 00 00 00
+#
+name: 0Down
+type: parsed
+protocol: SIRC15
+address: B0 00 00 00
+command: 79 00 00 00
+#
+name: 0Input
+type: parsed
+protocol: SIRC15
+address: B0 00 00 00
+command: 69 00 00 00
+#
+name: 0Left
+type: parsed
+protocol: SIRC15
+address: B0 00 00 00
+command: 7A 00 00 00
+#
+name: 0Right
+type: parsed
+protocol: SIRC15
+address: B0 00 00 00
+command: 7B 00 00 00
+#
+name: 0Up
+type: parsed
+protocol: SIRC15
+address: B0 00 00 00
+command: 78 00 00 00
+#
+name: S.Field
+type: parsed
+protocol: SIRC15
+address: B0 00 00 00
+command: 6E 00 00 00
+#

@@ -6,6 +6,7 @@
 #include "modules/ir/custom_ir.h"
 #include "modules/ir/ir_jammer.h"
 #include "modules/ir/ir_read.h"
+#include "modules/ir/ir_suite.h"
 #include "modules/ir/ir_universal.h"
 
 void IRMenu::optionsMenu() {
@@ -16,6 +17,9 @@ void IRMenu::optionsMenu() {
     // Local vector: Custom IR / Universal Remote open their own menus, and a
     // child that rewrote the shared global `options` broke this parent's loop.
     std::vector<Option> localOptions = {
+        // The suite is embedded in the image (ir_suite_script.h), so this row
+        // works with no SD card; its libraries still come from /infrared.
+        {"IR Suite",  []() { runIrSuite(); }      },
         {"TV-B-Gone", StartTvBGone              },
         {"Universal Remote", irUniversalMenu     }, // TV / AC / Fans / Audio / Projectors / LEDs
         {"Custom IR", otherIRcodes              },

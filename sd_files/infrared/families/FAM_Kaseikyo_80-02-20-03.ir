@@ -1,0 +1,37 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - Kaseikyo address 80 02 20 03
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: Back
+type: parsed
+protocol: Kaseikyo
+address: 80 02 20 03
+command: 40 01 00 00
+#
+name: Exit
+type: parsed
+protocol: Kaseikyo
+address: 80 02 20 03
+command: 30 01 00 00
+#
+name: Back_return
+type: parsed
+protocol: Kaseikyo
+address: 80 02 20 03
+command: 40 01 00 00
+#
+name: Viera_tools
+type: parsed
+protocol: Kaseikyo
+address: 80 02 20 03
+command: F0 02 00 00
+#
+name: Vieratools
+type: parsed
+protocol: Kaseikyo
+address: 80 02 20 03
+command: F0 02 00 00
+#

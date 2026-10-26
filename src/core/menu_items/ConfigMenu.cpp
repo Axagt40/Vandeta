@@ -34,6 +34,13 @@ void ConfigMenu::optionsMenu() {
             {"Audio Config",  [this]() { audioMenu(); }    },
 #endif
             {"System Config", [this]() { systemMenu(); }   },
+#if !defined(LITE_VERSION)
+            // Top-level on purpose: HID Settings (keyboard layout + BadUSB
+            // identity) is a first-class setting, not something buried three
+            // menus down under System Config > Advanced. The separate entry in
+            // Others > BadUSB & HID is untouched.
+            {"HID Settings",  [this]() { setBadUSBBLEMenu(); }},
+#endif
             {"Power",         [this]() { powerMenu(); }    },
         };
 
@@ -205,7 +212,6 @@ void ConfigMenu::advancedMenu() {
             {"Set Device pins", [this]() { pinsMenu(); }           },
 #if !defined(LITE_VERSION)
             {"Toggle BLE API",  [this]() { enableBLEAPI(); }       },
-            {"HID Settings",    [this]() { setBadUSBBLEMenu(); }   },
 #endif
             {"BLE name",
              [this]() {
@@ -330,8 +336,8 @@ void ConfigMenu::usbDebugMenu() {
              [this]() { displayInfo(UsbDebug::liveUpdate("config")); }},
             {"Live Update: assets",
              [this]() { displayInfo(UsbDebug::liveUpdate("assets")); }},
-            {"Hot Reload: ON/OFF",
-             [this]() { UsbDebug::setHotReload(!UsbDebug::hotReload()); }},
+            // No hot-reload row: the watch list arms itself when developer mode
+            // comes on (applyDevMode) and every script `load()`s itself into it.
             {"Show Log Ring",
              [this]() {
                  UsbDebug::printErrors(false);

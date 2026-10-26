@@ -22,7 +22,16 @@
  *     directions (the classic two-way poison), so the target's traffic arrives
  *     at this board's MAC.
  *   - Because the frame arrives here, a layer-2 hook can read the target's DNS
- *     queries and HTTP requests and answer them from this board.
+ *     queries and answer them from this board.
+ *   - Plain HTTP is intercepted on ANY TCP port (not just 80/8080): the hook
+ *     completes the handshake and answers the request with a 302 or a page.
+ *   - HTTPS is served by a real TLS endpoint on NETSPOOF_HTTPS_PORT with a
+ *     SELF-SIGNED certificate. While HTTPS interception is active every DNS A
+ *     answer points at this board, so the victim's TLS connection reaches the
+ *     endpoint; the browser first shows a certificate warning, then (after
+ *     continuing, or immediately for a client that does not validate) receives
+ *     the same 302/page. A cached IP or a secure-DNS client bypasses this, and
+ *     a certificate warning cannot be avoided without a trusted CA.
  *   - There is NO forwarding: the ESP32 cannot NAT/route, so a spoofed target
  *     loses its real internet path for as long as the poison is active. This is
  *     an interception MITM, not a transparent one. netspoof_arp_stop()
@@ -37,8 +46,12 @@
 // Bounds
 // ---------------------------------------------------------------------------
 
-#define NETSPOOF_MAX_TARGETS 32      // hosts remembered by a discovery scan
-#define NETSPOOF_MAX_PAIRS 8         // simultaneous ARP spoof pairs
+// A /24 can hold 254 hosts, and "all devices" on a busy network is expected to
+// cover a couple of hundred of them. Both tables live in PSRAM (allocated on
+// first use, internal heap only as a fallback), so the size costs nothing in the
+// internal DRAM the radios need.
+#define NETSPOOF_MAX_TARGETS 256     // hosts remembered by a discovery scan
+#define NETSPOOF_MAX_PAIRS 200       // simultaneous ARP spoof pairs
 #define NETSPOOF_MAX_RULES 8         // DNS rules and HTTP rules each
 #define NETSPOOF_MAX_CAPTURES 8      // ring buffer served by getInterceptedData()
 #define NETSPOOF_CAPTURE_PAYLOAD 320 // bytes of the request kept per capture
@@ -47,6 +60,12 @@
 #define NETSPOOF_FRAME_MAX 1514      // ethernet frame ceiling
 #define NETSPOOF_POISON_INTERVAL_MS 250 // ARP re-poison period
 #define NETSPOOF_SVC_TICK_MS 10      // service task tick
+#define NETSPOOF_HTTPS_PORT 443      // self-signed TLS endpoint
+
+// Capture rings (NetSpoofCapture.kind).
+#define NETSPOOF_CAPTURE_DNS 0
+#define NETSPOOF_CAPTURE_HTTP 1
+#define NETSPOOF_CAPTURE_HTTPS 2
 
 // ---------------------------------------------------------------------------
 // Public data shapes
@@ -73,7 +92,7 @@ struct NetSpoofRule {
 /// One captured (and possibly modified) request.
 struct NetSpoofCapture {
     uint32_t ts;      // millis() when it was seen
-    uint8_t kind;     // 0 = DNS query, 1 = HTTP request
+    uint8_t kind;     // NETSPOOF_CAPTURE_DNS / _HTTP / _HTTPS
     uint8_t action;   // 0 = observed only, 1 = answered/redirected, 2 = injected
     IPAddress clientIp;
     char clientMac[18];
@@ -191,15 +210,83 @@ const NetSpoofRule *netspoof_dns_rule(int idx);
 bool netspoof_dns_lookup(const String &name, IPAddress &ip);
 
 // ---------------------------------------------------------------------------
+// Transparent forwarding (the layer-2 bridge)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Bridge poisoned clients to the real gateway so they keep internet.
+ *
+ * The ARP poison makes every victim frame arrive at this board, and the ESP has
+ * no routing/NAT: without a bridge the victim loses its path and can never load
+ * a page it was redirected to. Forwarding re-sends those frames to the real
+ * gateway (and the replies to the victim) with the MACs rewritten, leaving the
+ * IP packet untouched.
+ *
+ * With the bridge up, the engine intercepts what it can rewrite (DNS answers,
+ * plaintext HTTP on any port, TLS addressed to the board after DNS pinning) and
+ * bridges the rest - which is what lets a redirect to a real video work.
+ *
+ * @param err filled with the reason when false is returned
+ * @return true when the bridge is armed (station up and gateway known)
+ */
+bool netspoof_forward_start(String &err);
+void netspoof_forward_stop();
+bool netspoof_forward_active();
+uint32_t netspoof_forward_frames();
+uint32_t netspoof_forward_dropped();
+
+/**
+ * @brief Keep @p host (and its subdomains) resolving for real.
+ *
+ * Everything else is pinned to the board while the HTTPS endpoint runs so it
+ * is intercepted. The host of every redirect rule is added automatically -
+ * otherwise following the redirect would resolve back to this board and loop.
+ * Up to NETSPOOF_DNS_PASS_MAX hosts are remembered; the newest wins.
+ */
+void netspoof_dns_add_passthrough(const String &host);
+void netspoof_dns_clear_passthrough();
+
+// ---------------------------------------------------------------------------
 // HTTP interception (needs an active ARP pair to see the requests)
 // ---------------------------------------------------------------------------
 
+/**
+ * @brief Start plaintext HTTP interception on every TCP port.
+ *
+ * Also brings up the HTTPS endpoint (netspoof_https_start()) so a redirect
+ * rule covers https:// as well. If the TLS server cannot start (usually RAM),
+ * the plaintext path still runs and the reason is logged.
+ */
 bool netspoof_http_start(String &err);
 bool netspoof_http_stop(String &err);
 bool netspoof_http_active();
 uint32_t netspoof_http_requests();
 uint32_t netspoof_http_redirected();
 uint32_t netspoof_http_injected();
+
+// ---------------------------------------------------------------------------
+// HTTPS interception (self-signed TLS endpoint, same rules as HTTP)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Start the self-signed HTTPS endpoint and point DNS at this board.
+ *
+ * The endpoint listens on NETSPOOF_HTTPS_PORT and applies the same redirect /
+ * injection rules as the plaintext interceptor. It needs the station to be
+ * associated. While it is active every DNS A query is answered with the
+ * board's own address (so the victim's TLS connection lands here); the normal
+ * DNS rules are bypassed for A records until it stops.
+ *
+ * A TLS client only accepts a certificate it trusts, so the first visit shows
+ * the browser's certificate warning. That is a protocol limit, not a bug.
+ */
+bool netspoof_https_start(String &err);
+bool netspoof_https_stop(String &err);
+bool netspoof_https_active();
+uint32_t netspoof_https_requests();
+uint32_t netspoof_https_redirected();
+uint32_t netspoof_https_injected();
+uint16_t netspoof_https_port();
 
 bool netspoof_http_add_redirect(const String &pattern, const String &url, bool wildcard, String &err);
 bool netspoof_http_add_injection(const String &pattern, const String &html, bool wildcard, String &err);
@@ -218,8 +305,14 @@ const NetSpoofRule *netspoof_http_inject_rule(int idx);
 // ---------------------------------------------------------------------------
 
 int netspoof_capture_count();
+/// Monotonic count of captures since boot. capture_count() saturates at the
+/// ring size, so a poller that remembers this can tell new entries apart even
+/// when several captures share one millisecond.
+uint32_t netspoof_capture_total();
 /// @param idx 0 = newest capture
 const NetSpoofCapture *netspoof_capture(int idx);
+/// Short name for a capture kind: "dns", "http" or "https".
+const char *netspoof_capture_kind_name(uint8_t kind);
 void netspoof_capture_clear();
 
 // ---------------------------------------------------------------------------

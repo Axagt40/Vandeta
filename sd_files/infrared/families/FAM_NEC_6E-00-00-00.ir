@@ -1,0 +1,37 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - NEC address 6E 00 00 00
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: Up
+type: parsed
+protocol: NEC
+address: 6E 00 00 00
+command: 07 00 00 00
+#
+name: Down
+type: parsed
+protocol: NEC
+address: 6E 00 00 00
+command: 0D 00 00 00
+#
+name: Left
+type: parsed
+protocol: NEC
+address: 6E 00 00 00
+command: 09 00 00 00
+#
+name: Right
+type: parsed
+protocol: NEC
+address: 6E 00 00 00
+command: 0B 00 00 00
+#
+name: Ok
+type: parsed
+protocol: NEC
+address: 6E 00 00 00
+command: 0A 00 00 00
+#

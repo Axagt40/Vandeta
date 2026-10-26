@@ -408,6 +408,215 @@ int irUniversalSend(
     return sent;
 }
 
+// ---------------------------------------------------------------------------
+// Single candidates, for the Vandeta IR Suite script
+// ---------------------------------------------------------------------------
+// irUniversalSend() above answers "sweep this button". A bruter needs the codes
+// one at a time: send #N, remember what #N was, replay the last few. These
+// three helpers expose exactly that without duplicating the record parser.
+
+// Random access used to be the slow part of a brute force: every call re-read
+// the library from the first record, so code 300 cost a full pass (measured
+// ~1.2 s on the 99 KB tv.ir) while code 20 cost almost nothing - a sweep got
+// slower the further it walked, which made it feel far slower than the on-device
+// universal remote, whose sweep reads the file once front to back.
+//
+// Now the library is read into RAM **once** (PSRAM when the board has it), the
+// record start offsets are taken from that copy, and every candidate is parsed
+// out of RAM. Measured on the board this took the first send from 1,680 ms to
+// ~130 ms (the indexing pass no longer walks the card byte by byte) and removed
+// the ~700 ms stalls that showed up mid-sweep when the FAT driver hiccuped: a
+// sweep now touches the card zero times after the first code.
+//
+// tv.ir is 99 KB and offsets are 4 bytes per candidate, so the whole index for
+// the 295 Power codes costs ~100 KB of PSRAM, of which the board has 7.8 MB.
+struct ButtonIndex {
+    String path;
+    String button;
+    size_t fileSize = 0;
+    uint8_t *blob = nullptr;      // the library as read, NUL terminated
+    size_t blobLen = 0;
+    std::vector<uint32_t> offset; // record start offsets inside blob
+};
+
+static ButtonIndex s_buttonIndex;
+
+static void freeIndex() {
+    if (s_buttonIndex.blob != nullptr) {
+        free(s_buttonIndex.blob);
+        s_buttonIndex.blob = nullptr;
+    }
+    s_buttonIndex.blobLen = 0;
+    s_buttonIndex.offset.clear();
+    s_buttonIndex.path = "";
+    s_buttonIndex.button = "";
+    s_buttonIndex.fileSize = 0;
+}
+
+// One line out of the RAM copy, trimmed, NUL-free. Same rules the file reader
+// uses, so a record parses identically either way.
+static bool memLine(const uint8_t *b, size_t len, size_t &pos, String &out) {
+    if (pos >= len) return false;
+    size_t start = pos;
+    while (pos < len && b[pos] != '\n') pos++;
+    out = String((const char *)(b + start), (unsigned)(pos - start));
+    if (pos < len) pos++;
+    out.trim();
+    return true;
+}
+
+// readRecord() over the RAM copy.
+static bool readRecordMem(const uint8_t *b, size_t len, size_t &pos, Signal &s) {
+    s.reset();
+    String line;
+    bool have = false;
+    while (memLine(b, len, pos, line)) {
+        if (line.startsWith("name:")) {
+            s.name = line.substring(5);
+            s.name.trim();
+            have = true;
+            break;
+        }
+    }
+    if (!have || s.name.length() == 0) return false;
+
+    while (memLine(b, len, pos, line)) {
+        if (line.length() == 0) continue;
+        if (line.startsWith("#")) break;
+        if (line.startsWith("type:")) {
+            s.type = line.substring(5);
+            s.type.trim();
+        } else if (line.startsWith("protocol:")) {
+            s.protocol = line.substring(9);
+            s.protocol.trim();
+        } else if (line.startsWith("address:")) {
+            s.address = line.substring(8);
+            s.address.trim();
+        } else if (line.startsWith("command:")) {
+            s.command = line.substring(8);
+            s.command.trim();
+        } else if (line.startsWith("bits:")) {
+            s.bits = line.substring(5).toInt();
+            if (s.bits == 0) s.bits = 32;
+        } else if (line.startsWith("frequency:")) {
+            s.frequency = line.substring(10).toInt();
+        } else if (line.startsWith("data:")) {
+            s.data = line.substring(5);
+            s.data.trim();
+        }
+    }
+    return true;
+}
+
+// Load the library into RAM and index every usable record named `button`.
+static bool indexButton(FS *fs, const String &path, const String &button) {
+    freeIndex();
+    if (fs == nullptr) return false;
+
+    s_buttonIndex.path = path;
+    s_buttonIndex.button = button;
+
+    File f = (*fs).open(path, FILE_READ);
+    if (!f) return false;
+    size_t size = f.size();
+
+    uint8_t *buf = (uint8_t *)(psramFound() ? ps_malloc(size + 1) : malloc(size + 1));
+    if (buf == nullptr) {
+        f.close();
+        return false;
+    }
+    size_t got = f.read(buf, size);
+    f.close();
+    buf[got] = 0;
+
+    s_buttonIndex.blob = buf;
+    s_buttonIndex.blobLen = got;
+    s_buttonIndex.fileSize = got;
+
+    size_t pos = 0;
+    Signal s;
+    while (pos < s_buttonIndex.blobLen) {
+        size_t start = pos;
+        if (!readRecordMem(s_buttonIndex.blob, s_buttonIndex.blobLen, pos, s)) break;
+        if (s.usable() && s.name == button) s_buttonIndex.offset.push_back((uint32_t)start);
+    }
+    return !s_buttonIndex.offset.empty();
+}
+
+// True when the RAM copy already covers this library+button.
+static bool buttonIndexReady(const String &path, const String &button) {
+    return s_buttonIndex.blob != nullptr && s_buttonIndex.path == path && s_buttonIndex.button == button;
+}
+
+static void copyRecord(const Signal &s, uint16_t index, IrUniversalCode &out) {
+    out.name = s.name;
+    out.type = s.type;
+    out.protocol = s.protocol;
+    out.address = s.address;
+    out.command = s.command;
+    out.data = s.data;
+    out.bits = s.bits;
+    out.frequency = s.frequency;
+    out.index = index;
+}
+
+// One record, parsed out of the RAM copy. No card access at all once indexed.
+static bool readCandidate(FS *fs, const String &path, const String &button, int index, Signal &s) {
+    if (fs == nullptr || index < 0) return false;
+    if (!buttonIndexReady(path, button) && !indexButton(fs, path, button)) return false;
+    if (index >= (int)s_buttonIndex.offset.size()) return false;
+
+    size_t pos = s_buttonIndex.offset[index];
+    return readRecordMem(s_buttonIndex.blob, s_buttonIndex.blobLen, pos, s) && s.usable() &&
+           s.name == button;
+}
+
+bool irUniversalCodeAt(FS *fs, const String &path, const String &button, int index, IrUniversalCode &out) {
+    Signal s;
+    if (!readCandidate(fs, path, button, index, s)) return false;
+    copyRecord(s, (uint16_t)index, out);
+    return true;
+}
+
+bool irUniversalSendAt(FS *fs, const String &path, const String &button, int index) {
+    Signal s;
+    if (!readCandidate(fs, path, button, index, s)) return false;
+
+    setup_ir_pin(bruceConfigPins.irTx, OUTPUT);
+    init_ir_tx_mutex();
+    previousMillis = millis(); // do not dim mid-sweep
+    bool sent = transmit(s);
+    previousMillis = millis();
+    return sent;
+}
+
+std::vector<IrUniversalCode> irUniversalFamily(
+    FS *fs, const String &path, const String &protocol, const String &address, int max
+) {
+    std::vector<IrUniversalCode> out;
+    if (fs == nullptr || protocol.length() == 0) return out;
+    File f = (*fs).open(path, FILE_READ);
+    if (!f) return out;
+
+    String scratch;
+    Signal s;
+    uint16_t seen = 0;
+    while (readRecord(f, scratch, s)) {
+        if (!s.usable()) continue;
+        seen++;
+        if (!s.protocol.equalsIgnoreCase(protocol)) continue;
+        // The library writes the address as four space separated LE bytes. Compare
+        // it the way it is stored, trimmed and case-insensitively.
+        if (!s.address.equalsIgnoreCase(address)) continue;
+        IrUniversalCode c;
+        copyRecord(s, seen, c);
+        out.push_back(c);
+        if (max > 0 && (int)out.size() >= max) break;
+    }
+    f.close();
+    return out;
+}
+
 // The button list of one library file (the classic universal-remote sweep).
 static void irUniversalLibraryMenu(FS *fs, const IrUniversalCategory &c) {
     // One blockwise pass: names *and* their candidate counts, so the sweep can

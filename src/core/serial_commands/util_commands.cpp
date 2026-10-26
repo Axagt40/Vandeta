@@ -1,4 +1,5 @@
 #include "util_commands.h"
+#include "core/configPins.h" // getMacAddress()
 #include "core/display.h" // activeMenuOptions()
 #include "core/main_menu.h"
 #include "core/sd_functions.h"
@@ -119,7 +120,9 @@ uint32_t infoCallback(cmd *c) {
     serialDevice->println(GIT_COMMIT_HASH);
     serialDevice->print("SDK: ");
     serialDevice->println(ESP.getSdkVersion());
-    serialDevice->println("MAC addr: " + String(WiFi.macAddress()));
+    // The factory MAC is readable with the radio off; WiFi.macAddress() is all
+    // zeros then, which is exactly when a support log needs the real address.
+    serialDevice->println("MAC addr: " + getMacAddress());
     // https://github.com/espressif/arduino-esp32/blob/master/libraries/ESP32/examples/ChipID/GetChipID/GetChipID.ino
     // serialDevice->printf("Chip is %s (revision v%d)\n", ESP.getChipModel(), ESP.getChipRevision());
     // serialDevice->printf("Detected flash size: %d\n", ESP.getFlashChipSize());

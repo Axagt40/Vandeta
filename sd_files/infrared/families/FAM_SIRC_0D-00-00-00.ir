@@ -1,0 +1,31 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - SIRC address 0D 00 00 00
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: Ok
+type: parsed
+protocol: SIRC
+address: 0D 00 00 00
+command: 0C 00 00 00
+#
+name: Ch_next
+type: parsed
+protocol: SIRC
+address: 0D 00 00 00
+command: 10 00 00 00
+#
+name: Ch_prev
+type: parsed
+protocol: SIRC
+address: 0D 00 00 00
+command: 11 00 00 00
+#
+name: Recall
+type: parsed
+protocol: SIRC
+address: 0D 00 00 00
+command: 33 00 00 00
+#

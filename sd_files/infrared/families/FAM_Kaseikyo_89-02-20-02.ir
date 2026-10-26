@@ -1,0 +1,79 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - Kaseikyo address 89 02 20 02
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: Home
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 02
+command: 50 01 00 00
+#
+name: Exit
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 02
+command: A0 01 00 00
+#
+name: Guide
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 02
+command: 70 00 00 00
+#
+name: 3d
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 02
+command: 70 03 00 00
+#
+name: Apps
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 02
+command: F0 00 00 00
+#
+name: Favorite
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 02
+command: E0 02 00 00
+#
+name: Internet
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 02
+command: 30 01 00 00
+#
+name: Option
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 02
+command: 70 02 00 00
+#
+name: Sd/usb
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 02
+command: B0 02 00 00
+#
+name: Sd_card
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 02
+command: B0 02 00 00
+#
+name: Submenu
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 02
+command: 70 02 00 00
+#
+name: Viera_link
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 02
+command: 10 03 00 00
+#

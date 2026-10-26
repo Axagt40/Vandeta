@@ -9,6 +9,13 @@
 #define CC1101_GDO2_PIN -1
 #endif
 
+/// Factory station MAC, readable while the radio is off.
+///
+/// `WiFi.macAddress()` returns 00:00:00:00:00:00 until the driver is up, which
+/// made `info` and the system screen print an all-zero address whenever Wi-Fi
+/// was down - the one moment a MAC is most useful for identifying the board.
+String getMacAddress();
+
 enum RFIDModules {
     M5_RFID2_MODULE = 0,
     PN532_I2C_MODULE = 1,

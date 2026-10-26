@@ -1,0 +1,61 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - RC5 address 05 00 00 00
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: Play
+type: parsed
+protocol: RC5
+address: 05 00 00 00
+command: 35 00 00 00
+#
+name: Stop
+type: parsed
+protocol: RC5
+address: 05 00 00 00
+command: 36 00 00 00
+#
+name: Rewind
+type: parsed
+protocol: RC5
+address: 05 00 00 00
+command: 25 00 00 00
+#
+name: Rec
+type: parsed
+protocol: RC5
+address: 05 00 00 00
+command: 37 00 00 00
+#
+name: Clear
+type: parsed
+protocol: RC5
+address: 05 00 00 00
+command: 31 00 00 00
+#
+name: Forward
+type: parsed
+protocol: RC5
+address: 05 00 00 00
+command: 26 00 00 00
+#
+name: Spread
+type: parsed
+protocol: RC5
+address: 05 00 00 00
+command: 29 00 00 00
+#
+name: Still
+type: parsed
+protocol: RC5
+address: 05 00 00 00
+command: 29 00 00 00
+#
+name: Timer
+type: parsed
+protocol: RC5
+address: 05 00 00 00
+command: 1D 00 00 00
+#

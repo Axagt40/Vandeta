@@ -794,3 +794,78 @@ bool chooseCmdIrFile(FS *fs, const String &filepath) {
     // false = go back to file browser (short Esc press)
     return goToMainMenu;
 }
+
+// One button from a file, for the Vandeta IR Suite script.
+//
+// chooseCmdIrFile() above builds the whole menu in RAM (100 IRCode objects) so
+// the user can browse; a payload runner instead asks for one name at a time and
+// must not hold the file. The record boundaries are the same rules the Flipper
+// format uses: a record starts at `name:` and ends at the next `name:`, a `#`
+// line, or EOF.
+bool sendIrFileButton(FS *fs, const String &filepath, const String &button, bool hideDefaultUI) {
+    if (fs == nullptr || button.length() == 0) return false;
+    File f = fs->open(filepath, FILE_READ);
+    if (!f) return false;
+
+    setup_ir_pin(bruceConfigPins.irTx, OUTPUT);
+
+    IRCode cur;
+    bool have = false;
+    bool sent = false;
+
+    auto flush = [&]() -> bool {
+        bool match = false;
+        if (have && cur.name.equalsIgnoreCase(button)) {
+            match = (cur.type.equalsIgnoreCase("raw"))
+                        ? (cur.data.length() > 0 && cur.frequency > 0)
+                        : (cur.protocol.length() > 0);
+        }
+        have = false;
+        if (!match) return false;
+        sendIRCommand(&cur, hideDefaultUI);
+        digitalWrite(bruceConfigPins.irTx, LED_OFF);
+        return true;
+    };
+
+    String line, txt;
+    while (f.available()) {
+        line = f.readStringUntil('\n');
+        if (line.endsWith("\r")) line.remove(line.length() - 1);
+        line.trim();
+        if (line.length() == 0) continue;
+
+        if (line.startsWith("name:")) {
+            if (flush()) {
+                sent = true;
+                break;
+            }
+            cur = IRCode();
+            have = true;
+            cur.name = line.substring(5);
+            cur.name.trim();
+            continue;
+        }
+        if (!have) continue; // Filetype:/Version:/comment header
+
+        txt = line.substring(line.indexOf(':') + 1);
+        txt.trim();
+        if (line.startsWith("type:")) cur.type = txt;
+        else if (line.startsWith("protocol:")) cur.protocol = txt;
+        else if (line.startsWith("address:")) cur.address = txt;
+        else if (line.startsWith("command:")) cur.command = txt;
+        else if (line.startsWith("frequency:")) cur.frequency = txt.toInt();
+        else if (line.startsWith("bits:")) cur.bits = txt.toInt() > 0 ? txt.toInt() : 32;
+        else if (line.startsWith("data:") || line.startsWith("value:") || line.startsWith("state:"))
+            cur.data = txt;
+        else if (line.startsWith("#")) {
+            if (flush()) {
+                sent = true;
+                break;
+            }
+        }
+    }
+    if (!sent) sent = flush();
+    f.close();
+    digitalWrite(bruceConfigPins.irTx, LED_OFF);
+    return sent;
+}

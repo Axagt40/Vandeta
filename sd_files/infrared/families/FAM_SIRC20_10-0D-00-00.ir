@@ -1,0 +1,19 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - SIRC20 address 10 0D 00 00
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: 0Demo Mode
+type: parsed
+protocol: SIRC20
+address: 10 0D 00 00
+command: 7E 00 00 00
+#
+name: 0Pic Reset
+type: parsed
+protocol: SIRC20
+address: 10 0D 00 00
+command: 7F 00 00 00
+#

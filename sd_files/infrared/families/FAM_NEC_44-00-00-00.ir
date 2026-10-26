@@ -1,0 +1,121 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - NEC address 44 00 00 00
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: Up
+type: parsed
+protocol: NEC
+address: 44 00 00 00
+command: 80 00 00 00
+#
+name: Down
+type: parsed
+protocol: NEC
+address: 44 00 00 00
+command: 81 00 00 00
+#
+name: Left
+type: parsed
+protocol: NEC
+address: 44 00 00 00
+command: 51 00 00 00
+#
+name: Right
+type: parsed
+protocol: NEC
+address: 44 00 00 00
+command: 4D 00 00 00
+#
+name: Ok
+type: parsed
+protocol: NEC
+address: 44 00 00 00
+command: 4E 00 00 00
+#
+name: Back
+type: parsed
+protocol: NEC
+address: 44 00 00 00
+command: 5D 00 00 00
+#
+name: Play
+type: parsed
+protocol: NEC
+address: 44 00 00 00
+command: 15 00 00 00
+#
+name: Pause
+type: parsed
+protocol: NEC
+address: 44 00 00 00
+command: 10 00 00 00
+#
+name: Stop
+type: parsed
+protocol: NEC
+address: 44 00 00 00
+command: 14 00 00 00
+#
+name: Subtitle
+type: parsed
+protocol: NEC
+address: 44 00 00 00
+command: 87 00 00 00
+#
+name: Angle
+type: parsed
+protocol: NEC
+address: 44 00 00 00
+command: 96 00 00 00
+#
+name: Audio_select
+type: parsed
+protocol: NEC
+address: 44 00 00 00
+command: 53 00 00 00
+#
+name: Exit_cancel
+type: parsed
+protocol: NEC
+address: 44 00 00 00
+command: EF 00 00 00
+#
+name: Ff
+type: parsed
+protocol: NEC
+address: 44 00 00 00
+command: 13 00 00 00
+#
+name: Jump
+type: parsed
+protocol: NEC
+address: 44 00 00 00
+command: 9B 00 00 00
+#
+name: Repeat_a_b
+type: parsed
+protocol: NEC
+address: 44 00 00 00
+command: 5C 00 00 00
+#
+name: Rev
+type: parsed
+protocol: NEC
+address: 44 00 00 00
+command: 19 00 00 00
+#
+name: Slow_fwd
+type: parsed
+protocol: NEC
+address: 44 00 00 00
+command: 0D 00 00 00
+#
+name: Top_menu
+type: parsed
+protocol: NEC
+address: 44 00 00 00
+command: DF 00 00 00
+#

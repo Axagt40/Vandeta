@@ -144,6 +144,7 @@ JSValue native_arpSpoofGetStatus(JSContext *ctx, JSValue *this_val, int argc, JS
     JS_SetPropertyStr(ctx, *obj, "hookInstalled", JS_NewBool(netspoof_hook_installed()));
     JS_SetPropertyStr(ctx, *obj, "targets", JS_NewInt32(ctx, netspoof_target_count()));
     JS_SetPropertyStr(ctx, *obj, "dnsRules", JS_NewInt32(ctx, netspoof_dns_rule_count()));
+    JS_SetPropertyStr(ctx, *obj, "httpsActive", JS_NewBool(netspoof_https_active()));
     JS_SetPropertyStr(
         ctx,
         *obj,
@@ -436,11 +437,12 @@ JSValue native_dnsSpoofClearRules(JSContext *ctx, JSValue *this_val, int argc, J
 
 JSValue native_httpInterceptorStart(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
     // usage: httpInterceptor.start()
-    //   Turns plain-HTTP interception on. Needs an ARP pair (arpSpoof.start)
-    //   for the requests to arrive here. Matching requests are answered with
-    //   the configured redirect/injection and every request is recorded for
-    //   getInterceptedData().
-    // returns: { ok, active, redirects, injections, error? }
+    //   Turns web interception on: plain HTTP on every TCP port, plus the
+    //   self-signed HTTPS endpoint (see https/httpsError). Needs an ARP pair
+    //   (arpSpoof.start) for the requests to arrive here. Matching requests are
+    //   answered with the configured redirect/injection and every request is
+    //   recorded for getInterceptedData().
+    // returns: { ok, active, https, redirects, injections, error?, httpsError? }
     JSGCRef obj_ref;
     JSValue *obj = ns_new_object(ctx, &obj_ref);
     if (JS_IsException(*obj)) {
@@ -450,17 +452,23 @@ JSValue native_httpInterceptorStart(JSContext *ctx, JSValue *this_val, int argc,
 
     String err;
     bool ok = netspoof_http_start(err);
+    String httpsErr;
+    bool httpsOk = netspoof_https_active();
+    if (!httpsOk) httpsErr = "the HTTPS endpoint did not start (plain HTTP still works)";
     JS_SetPropertyStr(ctx, *obj, "ok", JS_NewBool(ok));
     JS_SetPropertyStr(ctx, *obj, "active", JS_NewBool(netspoof_http_active()));
+    JS_SetPropertyStr(ctx, *obj, "https", JS_NewBool(httpsOk));
     JS_SetPropertyStr(ctx, *obj, "redirects", JS_NewInt32(ctx, netspoof_http_redirect_count()));
     JS_SetPropertyStr(ctx, *obj, "injections", JS_NewInt32(ctx, netspoof_http_inject_count()));
     if (!ok) JS_SetPropertyStr(ctx, *obj, "error", JS_NewString(ctx, err.c_str()));
+    if (!httpsOk) JS_SetPropertyStr(ctx, *obj, "httpsError", JS_NewString(ctx, httpsErr.c_str()));
     return JS_PopGCRef(ctx, &obj_ref);
 }
 
 JSValue native_httpInterceptorStop(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
     // usage: httpInterceptor.stop()
-    // returns: { ok, wasActive, active, requests, redirected, injected }
+    // returns: { ok, wasActive, active, httpsWasActive, httpsRequests,
+    //            httpsRedirected, httpsInjected, requests, redirected, injected }
     JSGCRef obj_ref;
     JSValue *obj = ns_new_object(ctx, &obj_ref);
     if (JS_IsException(*obj)) {
@@ -469,11 +477,16 @@ JSValue native_httpInterceptorStop(JSContext *ctx, JSValue *this_val, int argc, 
     }
 
     bool wasActive = netspoof_http_active();
+    bool httpsWasActive = netspoof_https_active();
     String err;
     netspoof_http_stop(err);
     JS_SetPropertyStr(ctx, *obj, "ok", JS_NewBool(true));
     JS_SetPropertyStr(ctx, *obj, "wasActive", JS_NewBool(wasActive));
     JS_SetPropertyStr(ctx, *obj, "active", JS_NewBool(netspoof_http_active()));
+    JS_SetPropertyStr(ctx, *obj, "httpsWasActive", JS_NewBool(httpsWasActive));
+    JS_SetPropertyStr(ctx, *obj, "httpsRequests", JS_NewInt32(ctx, (int)netspoof_https_requests()));
+    JS_SetPropertyStr(ctx, *obj, "httpsRedirected", JS_NewInt32(ctx, (int)netspoof_https_redirected()));
+    JS_SetPropertyStr(ctx, *obj, "httpsInjected", JS_NewInt32(ctx, (int)netspoof_https_injected()));
     JS_SetPropertyStr(ctx, *obj, "requests", JS_NewInt32(ctx, (int)netspoof_http_requests()));
     JS_SetPropertyStr(ctx, *obj, "redirected", JS_NewInt32(ctx, (int)netspoof_http_redirected()));
     JS_SetPropertyStr(ctx, *obj, "injected", JS_NewInt32(ctx, (int)netspoof_http_injected()));
@@ -525,7 +538,9 @@ static JSValue ns_http_add_rule(
 JSValue native_httpInterceptorAddRedirect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
     // usage: httpInterceptor.addRedirect(pattern: string, redirectURL: string)
     //   `pattern` is matched (case-insensitively) against the host and against
-    //   the full URL; "*" matches everything. The reply is a 302 to redirectURL.
+    //   the full URL; "*" matches everything. The reply is a 302 to redirectURL,
+    //   for plain HTTP on any port and for HTTPS (through the self-signed
+    //   endpoint, so a browser shows its certificate warning first).
     // returns: { ok, pattern, redirectURL, redirects, wildcard, error? }
     return ns_http_add_rule(
         ctx, argc, argv, true, "httpInterceptor.addRedirect(pattern:string, redirectURL:string)"
@@ -567,9 +582,10 @@ JSValue native_httpInterceptorGetInterceptedData(
     JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
 ) {
     // usage: httpInterceptor.getInterceptedData(clear?: boolean)
-    //   Everything the interceptor saw, newest first. "kind" is "dns" or
-    //   "http"; "action" is "observed", "redirected" or "injected".
+    //   Everything the interceptor saw, newest first. "kind" is "dns", "http"
+    //   or "https"; "action" is "observed", "redirected" or "injected".
     // returns: { ok, count, requests, dnsQueries, redirected, injected,
+    //            httpsRequests, httpsRedirected, httpsInjected,
     //            data: [{ time, kind, action, clientIP, clientMAC, method,
     //                     host, path, data }] }
     bool clear = (argc > 0 && !JS_IsUndefined(argv[0])) ? JS_ToBool(ctx, argv[0]) : false;
@@ -587,6 +603,9 @@ JSValue native_httpInterceptorGetInterceptedData(
     JS_SetPropertyStr(ctx, *obj, "dnsQueries", JS_NewInt32(ctx, (int)netspoof_dns_queries()));
     JS_SetPropertyStr(ctx, *obj, "redirected", JS_NewInt32(ctx, (int)netspoof_http_redirected()));
     JS_SetPropertyStr(ctx, *obj, "injected", JS_NewInt32(ctx, (int)netspoof_http_injected()));
+    JS_SetPropertyStr(ctx, *obj, "httpsRequests", JS_NewInt32(ctx, (int)netspoof_https_requests()));
+    JS_SetPropertyStr(ctx, *obj, "httpsRedirected", JS_NewInt32(ctx, (int)netspoof_https_redirected()));
+    JS_SetPropertyStr(ctx, *obj, "httpsInjected", JS_NewInt32(ctx, (int)netspoof_https_injected()));
 
     JSGCRef arr_ref;
     JSValue *arr = JS_PushGCRef(ctx, &arr_ref);
@@ -596,7 +615,6 @@ JSValue native_httpInterceptorGetInterceptedData(
         return JS_PopGCRef(ctx, &obj_ref);
     }
 
-    static const char *kKindNames[] = {"dns", "http"};
     static const char *kActionNames[] = {"observed", "redirected", "injected"};
 
     for (int i = 0; i < count; i++) {
@@ -611,7 +629,7 @@ JSValue native_httpInterceptorGetInterceptedData(
             break;
         }
         JS_SetPropertyStr(ctx, *entry, "time", JS_NewInt32(ctx, (int)c->ts));
-        JS_SetPropertyStr(ctx, *entry, "kind", JS_NewString(ctx, kKindNames[c->kind > 1 ? 0 : c->kind]));
+        JS_SetPropertyStr(ctx, *entry, "kind", JS_NewString(ctx, netspoof_capture_kind_name(c->kind)));
         JS_SetPropertyStr(
             ctx, *entry, "action", JS_NewString(ctx, kActionNames[c->action > 2 ? 0 : c->action])
         );

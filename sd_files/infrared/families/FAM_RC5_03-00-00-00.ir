@@ -1,0 +1,37 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - RC5 address 03 00 00 00
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: AmbilightMode
+type: parsed
+protocol: RC5
+address: 03 00 00 00
+command: 24 00 00 00
+#
+name: AmbilOnOff
+type: parsed
+protocol: RC5
+address: 03 00 00 00
+command: 23 00 00 00
+#
+name: EPG
+type: parsed
+protocol: RC5
+address: 03 00 00 00
+command: 2C 00 00 00
+#
+name: Picture
+type: parsed
+protocol: RC5
+address: 03 00 00 00
+command: 0A 00 00 00
+#
+name: Sound
+type: parsed
+protocol: RC5
+address: 03 00 00 00
+command: 0B 00 00 00
+#

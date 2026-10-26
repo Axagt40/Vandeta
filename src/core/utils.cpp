@@ -1,4 +1,5 @@
 #include "utils.h"
+#include "core/configPins.h"     // getMacAddress()
 #include "core/wifi/wifi_common.h" //to return MAC addr
 #include "scrollableTextArea.h"
 #include <esp_heap_caps.h>
@@ -172,7 +173,8 @@ void showDeviceInfo() {
     }
     area.addLine("");
     area.addLine("[NETWORK]");
-    area.addLine("MAC addr: " + String(WiFi.macAddress()));
+    // Works with the radio off (WiFi.macAddress() reports zeros until then).
+    area.addLine("MAC addr: " + getMacAddress());
     String localIP = WiFi.localIP().toString();
     String softAPIP = WiFi.softAPIP().toString();
     String ipStatus = (WiFi.isConnected()) ? (localIP != "0.0.0.0"    ? localIP

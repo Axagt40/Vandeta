@@ -1,0 +1,55 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - SIRC15 address 77 00 00 00
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: Analog/digi
+type: parsed
+protocol: SIRC15
+address: 77 00 00 00
+command: 0D 00 00 00
+#
+name: Dig_analo
+type: parsed
+protocol: SIRC15
+address: 77 00 00 00
+command: 0D 00 00 00
+#
+name: Digital/analog
+type: parsed
+protocol: SIRC15
+address: 77 00 00 00
+command: 0D 00 00 00
+#
+name: Digitalanalog
+type: parsed
+protocol: SIRC15
+address: 77 00 00 00
+command: 0D 00 00 00
+#
+name: Favorites
+type: parsed
+protocol: SIRC15
+address: 77 00 00 00
+command: 76 00 00 00
+#
+name: Heart
+type: parsed
+protocol: SIRC15
+address: 77 00 00 00
+command: 76 00 00 00
+#
+name: Theater
+type: parsed
+protocol: SIRC15
+address: 77 00 00 00
+command: 60 00 00 00
+#
+name: Theatre
+type: parsed
+protocol: SIRC15
+address: 77 00 00 00
+command: 60 00 00 00
+#

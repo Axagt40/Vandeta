@@ -213,43 +213,28 @@ String getScriptsFolder(FS *&fs) {
     return "";
 }
 
-std::vector<Option>
-getScriptsOptionsList(const String &currentPath, bool saveStartupScript, int rememberedIndex) {
-    std::vector<Option> opt = {};
-#if !defined(LITE_VERSION) && !defined(DISABLE_INTERPRETER)
-    FS *fs;
-    String folder;
-
-    if (currentPath == "") {
-        folder = getScriptsFolder(fs);
-        if (folder == "") return opt; // did not find
-    } else {
-        folder = currentPath;
-        // Determine filesystem based on path
-        if (currentPath.startsWith("/")) {
-            fs = &LittleFS;
-            if (SD.exists(currentPath)) { fs = &SD; }
-        }
-    }
-
+// One folder of one filesystem, appended to `opt`. Folders recurse through this
+// same helper so the entries always carry the filesystem they were listed from
+// (the card and flash can hold a folder with the same name).
+static void appendScriptFolder(
+    std::vector<Option> &opt, FS *fs, const String &folder, bool saveStartupScript
+) {
+    if (fs == nullptr) return;
     File root = fs->open(folder);
-    if (!root || !root.isDirectory()) return opt; // not a dir
+    if (!root || !root.isDirectory()) return;
 
     while (true) {
-        bool isDir;
+        bool isDir = false;
         String fullPath = root.getNextFileName(&isDir);
+        if (fullPath == "") break;
         String nameOnly = fullPath.substring(fullPath.lastIndexOf("/") + 1);
-        if (fullPath == "") { break; }
-        // Serial.printf("Path: %s (isDir: %d)\n", fullPath.c_str(), isDir);
 
         if (isDir) {
-            // Skip hidden folders (starting with .)
-            if (nameOnly.startsWith(".")) continue;
-
-            // Add folder option
+            if (nameOnly.startsWith(".")) continue; // hidden
             String folderTitle = "[ " + nameOnly + " ]";
-            opt.push_back({folderTitle.c_str(), [=]() {
-                               auto subOptions = getScriptsOptionsList(fullPath, saveStartupScript);
+            opt.push_back({folderTitle.c_str(), [fullPath, saveStartupScript, fs]() {
+                               std::vector<Option> subOptions;
+                               appendScriptFolder(subOptions, fs, fullPath, saveStartupScript);
                                if (subOptions.size() > 0) {
                                    String displayPath = fullPath;
                                    int secondSlash = displayPath.indexOf('/', 1);
@@ -260,14 +245,13 @@ getScriptsOptionsList(const String &currentPath, bool saveStartupScript, int rem
                                }
                            }});
         } else {
-            // Handle files
             int dotIndex = nameOnly.lastIndexOf(".");
             String ext = dotIndex >= 0 ? nameOnly.substring(dotIndex + 1) : "";
             ext.toUpperCase();
             if (ext != "JS" && ext != "BJS") continue;
 
-            String entry_title = nameOnly.substring(0, nameOnly.lastIndexOf(".")); // remove the extension
-            opt.push_back({entry_title.c_str(), [=]() {
+            String entry_title = nameOnly.substring(0, nameOnly.lastIndexOf("."));
+            opt.push_back({entry_title.c_str(), [fullPath, saveStartupScript, fs]() {
                                if (saveStartupScript) {
                                    bruceConfig.startupAppJSInterpreterFile = fullPath;
                                    bruceConfig.saveFile();
@@ -278,8 +262,68 @@ getScriptsOptionsList(const String &currentPath, bool saveStartupScript, int rem
                            }});
         }
     }
-
     root.close();
+}
+
+std::vector<Option>
+getScriptsOptionsList(const String &currentPath, bool saveStartupScript, int rememberedIndex) {
+    std::vector<Option> opt = {};
+#if !defined(LITE_VERSION) && !defined(DISABLE_INTERPRETER)
+    FS *fs;
+    String folder;
+
+    if (currentPath == "") {
+        // Both filesystems are listed, flash first. A script that exists in both
+        // places is shown once and the flash copy is the one that runs, so a
+        // slow card cannot drag the interpreter down; card-only scripts still
+        // appear next to it. Same names are de-duplicated by title.
+        std::vector<String> seen;
+        const char *candidates[] = {"/scripts", "/BruceScripts", "/BruceJS"};
+
+        String flashFolder;
+        for (const char *c : candidates) {
+            if (LittleFS.exists(c)) {
+                flashFolder = c;
+                break;
+            }
+        }
+        if (flashFolder.length()) {
+            appendScriptFolder(opt, &LittleFS, flashFolder, saveStartupScript);
+            for (const Option &o : opt) seen.push_back(o.label);
+        }
+
+        String cardFolder;
+        for (const char *c : candidates) {
+            if (SD.exists(c)) {
+                cardFolder = c;
+                break;
+            }
+        }
+        if (cardFolder.length()) {
+            std::vector<Option> cardOpt;
+            appendScriptFolder(cardOpt, &SD, cardFolder, saveStartupScript);
+            for (Option &o : cardOpt) {
+                bool dup = false;
+                for (const String &s : seen) {
+                    if (s == o.label) {
+                        dup = true;
+                        break;
+                    }
+                }
+                if (!dup) opt.push_back(o);
+            }
+        }
+
+        if (opt.empty()) return opt; // neither filesystem has a scripts folder
+    } else {
+        folder = currentPath;
+        // Determine filesystem based on path
+        if (currentPath.startsWith("/")) {
+            fs = &LittleFS;
+            if (SD.exists(currentPath)) { fs = &SD; }
+        }
+        appendScriptFolder(opt, fs, folder, saveStartupScript);
+    }
 
     // Sort options
     auto sortStart = opt.begin();

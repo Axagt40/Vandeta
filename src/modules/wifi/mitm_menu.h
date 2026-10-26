@@ -39,6 +39,21 @@
  *   target all|<ip>             arpSpoof.start() - overrides the page's mode
  *   fallback dns <ip> [secs]    if nothing was injected/redirected in <secs>
  *   fallback redirect <url> [secs]   ... try this instead (default 10 s)
+ *                               Chain up to 3 `fallback` lines; each <secs> is
+ *                               measured from the start, and a step only fires
+ *                               while the attack still has no hit.
+ *   info                        log the network facts (SSID/channel/board IP,
+ *                               gateway IP + MAC) before the poison starts
+ *   probe all|<ip>              log what is actually there: an ARP resolve per
+ *                               address, `all` reuses the scan the pairing did
+ *   forward off|auto|on         bridge the victim to the real gateway so it
+ *                               keeps internet (a redirect can then load)
+ *   offline page <file>         served instead of the redirect when the bridge
+ *                               cannot start (no internet path without it)
+ *
+ * `info` / `probe` are read-only reconnaissance - they never start a pair or
+ * change a rule, so a payload can report what the target is and still use the
+ * same page/redirect/DNS lines afterwards.
  *
  * A `.html` payload is simply `page * <that file>`.
  *
@@ -63,6 +78,14 @@
 #define MITM_SCRIPT_MAX_BYTES 4096
 /// How long a `fallback` line waits for an HTTP hit when it names no time.
 #define MITM_FALLBACK_DEFAULT_MS 10000
+/// How many `fallback` lines one payload can chain (tried in file order).
+#define MITM_FALLBACK_MAX 3
+/// How many `probe <ip>` lines one payload can carry.
+#define MITM_PROBE_MAX 4
+/// How many hosts a `probe all` line lists (the feed keeps 10 lines anyway).
+#define MITM_PROBE_LINES 8
+/// ARP window used by `probe all` when the pairing has not scanned yet.
+#define MITM_PROBE_SCAN_MS 6000
 /// An injected page shares one ethernet frame with the IP/TCP/HTTP headers.
 #define MITM_HTML_MAX 1100
 /// Shown on screen when a payload file cannot be opened.
@@ -112,6 +135,21 @@ String mitmPayloadRead(const String &path, size_t maxBytes, MitmPayloadResult &r
 // Unified payload (the MITM Attack page)
 // ---------------------------------------------------------------------------
 
+/**
+ * One fallback step of a payload.
+ *
+ * A payload may chain up to MITM_FALLBACK_MAX of them (`fallback dns ...` then
+ * `fallback redirect ...`). Each @c afterMs is measured from the start of the
+ * attack, not from the previous step, so a payload reads as a timetable: DNS
+ * after 10 s, a 302 after 25 s. A step only fires while the attack has not
+ * produced a single hit yet, so a working rule is never overridden.
+ */
+struct MitmFallbackStep {
+    bool dns = false;       // true = DNS answer, false = 302 rule
+    String value;           // IP or URL
+    uint32_t afterMs = MITM_FALLBACK_DEFAULT_MS;
+};
+
 /// Outcome of loading one `.mitm` / `.txt` / `.html` payload.
 struct MitmScriptResult {
     bool ok = false;
@@ -125,6 +163,21 @@ struct MitmScriptResult {
     bool fallbackDns = false;        // false = redirect fallback
     String fallbackValue;            // IP (dns) or URL (redirect)
     uint32_t fallbackAfterMs = MITM_FALLBACK_DEFAULT_MS;
+    // Every `fallback` line in file order; the legacy fields above describe the
+    // first one so the console status keeps its old shape.
+    MitmFallbackStep fallbacks[MITM_FALLBACK_MAX];
+    int fallbackCount = 0;
+    // Reconnaissance lines: read-only, logged in the run feed before any rule
+    // fires. `probes` holds "all" or an IPv4 address per `probe` line.
+    bool wantInfo = false;           // `info` was in the payload
+    String probes[MITM_PROBE_MAX];   // `probe` targets, in file order
+    int probeCount = 0;
+    // Transparent forwarding (`forward off|auto|on`, default off). With the
+    // bridge up a redirected client keeps its internet path, so a redirect to a
+    // real page or video can actually load. `offlinePage` is what is served
+    // instead when the bridge cannot start (`offline page <file>`).
+    int forward = 0;
+    String offlinePage;
     String target;                   // "all", an IPv4 address, or empty
     String path;
     String error;

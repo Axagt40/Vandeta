@@ -1,0 +1,25 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - NEC address 45 00 00 00
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: Eject
+type: parsed
+protocol: NEC
+address: 45 00 00 00
+command: F5 00 00 00
+#
+name: Marker
+type: parsed
+protocol: NEC
+address: 45 00 00 00
+command: EC 00 00 00
+#
+name: Slow_bk
+type: parsed
+protocol: NEC
+address: 45 00 00 00
+command: 0E 00 00 00
+#

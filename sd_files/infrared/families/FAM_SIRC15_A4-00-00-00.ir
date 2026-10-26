@@ -1,0 +1,43 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - SIRC15 address A4 00 00 00
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: Guide
+type: parsed
+protocol: SIRC15
+address: A4 00 00 00
+command: 5B 00 00 00
+#
+name: Activepicture
+type: parsed
+protocol: SIRC15
+address: A4 00 00 00
+command: 77 00 00 00
+#
+name: Cc
+type: parsed
+protocol: SIRC15
+address: A4 00 00 00
+command: 10 00 00 00
+#
+name: Screen_mode
+type: parsed
+protocol: SIRC15
+address: A4 00 00 00
+command: 3D 00 00 00
+#
+name: Screensize
+type: parsed
+protocol: SIRC15
+address: A4 00 00 00
+command: 3D 00 00 00
+#
+name: Wide
+type: parsed
+protocol: SIRC15
+address: A4 00 00 00
+command: 3D 00 00 00
+#

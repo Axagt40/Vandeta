@@ -1,0 +1,49 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - SIRC15 address C4 00 00 00
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: Action
+type: parsed
+protocol: SIRC15
+address: C4 00 00 00
+command: 4B 00 00 00
+#
+name: Action_menu
+type: parsed
+protocol: SIRC15
+address: C4 00 00 00
+command: 4B 00 00 00
+#
+name: Apps
+type: parsed
+protocol: SIRC15
+address: C4 00 00 00
+command: 2A 00 00 00
+#
+name: Ext_box_menu
+type: parsed
+protocol: SIRC15
+address: C4 00 00 00
+command: 49 00 00 00
+#
+name: Google_play
+type: parsed
+protocol: SIRC15
+address: C4 00 00 00
+command: 46 00 00 00
+#
+name: Help
+type: parsed
+protocol: SIRC15
+address: C4 00 00 00
+command: 4D 00 00 00
+#
+name: S.Bar/TV
+type: parsed
+protocol: SIRC15
+address: C4 00 00 00
+command: 24 00 00 00
+#

@@ -50,12 +50,14 @@ static void mitmPrintPayload(const char *verb, const MitmPayloadResult &r) {
 static void mitmPrintStatus(const char *verb) {
     serialDevice->println(
         String(verb) + " active=" + (netspoof_dns_active() ? "1" : "0") + "/" +
-        (netspoof_http_active() ? "1" : "0") + " dnsRules=" + String(netspoof_dns_rule_count()) +
-        " injectRules=" + String(netspoof_http_inject_count()) +
-        " redirectRules=" + String(netspoof_http_redirect_count()) +
+        (netspoof_http_active() ? "1" : "0") + "/" + (netspoof_https_active() ? "1" : "0") +
+        " dnsRules=" + String(netspoof_dns_rule_count()) + " injectRules=" +
+        String(netspoof_http_inject_count()) + " redirectRules=" + String(netspoof_http_redirect_count()) +
         " queries=" + String(netspoof_dns_queries()) + " answers=" + String(netspoof_dns_answers()) +
         " requests=" + String(netspoof_http_requests()) + " redirected=" + String(netspoof_http_redirected()) +
-        " injected=" + String(netspoof_http_injected()) + " pairs=" + String(netspoof_arp_pair_count()) +
+        " injected=" + String(netspoof_http_injected()) + " https=" + String(netspoof_https_requests()) +
+        " httpsRedirected=" + String(netspoof_https_redirected()) + " httpsInjected=" +
+        String(netspoof_https_injected()) + " pairs=" + String(netspoof_arp_pair_count()) +
         " frames=" + String(netspoof_arp_frames()) + " hook=" + (netspoof_hook_installed() ? "1" : "0") +
         " station=" + (WiFi.isConnected() ? WiFi.localIP().toString() : String("down"))
     );
@@ -355,11 +357,35 @@ uint32_t htmlInterceptCallback(cmd *c) {
 
     if (mitmHandleNetworkMode("htmlint", mode, a, b)) return true;
 
+    if (mode == "https") {
+        String sub = a;
+        sub.toLowerCase();
+        if (sub == "off" || sub == "stop") {
+            String err;
+            netspoof_https_stop(err);
+            serialDevice->println(
+                String("htmlint https ok=1 active=") + (netspoof_https_active() ? "1" : "0") +
+                " requests=" + String(netspoof_https_requests())
+            );
+            return true;
+        }
+        String err;
+        bool ok = netspoof_https_start(err);
+        serialDevice->println(
+            String("htmlint https ok=") + (ok ? "1" : "0") + " active=" + (netspoof_https_active() ? "1" : "0") +
+            " port=" + String(netspoof_https_port()) + " station=" +
+            (WiFi.isConnected() ? WiFi.localIP().toString() : String("down")) +
+            " error=" + (err.length() ? err : "-")
+        );
+        return true;
+    }
+
     if (mode == "start") {
         String err;
         bool ok = netspoof_http_start(err);
         serialDevice->println(
             String("htmlint start ok=") + (ok ? "1" : "0") + " active=" + (netspoof_http_active() ? "1" : "0") +
+            " https=" + (netspoof_https_active() ? "1" : "0") +
             " inject=" + String(netspoof_http_inject_count()) + " redirect=" + String(netspoof_http_redirect_count()) +
             " pairs=" + String(netspoof_arp_pair_count()) + " error=" + (err.length() ? err : "-")
         );
@@ -371,8 +397,11 @@ uint32_t htmlInterceptCallback(cmd *c) {
         netspoof_http_stop(err);
         serialDevice->println(
             String("htmlint stop ok=1 active=") + (netspoof_http_active() ? "1" : "0") +
+            " https=" + (netspoof_https_active() ? "1" : "0") +
             " requests=" + String(netspoof_http_requests()) + " redirected=" + String(netspoof_http_redirected()) +
-            " injected=" + String(netspoof_http_injected())
+            " injected=" + String(netspoof_http_injected()) + " httpsRequests=" +
+            String(netspoof_https_requests()) + " httpsRedirected=" + String(netspoof_https_redirected()) +
+            " httpsInjected=" + String(netspoof_https_injected())
         );
         return true;
     }
@@ -382,10 +411,12 @@ uint32_t htmlInterceptCallback(cmd *c) {
         int shown = 0;
         for (int i = 0; i < n; i++) {
             const NetSpoofCapture *cap = netspoof_capture(i);
-            if (!cap || cap->kind != 1) continue;
+            if (!cap) continue;
+            if (cap->kind != NETSPOOF_CAPTURE_HTTP && cap->kind != NETSPOOF_CAPTURE_HTTPS) continue;
             serialDevice->println(
-                String("httpcap method=") + cap->method + " host=" + cap->host + " path=" + cap->path +
-                " action=" + String(cap->action) + " client=" + cap->clientIp.toString() + " mac=" + cap->clientMac
+                String("httpcap kind=") + netspoof_capture_kind_name(cap->kind) + " method=" + cap->method +
+                " host=" + cap->host + " path=" + cap->path + " action=" + String(cap->action) +
+                " client=" + cap->clientIp.toString() + " mac=" + cap->clientMac
             );
             shown++;
         }
@@ -393,7 +424,7 @@ uint32_t htmlInterceptCallback(cmd *c) {
         return true;
     }
 
-    serialDevice->println("htmlint modes: status match payload redirect rules clear example scan arp arpstop start stop captures");
+    serialDevice->println("htmlint modes: status match payload redirect rules clear example scan arp arpstop https start stop captures");
     return false;
 }
 
@@ -420,7 +451,8 @@ uint32_t mitmCallback(cmd *c) {
             " target=" + mitmAttackTargetLabel() + " dnsRules=" + String(netspoof_dns_rule_count()) +
             " injectRules=" + String(netspoof_http_inject_count()) +
             " redirectRules=" + String(netspoof_http_redirect_count()) +
-            " pairs=" + String(netspoof_arp_pair_count()) +
+            " https=" + (netspoof_https_active() ? "1" : "0") + " pairs=" +
+            String(netspoof_arp_pair_count()) +
             " station=" + (WiFi.isConnected() ? WiFi.localIP().toString() : String("down"))
         );
         return true;
@@ -438,6 +470,8 @@ uint32_t mitmCallback(cmd *c) {
             String("mitm payload path=") + r.path + " ok=" + (r.ok ? "1" : "0") + " pages=" + String(r.pages) +
             " redirects=" + String(r.redirects) + " dns=" + String(r.dns) + " bad=" + String(r.bad) +
             " fallback=" + (r.fallbackSet ? (r.fallbackDns ? "dns:" : "302:") + r.fallbackValue : String("none")) +
+            " fallbacks=" + String(r.fallbackCount) + " info=" + String(r.wantInfo ? 1 : 0) +
+            " probes=" + String(r.probeCount) +
             " target=" + (r.target.length() ? r.target : String("menu")) + " error=" +
             (r.error.length() ? r.error : "-")
         );
@@ -476,12 +510,16 @@ uint32_t mitmCallback(cmd *c) {
 
     if (mode == "stop") {
         String err;
+        if (netspoof_forward_active()) netspoof_forward_stop();
+        if (netspoof_https_active()) netspoof_https_stop(err);
         if (netspoof_http_active()) netspoof_http_stop(err);
         if (netspoof_dns_active()) netspoof_dns_stop(err);
         if (netspoof_arp_active()) netspoof_arp_stop(err);
         serialDevice->println(
             String("mitm stop ok=1 pairs=") + String(netspoof_arp_pair_count()) + " http=" +
-            (netspoof_http_active() ? "1" : "0") + " dns=" + (netspoof_dns_active() ? "1" : "0")
+            (netspoof_http_active() ? "1" : "0") + " https=" + (netspoof_https_active() ? "1" : "0") +
+            " dns=" + (netspoof_dns_active() ? "1" : "0") + " forward=" +
+            (netspoof_forward_active() ? "1" : "0")
         );
         return true;
     }

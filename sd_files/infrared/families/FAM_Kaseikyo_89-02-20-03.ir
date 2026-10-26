@@ -1,0 +1,175 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - Kaseikyo address 89 02 20 03
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: Back
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: 40 00 00 00
+#
+name: Play
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: 00 00 00 00
+#
+name: Pause
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: 10 00 00 00
+#
+name: Stop
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: 20 00 00 00
+#
+name: Rewind
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: 40 00 00 00
+#
+name: Rewind_2
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: C0 01 00 00
+#
+name: Fast_forward
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: 30 00 00 00
+#
+name: Next
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: D0 01 00 00
+#
+name: Rec
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: 50 00 00 00
+#
+name: -
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: 00 01 00 00
+#
+name: Dash
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: 00 01 00 00
+#
+name: Fast_backwards
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: 40 00 00 00
+#
+name: Fast_fwd
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: 30 00 00 00
+#
+name: Ffwd
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: D0 01 00 00
+#
+name: Forward
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: 30 00 00 00
+#
+name: Freeview
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: 60 03 00 00
+#
+name: Netflix
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: 20 03 00 00
+#
+name: Previous
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: C0 01 00 00
+#
+name: Provider
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: 90 03 00 00
+#
+name: Reverse
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: 40 00 00 00
+#
+name: Seek_forward
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: D0 01 00 00
+#
+name: Seek_left
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: 40 00 00 00
+#
+name: Seek_right
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: 30 00 00 00
+#
+name: Skip_backward
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: C0 01 00 00
+#
+name: Skip_backwards
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: C0 01 00 00
+#
+name: Skip_bk
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: C0 01 00 00
+#
+name: Skip_forward
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: D0 01 00 00
+#
+name: Skip_fwd
+type: parsed
+protocol: Kaseikyo
+address: 89 02 20 03
+command: D0 01 00 00
+#

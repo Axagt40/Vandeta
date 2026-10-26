@@ -396,6 +396,12 @@ static const JSPropDef js_ir[] = {
     JS_CFUNC_DEF("transmitFile", 1, native_irTransmitFile),
     JS_CFUNC_DEF("transmit", 3, native_irTransmit),
     JS_CFUNC_DEF("transmitRaw", 2, native_irTransmitRaw),
+    JS_CFUNC_DEF("transmitButton", 2, native_irTransmitButton),
+    JS_CFUNC_DEF("universalList", 0, native_irUniversalList),
+    JS_CFUNC_DEF("universalButtons", 1, native_irUniversalButtons),
+    JS_CFUNC_DEF("universalCode", 3, native_irUniversalCode),
+    JS_CFUNC_DEF("universalSend", 3, native_irUniversalSend),
+    JS_CFUNC_DEF("universalFamily", 3, native_irUniversalFamily),
     JS_PROP_END,
 };
 
@@ -553,6 +559,15 @@ static const JSPropDef js_wifi[] = {
     JS_CFUNC_DEF("injectHttpRedirect", 5, native_wifiInjectHttpRedirect),
     JS_CFUNC_DEF("injectHtml", 5, native_wifiInjectHtml),
     JS_CFUNC_DEF("packetInfo", 1, native_wifiPacketInfo),
+
+    /* "post this image to a TV": discovery, the image server, the AP and Cast */
+    JS_CFUNC_DEF("ssdp", 1, native_wifiSsdp),
+    JS_CFUNC_DEF("mdnsCast", 1, native_wifiMdnsCast),
+    JS_CFUNC_DEF("serveFile", 2, native_wifiServeFile),
+    JS_CFUNC_DEF("serveStop", 0, native_wifiServeStop),
+    JS_CFUNC_DEF("apStart", 3, native_wifiApStart),
+    JS_CFUNC_DEF("apStop", 0, native_wifiApStop),
+    JS_CFUNC_DEF("castImage", 3, native_wifiCastImage),
     JS_PROP_END,
 };
 

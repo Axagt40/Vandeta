@@ -3,13 +3,33 @@ import os
 import subprocess
 import hashlib
 import shutil
+import tempfile
 
 PIOENV = env.subst("$PIOENV")
 MQJS_PATH = os.path.join(".pio/libdeps", PIOENV, "mquickjs")
 
 BUILD_DIR = "lib/mquickjs_headers"
-GEN = os.path.join(BUILD_DIR, "mqjs_stdlib_generator")
 BUILD_SHA256 = os.path.join(BUILD_DIR, "mqjs_stdlib.build.sha256")
+
+
+def _scratch_dir():
+    """A writable, executable scratch dir OFF the project tree.
+
+    The project usually lives on a FAT/exFAT SD card, which is mounted
+    `showexec`: chmod is a no-op there and only *.exe/*.bat/*.com/*.dll may be
+    executed, so a freshly compiled host tool inside the tree cannot be run.
+    That used to fail the whole build with `Permission denied` on the generator
+    (or, before that, leave a STALE mqjs_stdlib.h behind - the bug in
+    CHANGES.md row 140 that made new JS bindings answer "not a function").
+    A temp dir is always executable, so the generator is built there.
+    """
+    base = os.environ.get("MQJS_BUILD_DIR") or tempfile.gettempdir()
+    path = os.path.join(base, "mqjs-gen")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+GEN = os.path.join(_scratch_dir(), "mqjs_stdlib_generator")
 
 BJS_INTERPRETER_PATH = "src/modules/bjs_interpreter/"
 WATCH_FILE = os.path.join(BJS_INTERPRETER_PATH, "mqjs_stdlib.c")
@@ -54,6 +74,7 @@ INCLUDES = [
     'storage_js',
     'subghz_js',
     'wifi_js',
+    'cast_js',
     'net_spoof_js',
     'script_folder_js',
 ]
@@ -77,7 +98,26 @@ def _project_option(name: str):
 
 def _resolve_host_cc():
     override = os.environ.get("MQJS_HOST_CC") or _project_option("mqjs_host_cc")
-    return override if override else HOST_CC
+    if not override:
+        return HOST_CC
+    # This project usually lives on a FAT/exFAT SD card, where chmod is a no-op:
+    # the host compiler wrapper (MQJS_HOST_CC) can be readable but not
+    # executable there, so shutil.which() reports "not found" and generation
+    # was skipped - keeping a STALE mqjs_stdlib.h, which is how new bindings
+    # silently miss the build.
+    # Copy such a wrapper into the build dir and make the copy executable.
+    if os.path.isfile(override) and not os.access(override, os.X_OK):
+        try:
+            # Off the tree, for the same FAT/showexec reason as _scratch_dir().
+            shim = os.path.join(_scratch_dir(), "mqjs_host_cc.sh")
+            shutil.copyfile(override, shim)
+            os.chmod(shim, 0o755)
+            if os.access(shim, os.X_OK):
+                print("mqjs: %s is not executable here; using %s" % (override, shim))
+                return shim
+        except OSError as exc:
+            print("mqjs: could not make %s executable (%s)" % (override, exc))
+    return override
 
 def _has_define(name: str) -> bool:
     try:
@@ -166,7 +206,8 @@ def generate_headers():
         host_cc = _resolve_host_cc()
         if not shutil.which(host_cc):
             if os.path.exists(os.path.join(BJS_INTERPRETER_PATH, "mqjs_stdlib.h")):
-                print("Host compiler not found; skipping mqjs_stdlib header generation.")
+                print("Host compiler not found; keeping the EXISTING (possibly stale)")
+                print("mqjs_stdlib.h - new bindings will NOT be in this build.")
                 print("Set MQJS_HOST_CC or mqjs_host_cc to a GCC-compatible compiler, or use Docker.")
                 print("\nOn Windows:\n- install MSYS2 https://www.msys2.org/ at default path")
                 print("- open C:\\msys64\\ucrt64.exe")

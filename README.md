@@ -9,8 +9,8 @@
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20server-5865F2?logo=discord&logoColor=white)](https://discord.gg/dhPXgVerqD)
 
 > **[Install in your browser](https://axagt40.github.io/Vandeta/flash.html)** — no tools, one button, Chrome or Edge
-> · **[Download Vandeta 1.2](https://github.com/Axagt40/Vandeta/releases/latest)** — one merged image, flash it at `0x0`
-> · **[What's new in 1.2](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.2)**
+> · **[Download Vandeta 1.3 (pre-release)](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.3-pre)** — one merged image, flash it at `0x0`
+> · **[What's new in 1.3](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.3-pre)**
 > · **[Docs](https://axagt40.github.io/Vandeta/docs.html)**
 > · **[Discord](https://discord.gg/dhPXgVerqD)**
 
@@ -47,8 +47,11 @@ extra layer on top of them.
 * One `Developer Mode` switch (`Config > System Config > Developer Options`)
   arms the console and the speed profile together.
 * `ui`, `ui watch`, `move up|down|left|right|nextpage`, `press ok|back` drive the
-  menus and print the screen you land on — including the pages that build a
-  local option list (Config, System Config, WiFi, Bluetooth, Files, Others).
+  menus and print the screen you land on, including pages that build a local
+  option list (Config, System Config, WiFi, Bluetooth, Files, Others).
+* A line editor with **Up/Down command history** (16 entries), Tab completion,
+  Backspace and Ctrl-C/U/L, and command echo in **2-3 ms** — the console behaves
+  like a shell, not a one-line pipe.
 * `file read|write|list|delete|stat`, `log show|clear|on|off`, `errors`,
   `help <command>`.
 * `usbdebug status|proto|on|off`, hot reload and live update rows in the menu,
@@ -58,9 +61,9 @@ extra layer on top of them.
 * `display ring on|off` and `display dump` inspect what a screen actually drew.
 * The error ring collects ESP-IDF, Arduino `log_x()` and plain `printf()` /
   NimBLE lines in one place.
-* Console commands answer immediately — none waits on a modal banner — and
-  turning Developer Mode off releases the console's queues, watches and RX
-  buffer.
+* Commands answer as they run, and switching Developer Mode off releases the
+  console's queues, watches and RX buffer so the firmware is as light as a stock
+  build.
 
 </details>
 
@@ -143,6 +146,17 @@ extra layer on top of them.
 * **Universal Remote** — the Flipper IR database's TV / AC / fans / audio /
   projectors / LEDs libraries (2,858 codes, shipped on the card under
   `/infrared/Universal/`), sweep-per-button with pause and cancel.
+* **IR Suite** — `Infrared > IR Suite`, the Vandeta IR Suite 1.0. It is built
+  into the firmware image, so the row works with no SD card and there is
+  nothing to copy. It brute-forces only the Power code of every TV candidate,
+  locks and slowly replays the last ten when the TV reacts, saves the
+  identified device as a `.ir` remote in `/BruceIR` (so IR > Custom IR lists it
+  with the recorded remotes), with every button the library holds, and runs
+  BadUSB-style `.txt` payloads (`UP`, `DELAY 300`, `OK`) against that remote.
+  Also sweeps one brand, drives a saved remote as a keypad, and mirrors an
+  image/video to a DLNA or Cast TV. The same library is exposed to scripts
+  (`ir.universalList`, `universalSend`, `universalFamily`,
+  `ir.transmitButton`).
 * **Brand AC remotes** for twelve makes, sending a full state frame (power,
   mode, 16–30 °C, fan).
 * Hand-written encoders for RCA and NEC42, protocols the ESP32 IR library lacks.
@@ -157,27 +171,30 @@ extra layer on top of them.
 <details>
 <summary><b>WiFi</b></summary>
 
-* Every added WiFi attack lives on the **`Wifi Atks`** page, and every target
-  attack on the **`Target Atks`** page — one page each.
 * ARP spoofing, DNS spoofing and HTTP interception/modification that reach
   WPA2/WPA3 clients (the frames go out on the encrypted station link).
-* **MITM Attack** on the same `Wifi Atks` page — one page for the whole attack:
-  it answers the target's TCP handshake itself, so a poisoned client reaches the
-  payload's page without any other listener (no Web UI) having to run:
-  pick the network to join from a scan (saved password, otherwise it asks), the
-  target mode (`All devices` or one host from the ARP scan), and one payload.
-  Start pairs every chosen host with its gateway and shows a **live activity
-  feed** (`page GET neverssl.com <- 192.168.1.167`, `no HTTP hit - answering DNS
-  with 192.168.1.1`); BACK stops and **restores every ARP mapping**, so a victim
-  is never left cut off.
+* **MITM Attack** runs a whole interception attack from the keypad: pick the
+  network, the target (`All devices` or one host from the ARP scan) and one
+  payload, then Start. The engine answers the target's TCP handshake itself, so
+  a poisoned client reaches the payload's page with no other listener running.
+  Back stops the attack and **restores every ARP mapping**, so a victim is never
+  left cut off.
+* **Plaintext HTTP on any port**, and **HTTPS on :443** through a built-in
+  self-signed TLS endpoint, so an `https://` visit gets the same redirect or page
+  after the browser's one-time certificate warning. QUIC is dropped and IPv6 /
+  SVCB answers are suppressed, so a dual-stack or HTTP/3 client falls back to the
+  intercepted path instead of bypassing it.
+* A **live event feed** on the run screen — `+4s 192.168.1.107 redirected
+  example.com`, `attack started against <network>`, real client and host names —
+  instead of a counter table.
 * The payload, `/BruceSpoof/mitm.txt`, is the JS MITM API in plain text — `page`
-  (200 + HTML), `redirect` (302), `dns` (answer lookups), `target` and
-  `fallback` (e.g. try DNS injection when no HTTP request landed). A `.html`
-  payload is just `page *` with that file; a page must fit one ethernet frame.
-  `dns` answers accept `gateway` or `this`, resolved on each query, so a payload
-  loads before the board has joined a network. A ready-to-use
-  `/BruceSpoof/test.mitm` (page `html/test.html`) proves the whole path on a
-  victim without any external site.
+  (200 + HTML), `redirect` (302), `dns` (answer lookups), `target` and up to
+  three chained `fallback` lines (e.g. DNS at 10 s, then a 302 at 25 s, each
+  only while no request has been caught). A `.html` payload is just `page *`
+  with that file; a page must fit one ethernet frame. `dns` answers accept
+  `gateway` or `this`, resolved on each query, so a payload loads before the
+  board has joined a network. A ready-to-use `/BruceSpoof/test.mitm` (page
+  `html/test.html`) proves the whole path without any external site.
 * Evil-twin captive portal that refuses with a readable error when DMA memory is
   short.
 * Headless, deadline-bounded attacks so scripts can run them; `moreatk` verb,
@@ -226,9 +243,8 @@ extra layer on top of them.
   working directory.
 * Persisted settings in `bruce.conf`: the Developer Mode switch, the protocol
   preference, the whole BadUSB footprint and the Wardriver frequency, duplicate
-  window, minimum pulse count and band hop — all validated on load.
-* Stored names follow the menus (`JS Interpreter` → `Apps` keeps a hidden entry
-  hidden).
+  window, minimum pulse count and band hop — all validated on load, so a
+  hand-edited or truncated config cannot break a boot.
 
 </details>
 
@@ -237,14 +253,10 @@ extra layer on top of them.
 
 * Breadcrumb path (`WiFi > Wifi Atks > Target Atks`), `n/total` counter and a
   scrollbar on long lists, plus an encoder hint bar (`TURN` / `SEL` / `BACK`).
-* A child menu works on its own copy of the option list, so it cannot disturb
-  the page it was opened from.
-* Back returns to the parent menu.
 * Capture screens show live progress and `Press BACK to stop`; only Back aborts,
   and presses queued during a capture are dropped before the result screen.
-* The script interpreter is listed as **Apps** with an app-drawer icon, and the
-  BadUSB page as **HID Settings**.
-* `ui` / `nav` report the menu that is on screen.
+* `ui` / `nav` report the menu that is on screen, so a host can mirror and drive
+  the device blind.
 
 </details>
 
@@ -266,13 +278,15 @@ extra layer on top of them.
 <details>
 <summary><b>Diagnostics and reliability</b></summary>
 
-* Console output formats `%d` / `%s` correctly.
-* Screen streaming survives a rapid `display stop` / `start`, and `display dump`
-  copies the log on the heap so a long dump is safe.
-* BLE scans are armed asynchronously and stopped cleanly.
-* `i2c scan` prints one device per line, `proc` shows `any` for no-affinity
-  tasks, and the CC1101 driver prints no internal chatter.
-* Large files hash and print without wedging the console.
+* Radio bring-up is memory-guarded: WiFi, BLE and the CC1101/nRF24 taps check
+  the internal DRAM and DMA they need, release the other radio first, and fail
+  with a readable message instead of a reboot.
+* Long files hash, print and copy in bounded chunks, so a large file cannot
+  exhaust the heap or wedge the console.
+* Screen mirroring is safe to start/stop repeatedly, and `display dump` copies
+  its log on the heap so a long dump cannot overflow a stack buffer.
+* `i2c scan`, `proc`, `mem` and `sys` answer in one line per item, which makes
+  them usable from a script.
 
 </details>
 

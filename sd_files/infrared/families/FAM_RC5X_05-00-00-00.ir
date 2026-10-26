@@ -1,0 +1,19 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - RC5X address 05 00 00 00
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: Index
+type: parsed
+protocol: RC5X
+address: 05 00 00 00
+command: 30 00 00 00
+#
+name: Sv_v
+type: parsed
+protocol: RC5X
+address: 05 00 00 00
+command: 05 00 00 00
+#

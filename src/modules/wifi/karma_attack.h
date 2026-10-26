@@ -144,7 +144,7 @@ typedef struct {
     bool verifyPassword;
     uint8_t priority;
     AttackTier tier;
-    uint16_t duration;
+    uint32_t duration; // ms; must hold attackConfig.highTierDuration (180000)
     bool isCloneAttack;
     uint32_t probeCount;
 } PendingPortal;
@@ -180,13 +180,17 @@ typedef struct {
     uint8_t priorityThreshold;
     uint8_t cloneThreshold;
     bool enableBeaconing;
-    uint16_t highTierDuration;
+    // Durations are milliseconds. highTierDuration and extendedDuration are
+    // 180000 (3 min), which does NOT fit a uint16_t: the compiler kept
+    // truncating them to 48928 ms, so a "3 minute" portal tier really lasted
+    // 48 s. Keep every duration here wider than 65 s.
+    uint32_t highTierDuration;
     uint16_t mediumTierDuration;
     uint16_t fastTierDuration;
     uint32_t cloneDuration;
     uint8_t maxCloneNetworks;
     uint16_t baseDuration;
-    uint16_t extendedDuration;
+    uint32_t extendedDuration;
 } AttackConfig;
 
 // Handshake capture structure

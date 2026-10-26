@@ -1,0 +1,13 @@
+Filetype: Bruce IR File
+Version: 1
+#
+# Vandeta IR Suite family remote - NECext address 45 BC 00 00
+# 173 models merged from the per-model library
+# Generated from the Flipper IR database - do not hand edit.
+#
+name: Tv_dvd
+type: parsed
+protocol: NECext
+address: 45 BC 00 00
+command: B3 4C 00 00
+#

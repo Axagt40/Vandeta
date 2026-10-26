@@ -2,6 +2,7 @@
 #define __USB_DEBUG_H__
 
 #include <Arduino.h>
+#include <FS.h>
 
 /*********************************************************************
 **  UsbDebug - the "Developer Options" mode, previously "USB Debugging"
@@ -64,6 +65,9 @@ bool batchBusy();
 
 // --- hot reload (JavaScript) ------------------------------------------
 bool addWatch(const String &path);
+// Same, on an explicit filesystem: JS paths can land on LittleFS while the card
+// is mounted, and getFsStorage() only ever returns the card.
+bool addWatch(FS *fs, const String &path);
 bool removeWatch(const String &path);
 void clearWatches();
 void listWatches();
@@ -85,6 +89,13 @@ bool errorStream();
 // returns true when it consumed the input itself (binary mode), so the
 // normal text CLI must not also read the port.
 bool pollSerial();
+// pollText() is the text-mode line editor. It consumes the bytes available on
+// the console and returns true once a whole line is ready, handling backspace,
+// Ctrl-C/U/L, TAB completion and Up/Down recall of earlier commands. Call it
+// instead of Stream::readStringUntil() so a command is executed the moment
+// Enter arrives and the arrow keys work like they do on a Flipper Zero's
+// terminal. Inert in binary mode.
+bool pollText(String &line);
 
 // --- binary protocol --------------------------------------------------
 bool binaryMode();

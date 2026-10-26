@@ -93,6 +93,7 @@ static size_t s_queueCount = 0;
 #define USBDBG_WATCH_MAX 8
 struct Watch {
     String path;
+    FS *fs = nullptr; // which filesystem the path lives on (SD or LittleFS)
     size_t size = 0;
     time_t when = 0;
     bool valid = false;
@@ -293,8 +294,14 @@ bool devMode() { return bruceConfig.usbDebugDevMode != 0; }
 void applyDevMode(bool on) {
     if (on) {
         setCpuFrequencyMhz(240); // speed over stability
-        outln("[USBDBG] developer mode ON (cpu=" + String(getCpuFrequencyMhz()) + "MHz)");
+        // Hot reload is part of developer mode, not a separate switch: it used
+        // to be a "Hot Reload: ON/OFF" row that did nothing because nothing was
+        // watched. `load()` now arms a watch on every script it runs, so this
+        // bit is what actually makes the feature live.
+        setHotReload(true);
+        outln("[USBDBG] developer mode ON (cpu=" + String(getCpuFrequencyMhz()) + "MHz, hot reload ON)");
     } else {
+        setHotReload(false);
         outln("[USBDBG] developer mode OFF");
     }
 }
@@ -470,6 +477,163 @@ String complete(const String &prefix) {
 const char *verbList() { return UsbDebug_verbs; }
 
 // ---------------------------------------------------------------------------
+// Text line editor
+// ---------------------------------------------------------------------------
+// The stock text path read a whole line with Stream::readStringUntil(), which
+// waits for the newline inside the call (up to the stream timeout) and has no
+// idea about editing keys: an Up arrow arrived as three ordinary bytes in the
+// middle of the command. Reading the console byte by byte here means a command
+// runs the instant Enter is pressed and Up/Down recall works like a normal
+// shell, which is what a Flipper Zero's terminal feels like.
+//
+// Existing scripts keep working: the echoed characters are a prefix on the
+// "COMMAND:" line they already ignore, and nothing is consumed until a whole
+// line exists, so a host that writes "wifi on\r\n" behaves exactly as before.
+static String s_editLine;
+static String s_editSaved;
+static int s_editHistPos = -1; // -1 = the fresh line, 0 = last command
+static uint8_t s_editEsc = 0;  // 0 idle, 1 after ESC, 2 inside a CSI sequence
+static bool s_editCR = false;  // last line ended in CR: swallow the following LF
+
+/// @p back = 0 is the most recent stored command.
+static String historyFromNewest(int back) {
+    if (back < 0 || (size_t)back >= s_histCount) return String();
+    size_t idx = (s_histHead + USBDBG_HISTORY - 1 - back) % USBDBG_HISTORY;
+    return s_history[idx];
+}
+
+static void redrawEditLine() {
+    serialDevice->print("\r\033[K# ");
+    serialDevice->print(s_editLine);
+}
+
+static void editHistory(int dir) {
+    if (s_histCount == 0) return;
+    if (dir < 0) { // up = older
+        if (s_editHistPos < 0) {
+            s_editSaved = s_editLine;
+            s_editHistPos = 0;
+        } else if ((size_t)(s_editHistPos + 1) < s_histCount) {
+            s_editHistPos++;
+        } else {
+            return; // already at the oldest line
+        }
+        s_editLine = historyFromNewest(s_editHistPos);
+    } else { // down = newer, then back to what was being typed
+        if (s_editHistPos < 0) return;
+        s_editHistPos--;
+        s_editLine = s_editHistPos < 0 ? s_editSaved : historyFromNewest(s_editHistPos);
+    }
+    redrawEditLine();
+}
+
+bool pollText(String &line) {
+    if (s_binary) return false;
+    bool ready = false;
+    // Bounded so a host that floods the port can never starve the UI.
+    int budget = 512;
+    while (budget-- > 0 && serialDevice->available()) {
+        int raw = serialDevice->read();
+        if (raw < 0) break;
+        char c = (char)raw;
+
+        if (s_editEsc == 1) { // ESC seen, waiting for the sequence introducer
+            if (c == '[' || c == 'O') {
+                s_editEsc = 2;
+            } else {
+                s_editEsc = 0; // a lone ESC: ignore it
+            }
+            continue;
+        }
+        if (s_editEsc == 2) { // inside ESC [ ...
+            s_editEsc = 0;
+            if (c == 'A') editHistory(-1);
+            else if (c == 'B') editHistory(1);
+            // Left/Right/Home/End are ignored: the editor is append-only, and
+            // pretending to move the cursor would corrupt the line.
+            continue;
+        }
+
+        // A terminal sends CR, a script often sends CRLF. Treat the pair as one
+        // line end instead of executing an empty command for the LF.
+        if (c == '\n' && s_editCR) {
+            s_editCR = false;
+            continue;
+        }
+        s_editCR = false;
+
+        if (c == '\r' || c == '\n') {
+            s_editCR = (c == '\r');
+            serialDevice->print("\r\n");
+            line = s_editLine;
+            s_editLine = "";
+            s_editHistPos = -1;
+            s_editSaved = "";
+            ready = true;
+            break; // the rest waits for the next poll, so a pasted batch is kept
+        }
+        if (c == 0x1B) {
+            s_editEsc = 1;
+            continue;
+        }
+        if (c == 0x03) { // Ctrl-C: drop what is typed, keep the console alive
+            serialDevice->print("^C\r\n# ");
+            s_editLine = "";
+            s_editHistPos = -1;
+            s_editSaved = "";
+            continue;
+        }
+        if (c == 0x0C) { // Ctrl-L: clear screen
+            serialDevice->print("\033[2J\033[H# ");
+            serialDevice->print(s_editLine);
+            continue;
+        }
+        if (c == 0x15) { // Ctrl-U: clear the line
+            s_editLine = "";
+            serialDevice->print("\r\033[K# ");
+            continue;
+        }
+        if (c == 0x08 || c == 0x7F) { // backspace / delete
+            if (s_editLine.length() > 0) {
+                s_editLine.remove(s_editLine.length() - 1);
+                serialDevice->print("\b \b");
+            }
+            continue;
+        }
+        if (c == '\t') { // completion over the same verb list `complete` prints
+            String candidates = complete(s_editLine);
+            if (candidates.length() == 0) {
+                serialDevice->print("\a");
+                continue;
+            }
+            if (candidates.indexOf(' ') < 0) {
+                s_editLine = candidates + " ";
+                redrawEditLine();
+            } else {
+                serialDevice->print("\r\n");
+                int start = 0;
+                while (start < (int)candidates.length()) {
+                    int sp = candidates.indexOf(' ', start);
+                    String one = sp < 0 ? candidates.substring(start) : candidates.substring(start, sp);
+                    if (one.length()) outln(one);
+                    if (sp < 0) break;
+                    start = sp + 1;
+                }
+                redrawEditLine();
+            }
+            continue;
+        }
+        if ((uint8_t)c < 0x20) continue; // other control bytes have no meaning here
+        if (s_editLine.length() >= 500) continue; // same ceiling as CmdPacket
+        s_editLine += c;
+        // write(), not print(): SerialDevice only has the numeric print(int)
+        // overload, which echoed the character's decimal code instead.
+        serialDevice->write((uint8_t *)&c, 1);
+    }
+    return ready;
+}
+
+// ---------------------------------------------------------------------------
 // Command queue / batch execution
 // ---------------------------------------------------------------------------
 void queueCommand(const String &line) {
@@ -525,19 +689,25 @@ void setHotReload(bool on) { s_hotReload = on; }
 bool hotReload() { return s_hotReload; }
 
 bool addWatch(const String &path) {
-    if (s_watchCount >= USBDBG_WATCH_MAX) return false;
-    String abs = resolve(path);
     FS *fs;
     if (!getFsStorage(fs)) return false;
+    return addWatch(fs, path);
+}
+
+bool addWatch(FS *fs, const String &path) {
+    if (fs == nullptr) return false;
+    if (s_watchCount >= USBDBG_WATCH_MAX) return false;
+    String abs = resolve(path);
     if (!fs->exists(abs)) return false;
 
     for (size_t i = 0; i < s_watchCount; i++) {
-        if (s_watches[i].path == abs) return true; // already watched
+        if (s_watches[i].path == abs && s_watches[i].fs == fs) return true; // already watched
     }
     File f = fs->open(abs);
     if (!f) return false;
     Watch &w = s_watches[s_watchCount++];
     w.path = abs;
+    w.fs = fs;
     w.size = f.size();
     w.when = f.getLastWrite();
     w.valid = true;
@@ -581,11 +751,9 @@ static void pollWatches() {
     if (millis() - s_lastPoll < interval) return;
     s_lastPoll = millis();
 
-    FS *fs;
-    if (!getFsStorage(fs)) return;
-
     for (size_t i = 0; i < s_watchCount; i++) {
-        File f = fs->open(s_watches[i].path);
+        if (s_watches[i].fs == nullptr) continue;
+        File f = s_watches[i].fs->open(s_watches[i].path);
         if (!f) continue;
         size_t size = f.size();
         time_t when = f.getLastWrite();
