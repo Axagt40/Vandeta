@@ -747,6 +747,10 @@ td code {
   color: var(--ok);
 }
 
+.meta-warn {
+  color: var(--warn);
+}
+
 .meta-bad {
   color: var(--err);
 }

@@ -36,7 +36,7 @@
       <p>
         Install, card layout, the USB console, the feature list, building from
         source and what to do when something does not answer. Written for
-        Vandeta 1.2 on the LilyGo T-Embed CC1101.
+        Vandeta 1.3 (pre-release) on the LilyGo T-Embed CC1101.
       </p>
       <ul style="columns:2;max-width:34rem;margin-top:1.25rem;font-size:0.92rem">
         <li><a href="#install">Installation</a></li>
@@ -72,6 +72,15 @@
             <tr><th>Chip</th><td>ESP32-S3, 16 MB flash</td></tr>
           </tbody>
         </table>
+      </div>      <div class="callout warn">
+        <strong>Two channels.</strong> The <strong>official</strong> release is
+        vandeta 1.2 &mdash; <code>2a2582e4&hellip;52a76</code>, 4,648,576 bytes
+        &mdash; and is what the table above describes. The
+        <strong>pre-release</strong> is vandeta 1.3 &mdash;
+        <code>d32f9ea6&hellip;26e62</code>, 4,781,792 bytes: identical procedure
+        at <code>0x0</code>, but it is published early for testing and may still
+        change. The flasher offers both; <code>docs/firmware/vandeta-pre.bin</code>
+        is the bundled copy of the pre-release image.
       </div>
 
       <h3>1. Verify the download</h3>
@@ -541,19 +550,24 @@ esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 115200 \
       </div>
 
       <div class="callout warn">
-        <strong>Internet, but no account.</strong> The flasher reads the latest
-        release from the GitHub API, pulls the image from the repository and
-        imports the pinned <code>esptool-js</code> 0.7.0 bundle from unpkg. With
-        no connection it falls back to the copy in
-        <code>docs/firmware/</code>, labelled as an offline copy.
+        <strong>Internet, but no account.</strong> The flasher reads the release
+        list from the GitHub API, pulls the image from the repository and imports
+        the pinned <code>esptool-js</code> 0.7.0 bundle from unpkg. Its two
+        channel buttons follow GitHub's own flags: <strong>Official</strong> is
+        the newest release that is not marked pre-release,
+        <strong>Pre-release</strong> the newest one that is, and that button stays
+        greyed out while no pre-release exists. With no connection it falls back
+        to the copies in <code>docs/firmware/</code>, labelled as an offline copy.
       </div>
 
       <p class="file-meta">
-        The flasher always installs the newest published release, so a release
-        needs no site edit. Keep <code>docs/firmware/vandeta.bin</code> and its
-        <code>.sha256</code> current anyway: that is what an offline visitor
-        gets, and the page still refuses any image whose hash does not match the
-        release digest.
+        The flasher always installs the newest release of the channel that is
+        selected, so cutting a release needs no site edit. Keep
+        <code>docs/firmware/vandeta.bin</code> (official) and
+        <code>docs/firmware/vandeta-pre.bin</code> (pre-release) with their
+        <code>.sha256</code> files current anyway: that is what an offline
+        visitor gets, and the page still refuses any image whose hash does not
+        match the release digest.
       </p>
     </div>
   </section>

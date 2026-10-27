@@ -29,12 +29,14 @@
   <section class="page-head">
     <div class="wrap">
       <p class="eyebrow">Browser flasher</p>
-      <h1>Install the latest Vandeta</h1>
+      <h1>Install Vandeta</h1>
       <p>
-        Plug the board in, press one button. The page reads the newest release
-        from GitHub, downloads it, checks its SHA-256 against the published
-        checksum, writes it at <code>0x0</code> and resets the board. Nothing is
-        installed on your computer.
+        Plug the board in, pick a channel, press one button. The page reads the
+        release list from GitHub and offers the newest <strong>official</strong>
+        release and the newest <strong>pre-release</strong> (greyed out when none
+        is published). The image is downloaded, its SHA-256 is checked against
+        the published checksum, it is written at <code>0x0</code> and the board
+        is reset. Nothing is installed on your computer.
       </p>
     </div>
   </section>
@@ -43,9 +45,15 @@
     <div>
       <div class="panel">
         <div class="status" style="justify-content:space-between;flex-wrap:wrap;gap:0.5rem">
-          <h2 style="font-size:0.78rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--dim);margin:0">Latest release</h2>
+          <h2 style="font-size:0.78rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--dim);margin:0">Release channel</h2>
           <span id="fw-state" class="badge">checking</span>
         </div>
+
+        <div class="btn-row" style="margin:0.9rem 0 0;gap:0.5rem">
+          <button class="btn btn-primary btn-small" id="ch-official" type="button" aria-pressed="true" disabled>Official</button>
+          <button class="btn btn-ghost btn-small" id="ch-prerelease" type="button" aria-pressed="false" disabled>Pre-release</button>
+        </div>
+        <p class="file-meta" id="channel-note" style="margin:0.5rem 0 0">Checking which channels are published…</p>
 
         <p id="version-name" style="font-size:1.55rem;font-weight:650;letter-spacing:-0.02em;margin:0.6rem 0 0.2rem">Checking GitHub…</p>
         <p class="file-meta" style="margin:0 0 1rem">for the LilyGo T-Embed CC1101 (ESP32-S3)</p>
@@ -69,7 +77,7 @@
 
         <div class="status" style="margin-top:1rem">
           <span class="dot" id="conn-dot"></span>
-          <span id="conn-status">Checking the latest release…</span>
+          <span id="conn-status">Checking the release list…</span>
         </div>
         <div class="file-meta" style="margin-top:0.35rem">chip <span id="chip">—</span></div>
 
@@ -143,7 +151,10 @@
           first, then <code>main</code>, then the copy bundled in this site. A
           tag snapshots the repository as it was when it was cut, so any copy
           that does not match the digest GitHub reports for the release asset is
-          skipped and the next source is tried.
+          skipped and the next source is tried. The <strong>Official</strong>
+          button takes the newest release that is not marked pre-release; the
+          <strong>Pre-release</strong> button takes the newest one that is, and
+          stays greyed out while no pre-release exists.
         </p>
       </details>
 

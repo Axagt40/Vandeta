@@ -8,10 +8,12 @@
    One button does the whole thing; the port, baud, erase and file picker are in
    Advanced for troubleshooting. */
 const REPO = "Axagt40/Vandeta";
-const RELEASE_API = "https://api.github.com/repos/" + REPO + "/releases/latest";
+const RELEASES_API = "https://api.github.com/repos/" + REPO + "/releases?per_page=30";
 const ESPTOOL_URL = "https://unpkg.com/esptool-js@0.7.0/bundle.js";
 const LOCAL_BIN = "firmware/vandeta.bin";
 const LOCAL_SHA = "firmware/vandeta.bin.sha256";
+const LOCAL_PRE_BIN = "firmware/vandeta-pre.bin";
+const LOCAL_PRE_SHA = "firmware/vandeta-pre.bin.sha256";
 const raw = (ref, file) => "https://raw.githubusercontent.com/" + REPO + "/" + ref + "/" + file;
 
 const el = (id) => document.getElementById(id);
@@ -35,8 +37,16 @@ const chipEl = el("chip");
 const progressBar = el("progress");
 const progressPct = el("progress-pct");
 const progressNote = el("progress-note");
+const chOfficialEl = el("ch-official");
+const chPreEl = el("ch-prerelease");
+const channelNoteEl = el("channel-note");
 
-let release = null; // { name, tag, size, digest, published, binUrl, shaUrl, local }
+// Both channels come from the release list GitHub returns: the newest release
+// that is not marked pre-release, and the newest one that is. A channel with no
+// release is absent here, and its button is disabled.
+let channels = { official: null, prerelease: null };
+let channel = "official";
+let release = null; // { name, tag, version, size, digest, published, sources, local, prerelease }
 let bytes = null; // verified image
 let expectedSha = null;
 let port = null;
@@ -78,7 +88,9 @@ function humanSize(n) {
 }
 
 function updateInstallButton() {
-  const label = release ? "Install " + release.name : "Install Vandeta";
+  const label = release
+    ? "Install " + (release.local ? release.name : release.version) + (release.prerelease ? " (pre-release)" : "")
+    : "Install Vandeta";
   installBtn.textContent = label;
   const ready = Boolean(release && !busy && "serial" in navigator);
   installBtn.disabled = !ready;
@@ -97,11 +109,11 @@ async function readSidecarSha(url) {
 // A release tag snapshots the repository as it was when the tag was made, so a
 // tag's copy of the image can lag the release asset. Try the tag, then main,
 // then the copy in this site; the digest check decides, not the URL.
-async function findSidecarSha(tag) {
+async function findSidecarSha(ref, localSha) {
   const candidates = [
-    raw(tag, "vandeta.bin.sha256"),
+    raw(ref, "vandeta.bin.sha256"),
     raw("main", "vandeta.bin.sha256") + "?t=" + Date.now(),
-    LOCAL_SHA,
+    localSha || LOCAL_SHA,
   ];
   for (const url of candidates) {
     try {
@@ -113,75 +125,169 @@ async function findSidecarSha(tag) {
   throw new Error("no usable .sha256 found");
 }
 
-async function loadRelease() {
+function versionOf(tag) {
+  const match = String(tag || "").match(/\d+(?:\.\d+)*/);
+  return match ? match[0] : String(tag || "");
+}
+
+// GitHub lists releases newest first, so the first entry of each group is the
+// newest one. Drafts and releases without a vandeta.bin asset are skipped.
+async function loadReleases() {
   setBadge("checking", "");
   nameEl.textContent = "Checking GitHub…";
   bytes = null;
   shaEl.textContent = "checked when it downloads";
+  shaEl.className = "";
+  channels = { official: null, prerelease: null };
+  renderChannels();
   try {
-    const response = await fetch(RELEASE_API + "?t=" + Date.now(), {
+    const response = await fetch(RELEASES_API + "&t=" + Date.now(), {
       headers: { Accept: "application/vnd.github+json" },
       cache: "no-store",
     });
     if (!response.ok) throw new Error("GitHub API answered " + response.status);
-    const data = await response.json();
-    const asset = (data.assets || []).find((a) => a.name === "vandeta.bin");
-    if (!asset) throw new Error("the latest release has no vandeta.bin");
-    const tag = data.tag_name;
-    release = {
-      name: data.name || tag,
-      tag,
-      size: asset.size,
-      digest: String(asset.digest || "").replace(/^sha256:/, "").toLowerCase(),
-      published: data.published_at,
-      sources: [
-        { url: raw(tag, "vandeta.bin"), label: "release tag " + tag },
-        { url: raw("main", "vandeta.bin") + "?t=" + Date.now(), label: "repository main" },
-        { url: LOCAL_BIN, label: "bundled with this site" },
-      ],
-      local: false,
-    };
-    expectedSha = release.digest || (await findSidecarSha(tag));
-    if (release.digest) {
-      findSidecarSha(tag)
-        .then((sidecar) => {
-          if (sidecar !== release.digest) {
-            log("note: the tag's .sha256 is older than the release asset; using the asset digest");
-          }
-        })
-        .catch(() => {});
-    }
-    renderRelease();
-    setStatus("Ready. The newest release will be downloaded and verified.", "");
-    log("latest release: " + release.name + " (" + release.tag + "), " + humanSize(release.size));
+    const list = await response.json();
+    const installable = (list || []).filter(
+      (r) => !r.draft && (r.assets || []).some((a) => a.name === "vandeta.bin")
+    );
+    if (!installable.length) throw new Error("no published release carries vandeta.bin");
+    channels.official = channelFromRelease(installable.find((r) => !r.prerelease));
+    channels.prerelease = channelFromRelease(installable.find((r) => r.prerelease));
+    log(
+      "channels: official " +
+        (channels.official ? channels.official.tag : "none") +
+        ", pre-release " +
+        (channels.prerelease ? channels.prerelease.tag : "none")
+    );
+    // The pre-release is what the project is testing right now, so it is the
+    // default when it exists. The two buttons make the choice explicit.
+    await selectChannel(channels.prerelease ? "prerelease" : "official", true);
+    setStatus(
+      channels.prerelease
+        ? "Ready. Pre-release " + channels.prerelease.version + " is offered alongside the official release."
+        : "Ready. No pre-release is published; the official release can be installed.",
+      ""
+    );
   } catch (error) {
-    log("latest release: " + (error.message || error) + " — falling back to the copy shipped with this site");
+    log("release list: " + (error.message || error) + " — falling back to the copies shipped with this site");
     await loadLocal();
   }
 }
 
+function channelFromRelease(data) {
+  if (!data) return null;
+  const asset = (data.assets || []).find((a) => a.name === "vandeta.bin");
+  if (!asset) return null;
+  const tag = data.tag_name;
+  const pre = Boolean(data.prerelease);
+  return {
+    name: data.name || tag,
+    tag,
+    version: versionOf(tag),
+    size: asset.size,
+    digest: String(asset.digest || "").replace(/^sha256:/, "").toLowerCase(),
+    published: data.published_at,
+    prerelease: pre,
+    sources: [
+      { url: raw(tag, "vandeta.bin"), label: "release tag " + tag },
+      { url: raw("main", "vandeta.bin") + "?t=" + Date.now(), label: "repository main" },
+      { url: pre ? LOCAL_PRE_BIN : LOCAL_BIN, label: "bundled with this site" },
+    ],
+    local: false,
+  };
+}
+
+async function selectChannel(name, quiet) {
+  const next = channels[name];
+  if (!next) return false;
+  channel = name;
+  release = next;
+  bytes = null;
+  expectedSha = release.digest || null;
+  shaEl.textContent = "checked when it downloads";
+  shaEl.className = "";
+  const localSha = release.prerelease ? LOCAL_PRE_SHA : LOCAL_SHA;
+  if (expectedSha) {
+    findSidecarSha(release.tag, localSha)
+      .then((sidecar) => {
+        if (sidecar !== next.digest) {
+          log("note: the tag's .sha256 is older than the release asset; using the asset digest");
+        }
+      })
+      .catch(() => {});
+  } else {
+    try {
+      expectedSha = await findSidecarSha(release.tag, localSha);
+    } catch (error) {
+      log("checksum: " + (error.message || error));
+    }
+  }
+  renderRelease();
+  if (!quiet) {
+    log(
+      "channel: " +
+        (release.prerelease ? "pre-release" : "official") +
+        " — " +
+        release.name +
+        " (" +
+        release.tag +
+        "), " +
+        humanSize(release.size)
+    );
+    setStatus(
+      release.prerelease
+        ? "Ready. This is a pre-release: published early for testing, not the official release."
+        : "Ready. This is the newest official release.",
+      ""
+    );
+  }
+  return true;
+}
+
 async function loadLocal() {
-  try {
-    expectedSha = await readSidecarSha(LOCAL_SHA);
-    const head = await fetch(LOCAL_BIN, { method: "HEAD", cache: "no-store" });
-    if (!head.ok) throw new Error("bundled image is missing (" + head.status + ")");
-    release = {
-      name: "Vandeta (bundled copy)",
-      tag: "bundled",
-      size: Number(head.headers.get("content-length")) || 0,
-      digest: expectedSha,
-      published: "",
-      sources: [{ url: LOCAL_BIN, label: "bundled with this site" }],
-      local: true,
-    };
-    renderRelease();
-    setStatus("Offline copy. GitHub could not be reached, so this is the image in this site.", "warn");
-  } catch (error) {
+  channels = { official: null, prerelease: null };
+  const bundled = [
+    { path: LOCAL_BIN, sha: LOCAL_SHA, name: "Vandeta (bundled copy)", channel: "official" },
+    {
+      path: LOCAL_PRE_BIN,
+      sha: LOCAL_PRE_SHA,
+      name: "Vandeta pre-release (bundled copy)",
+      channel: "prerelease",
+    },
+  ];
+  for (const entry of bundled) {
+    try {
+      const digest = await readSidecarSha(entry.sha);
+      const head = await fetch(entry.path, { method: "HEAD", cache: "no-store" });
+      if (!head.ok) throw new Error("image is missing (" + head.status + ")");
+      channels[entry.channel] = {
+        name: entry.name,
+        tag: "bundled",
+        version: "bundled",
+        size: Number(head.headers.get("content-length")) || 0,
+        digest,
+        published: "",
+        prerelease: entry.channel === "prerelease",
+        sources: [{ url: entry.path, label: "bundled with this site" }],
+        local: true,
+      };
+    } catch (error) {
+      log("bundled " + entry.channel + ": " + (error.message || error));
+    }
+  }
+  if (!channels.official && !channels.prerelease) {
+    release = null;
     setBadge("unavailable", "meta-bad");
     nameEl.textContent = "No image available";
-    log("bundled image: " + (error.message || error));
+    renderChannels();
     setStatus("No firmware could be loaded. Check the connection and press Check for updates.", "meta-bad");
+    return;
   }
+  channel = channels.prerelease ? "prerelease" : "official";
+  release = channels[channel];
+  expectedSha = release.digest;
+  renderRelease();
+  setStatus("Offline copy. GitHub could not be reached, so this is the image in this site.", "warn");
 }
 
 function renderRelease() {
@@ -189,10 +295,46 @@ function renderRelease() {
   tagEl.textContent = release.tag;
   dateEl.textContent = release.published ? release.published.slice(0, 10) : "—";
   sizeEl.textContent = humanSize(release.size);
-  expectedEl.textContent = expectedSha;
+  expectedEl.textContent = expectedSha || "checking…";
   sourceEl.textContent = release.local ? "bundled with this site" : "GitHub release " + release.tag;
-  setBadge(release.local ? "offline copy" : "latest release", "meta-ok");
+  if (release.local) setBadge("offline copy", "meta-bad");
+  else if (release.prerelease) setBadge("pre-release", "meta-warn");
+  else setBadge("official release", "meta-ok");
+  renderChannels();
   updateInstallButton();
+}
+
+// Both buttons are always present; one is greyed out when its channel has no
+// release to offer, so the page never promises an image it cannot deliver.
+function renderChannels() {
+  const label = (entry, name) =>
+    entry ? name + " " + (entry.local ? "(bundled)" : entry.version) : name + " — none";
+  if (chOfficialEl) {
+    chOfficialEl.textContent = label(channels.official, "Official");
+    chOfficialEl.disabled = !channels.official;
+    chOfficialEl.setAttribute("aria-pressed", String(channel === "official"));
+    chOfficialEl.classList.toggle("btn-primary", channel === "official" && Boolean(channels.official));
+    chOfficialEl.classList.toggle("btn-ghost", !(channel === "official" && Boolean(channels.official)));
+  }
+  if (chPreEl) {
+    chPreEl.textContent = label(channels.prerelease, "Pre-release");
+    chPreEl.disabled = !channels.prerelease;
+    chPreEl.setAttribute("aria-pressed", String(channel === "prerelease"));
+    chPreEl.classList.toggle("btn-primary", channel === "prerelease" && Boolean(channels.prerelease));
+    chPreEl.classList.toggle("btn-ghost", !(channel === "prerelease" && Boolean(channels.prerelease)));
+  }
+  if (channelNoteEl) {
+    if (!channels.prerelease) {
+      channelNoteEl.textContent =
+        "No pre-release is published right now, so only the official release can be installed.";
+    } else if (channel === "prerelease") {
+      channelNoteEl.textContent =
+        "This pre-release is published early for testing. It is not the official release and may still change.";
+    } else {
+      channelNoteEl.textContent =
+        "The official release is the newest build that is not marked pre-release on GitHub.";
+    }
+  }
 }
 
 async function downloadAndVerify() {
@@ -408,12 +550,14 @@ el("file").addEventListener("change", async (event) => {
 });
 
 installBtn.addEventListener("click", install);
-refreshBtn.addEventListener("click", loadRelease);
+refreshBtn.addEventListener("click", loadReleases);
+if (chOfficialEl) chOfficialEl.addEventListener("click", () => selectChannel("official"));
+if (chPreEl) chPreEl.addEventListener("click", () => selectChannel("prerelease"));
 connectBtn.addEventListener("click", connectOnly);
 disconnectBtn.addEventListener("click", disconnectOnly);
 
 if (!("serial" in navigator)) {
   setStatus("Web Serial is unavailable. Open this page in desktop Chrome or Edge 89+ over https or localhost.", "meta-bad");
 }
-log("Ready. Install downloads the latest release, checks its SHA-256, writes it at 0x0 and resets the board.");
-loadRelease();
+log("Ready. Install downloads the selected release, checks its SHA-256, writes it at 0x0 and resets the board.");
+loadReleases();

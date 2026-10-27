@@ -488,22 +488,61 @@ static void printUiState() {
     serialDevice->println("UISTATE " + getOptionsJSON());
 }
 
-// Wait for the screen to actually change (or the timeout to run out), then dump.
-// A keypress is handled by the main loop, not by this serial task, so reading the
-// state immediately after injecting it returns the OLD menu - the bug this fixes.
-static void settleAndDump(uint32_t ms = 900) {
-    String beforeLabel = menuOptionLabel;
-    size_t beforeCount = activeMenuOptions().size();
-    uint8_t beforeType = menuOptionType;
-    int beforeActive = uiActiveIndex();
+// Four scalars describe where the UI is. Comparing them is cheap and is enough
+// to tell "the key was applied" from "the press was swallowed".
+struct UiSnapshot {
+    String label;
+    size_t count;
+    uint8_t type;
+    int active;
+};
+
+static void snapshotUi(UiSnapshot &s) {
+    s.label = menuOptionLabel;
+    s.count = activeMenuOptions().size();
+    s.type = menuOptionType;
+    s.active = uiActiveIndex();
+}
+
+static bool sameUi(const UiSnapshot &a, const UiSnapshot &b) {
+    return a.label == b.label && a.count == b.count && a.type == b.type && a.active == b.active;
+}
+
+// Wait until the screen has changed AND then held still for a moment, then
+// report whether it moved at all.
+//
+// The old version gave the device a fixed 900 ms and broke on the FIRST change,
+// which is why a scripted row count could be off by one: an entry that spends a
+// second on its radio init (RF, IR) is still on the parent menu when the dump is
+// taken, so the next `move` is aimed at the wrong list. Waiting for a change and
+// then a quiet 250 ms covers both a fast row move and a slow page transition.
+// A command that never changes anything still costs the full window - that is
+// the honest signal that the press did not reach the menu.
+static bool settleUi(uint32_t ms = 2600) {
+    UiSnapshot first, last;
+    snapshotUi(first);
+    last = first;
+    bool changed = false;
     uint32_t start = millis();
+    uint32_t lastChange = start;
     while (millis() - start < ms) {
-        if (menuOptionLabel != beforeLabel || activeMenuOptions().size() != beforeCount ||
-            menuOptionType != beforeType || uiActiveIndex() != beforeActive)
-            break;
         vTaskDelay(pdMS_TO_TICKS(20));
+        UiSnapshot now;
+        snapshotUi(now);
+        if (!sameUi(now, last)) {
+            last = now;
+            changed = true;
+            lastChange = millis();
+            continue;
+        }
+        if (changed && millis() - lastChange >= 250) break; // settled
     }
-    vTaskDelay(pdMS_TO_TICKS(80)); // let the repaint finish
+    return changed;
+}
+
+static void settleAndDump(uint32_t ms = 2600) {
+    settleUi(ms);
+    vTaskDelay(pdMS_TO_TICKS(60)); // let the repaint finish
     printUiState();
 }
 
@@ -519,6 +558,21 @@ static void injectKey(volatile bool *flag) {
     uint32_t start = millis();
     while (*flag && millis() - start < 250) vTaskDelay(pdMS_TO_TICKS(5));
     *flag = false;
+}
+
+// Inject one movement key and report whether the UI actually acted on it.
+//
+// The input task (main.cpp, taskInputHandler) clears the press flags itself once
+// they are older than ~75 ms, so a key aimed at a page that is still redrawing
+// can be dropped instead of queued - the old fixed sleep then dumped the same
+// screen and the next command moved from the wrong row, which is what "scripted
+// move down drifts" looked like. A press that produced no change is re-sent
+// once; only a menu with nothing to move to (a single row) stays inert.
+static bool injectMoveKey(volatile bool *flag) {
+    injectKey(flag);
+    if (settleUi()) return true;
+    injectKey(flag);
+    return settleUi();
 }
 
 // --- live screen watcher ---------------------------------------------------
@@ -645,8 +699,20 @@ static uint32_t uiCallback(cmd *c) {
         return false;
     }
 
-    injectKey(flag);
-    settleAndDump();
+    // Movement keys get the retry-on-no-change path (a page that is still
+    // opening would otherwise swallow the press); selection and BACK do not,
+    // because re-sending a selection could run a row twice.
+    const bool isMove = (action == "up" || action == "down" || action == "left" || action == "right" ||
+                         action == "prev" || action == "next" || action == "nextpage" ||
+                         action == "prevpage");
+    if (isMove) {
+        injectMoveKey(flag);
+        vTaskDelay(pdMS_TO_TICKS(60));
+        printUiState();
+    } else {
+        injectKey(flag);
+        settleAndDump();
+    }
     return true;
 }
 
@@ -683,8 +749,11 @@ static uint32_t moveCallback(cmd *c) {
         serialDevice->println("move: usage move up|down|left|right|prev|next|nextpage|prevpage");
         return false;
     }
-    injectKey(flag);
-    settleAndDump();
+    // The retry inside injectMoveKey() is what keeps a scripted row count exact
+    // when the previous command just opened a page that is still initialising.
+    injectMoveKey(flag);
+    vTaskDelay(pdMS_TO_TICKS(60));
+    printUiState();
     return true;
 }
 
