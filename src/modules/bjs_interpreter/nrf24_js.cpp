@@ -272,13 +272,23 @@ JSValue native_nrf24Receive(JSContext *ctx, JSValue *this_val, int argc, JSValue
     while (millis() - start < (unsigned long)timeout) {
         if (NRFradio.available()) {
             uint8_t buf[32] = {0};
-            NRFradio.read(buf, sizeof(buf));
+            // Read what the radio says it has, not always 32 bytes, and trim
+            // only TRAILING zero padding. The old loop stopped at the first
+            // 0x00 after the first byte, which silently cut every packet that
+            // carries a zero in the middle (a real payload here - these are
+            // binary remote/device frames, not text) so a replay sent the
+            // wrong bytes. Dynamic payloads (the noise mode) report the real
+            // length; a fixed pipe always reads its configured width.
+            uint8_t want = NRFradio.getDynamicPayloadSize();
+            if (want == 0 || want > sizeof(buf)) want = sizeof(buf);
+            NRFradio.read(buf, want);
             NRFradio.stopListening();
+            size_t len = want;
+            while (len > 1 && buf[len - 1] == 0) len--;
             String hexStr = "";
-            for (int i = 0; i < 32; i++) {
-                if (buf[i] == 0 && i > 0) break;
+            for (size_t i = 0; i < len; i++) {
                 char hex[3];
-                sprintf(hex, "%02X", buf[i]);
+                snprintf(hex, sizeof(hex), "%02X", buf[i]);
                 hexStr += hex;
             }
             return JS_NewString(ctx, hexStr.c_str());

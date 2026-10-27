@@ -269,6 +269,12 @@ void begin_tft() {
 // 8..32 title, 34..42 version, 44..130 logo, then the loading bar.
 static const int BOOT_TITLE_Y = 8;
 static const int BOOT_VERSION_Y = 34;
+// 1.3 is published as a pre-release, and the splash is the first thing the
+// board shows, so it says so next to the number. Deliberately here and not in
+// BRUCE_VERSION: the console `info` verb, the WebUI, the JS global and the
+// Wigle appRelease are the release identity, and they all stay "vandeta 1.3".
+// Clear this string (or drop it from the draw call) for the official release.
+static const char *BOOT_VERSION_SUFFIX = " (pre-release)";
 
 void boot_screen() {
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
@@ -282,7 +288,9 @@ void boot_screen() {
     const char *lastSpace = strrchr(BRUCE_VERSION, ' ');
     if (lastSpace != nullptr) version = lastSpace + 1;
     tft.setTextSize(FP);
-    tft.drawCentreString(String("V: ") + version, tftWidth / 2, BOOT_VERSION_Y, 1);
+    tft.drawCentreString(
+        String("V: ") + version + BOOT_VERSION_SUFFIX, tftWidth / 2, BOOT_VERSION_Y, 1
+    );
     tft.setTextSize(FM);
     // Battery gauge in the top-right corner, the same place the menus put it.
     // getBattery() is 0 when the gauge is absent and drawBatteryStatus() then

@@ -58,11 +58,27 @@ size_t BLESerialService::println(size_t n) {
 }
 
 void BLESerialService::vprintf(const char *fmt, va_list args) {
-    int size = vsnprintf(NULL, 0, fmt, args) + 1;
+    // Three defects lived here, all of them invisible until the BLE serial was
+    // the active output (`ble serial`):
+    //  * vsnprintf() consumes its va_list, so the sprintf() on the next line
+    //    formatted from a used-up list - undefined behaviour, garbage text;
+    //  * that sprintf() had no bound, so anything longer than BUFFER_SIZE
+    //    (a menu dump, a log line with a path) overflowed a stack buffer;
+    //  * the length handed to the notification was vsnprintf()'s answer - the
+    //    UNTRUNCATED size - so a long line made the radio read past the end of
+    //    the string that was actually written.
+    // Format once, into the buffer, and send exactly what was written. This is
+    // the same shape as Serial's own vprintf().
+    va_list copy;
+    va_copy(copy, args);
     char str[BUFFER_SIZE];
-    sprintf(str, fmt, args);
+    int n = vsnprintf(str, sizeof(str), fmt, copy);
+    va_end(copy);
+    if (n < 0) return;
+    size_t len = (size_t)n < sizeof(str) ? (size_t)n : sizeof(str) - 1;
+    if (len == 0) return;
 
-    bleNotifyRetry(serial_char, reinterpret_cast<const uint8_t *>(str), size);
+    bleNotifyRetry(serial_char, reinterpret_cast<const uint8_t *>(str), len);
     vTaskDelay(pdMS_TO_TICKS(10));
 }
 
