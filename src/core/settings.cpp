@@ -23,16 +23,34 @@ int currentScreenBrightness = -1;
 // This function comes from interface.h
 void _setBrightness(uint8_t brightval) {}
 
+// Battery Saver knobs: 80 MHz is the lowest clock the Wi-Fi/BLE radios still
+// run at, and 50% is a backlight that is still readable in daylight.
+#define BATTERY_SAVER_MAX_BRIGHT 50
+#define BATTERY_SAVER_CPU_MHZ 80
+
+/*********************************************************************
+**  Function: batterySaverBrightness
+**  Backlight value the saver mode actually allows. Centralised here so
+**  sleep/wake and the brightness menu cannot silently undo the cap.
+**********************************************************************/
+static uint8_t batterySaverBrightness(uint8_t brightval) {
+    if (bruceConfig.batterySaver && brightval > BATTERY_SAVER_MAX_BRIGHT) {
+        return BATTERY_SAVER_MAX_BRIGHT;
+    }
+    return brightval;
+}
+
 /*********************************************************************
 **  Function: setBrightness
 **  set brightness value
 **********************************************************************/
 void setBrightness(uint8_t brightval, bool save) {
     if (bruceConfig.bright > 100) bruceConfig.setBright(100);
-    _setBrightness(brightval);
+    uint8_t applied = batterySaverBrightness(brightval);
+    _setBrightness(applied);
     delay(10);
 
-    currentScreenBrightness = brightval;
+    currentScreenBrightness = applied;
     if (save) { bruceConfig.setBright(brightval); }
 }
 
@@ -43,15 +61,16 @@ void setBrightness(uint8_t brightval, bool save) {
 void getBrightness() {
     if (bruceConfig.bright > 100) {
         bruceConfig.setBright(100);
-        _setBrightness(bruceConfig.bright);
+        _setBrightness(batterySaverBrightness(bruceConfig.bright));
         delay(10);
         setBrightness(100);
     }
 
-    _setBrightness(bruceConfig.bright);
+    uint8_t applied = batterySaverBrightness(bruceConfig.bright);
+    _setBrightness(applied);
     delay(10);
 
-    currentScreenBrightness = bruceConfig.bright;
+    currentScreenBrightness = applied;
 }
 
 /*********************************************************************
@@ -191,8 +210,79 @@ void setDimmerTimeMenu() {
         {"10s",      [=]() { bruceConfig.setDimmer(10); }, bruceConfig.dimmerSet == 10},
         {"20s",      [=]() { bruceConfig.setDimmer(20); }, bruceConfig.dimmerSet == 20},
         {"30s",      [=]() { bruceConfig.setDimmer(30); }, bruceConfig.dimmerSet == 30},
-        {"60s",      [=]() { bruceConfig.setDimmer(60); }, bruceConfig.dimmerSet == 60},
-        {"Disabled", [=]() { bruceConfig.setDimmer(0); },  bruceConfig.dimmerSet == 0 },
+        {"60s",      [=]() { bruceConfig.setDimmer(60); }, bruceConfig.dimmerSet == 60},        {"Disabled", [=]() { bruceConfig.setDimmer(0); },  bruceConfig.dimmerSet == 0},
+    };
+    loopOptions(options, idx);
+}
+
+/*********************************************************************
+**  Function: applyBatterySaver
+**  Battery Saver (Config > Battery): drop the CPU to 80 MHz and re-apply
+**  the capped backlight. Turning it off restores the configured clock and
+**  brightness. Called on boot and whenever the toggle is flipped.
+**********************************************************************/
+int batterySaverClock(int defaultMhz) { return bruceConfig.batterySaver ? BATTERY_SAVER_CPU_MHZ : defaultMhz; }
+
+void applyBatterySaver() {
+    setCpuFrequencyMhz(batterySaverClock(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ));
+    setBrightness(bruceConfig.bright, false);
+    log_i(
+        "[BATTERY] saver %s | cpu %u MHz | backlight %d%%",
+        bruceConfig.batterySaver ? "ON" : "OFF",
+        (unsigned)getCpuFrequencyMhz(),
+        currentScreenBrightness
+    );
+}
+
+/*********************************************************************
+**  Function: effectiveScreenBrightness
+**  The backlight the firmware applies for the current settings.
+**********************************************************************/
+int effectiveScreenBrightness() { return batterySaverBrightness(bruceConfig.bright); }
+
+/*********************************************************************
+**  Function: chargeLimitPercent
+**  The charge limit the persisted index stands for.
+**********************************************************************/
+int chargeLimitPercent() {
+    static const int percents[] = {100, 90, 80, 70};
+    int idx = bruceConfig.chargeLimit;
+    if (idx < 0 || idx > 3) idx = 0;
+    return percents[idx];
+}
+
+/*********************************************************************
+**  Function: applyChargeLimit
+**  Push the persisted charge limit to the board charger. On a board with
+**  no programmable charger setChargeLimitPercent() reports false and the
+**  readback is 0, which is stated instead of silently doing nothing.
+**********************************************************************/
+void applyChargeLimit() {
+    int percent = chargeLimitPercent();
+    bool ok = setChargeLimitPercent(percent);
+    log_i("[BATTERY] charge limit %d%% -> %d mV (applied=%d)", percent, getChargeLimitVoltage(), (int)ok);
+}
+
+/*********************************************************************
+**  Function: setChargeLimitMenu
+**  Charge-limit selector, same style as the other Config value pickers.
+**********************************************************************/
+void setChargeLimitMenu() {
+    int idx = bruceConfig.chargeLimit;
+    if (idx < 0 || idx > 3) idx = 0;
+    options = {
+        {"100% (4.21V)",
+         [=]() { bruceConfig.setChargeLimit(0); },
+         bruceConfig.chargeLimit == 0},
+        {"90% (4.13V)",
+         [=]() { bruceConfig.setChargeLimit(1); },
+         bruceConfig.chargeLimit == 1},
+        {"80% (4.03V)",
+         [=]() { bruceConfig.setChargeLimit(2); },
+         bruceConfig.chargeLimit == 2},
+        {"70% (3.94V)",
+         [=]() { bruceConfig.setChargeLimit(3); },
+         bruceConfig.chargeLimit == 3},
     };
     loopOptions(options, idx);
 }
@@ -1443,8 +1533,8 @@ static void badUsbFootprintSaved() {
 }
 
 static void badUsbFootprintMenu() {
+    int last = 0; // keep the cursor on the row that was just used
     while (true) {
-        int last = 0; // keep the cursor on the row that was just used
         char vidStr[8];
         char pidStr[8];
         snprintf(vidStr, sizeof(vidStr), "%04X", bruceConfig.badUSBBLEVid);
@@ -1521,8 +1611,8 @@ static void badUsbFootprintMenu() {
 **  extra layouts and user-supplied custom layouts.
 **********************************************************************/
 static void badUsbKeyboardLayoutMenu() {
+    int last = 0; // keep the cursor on the row that was just used
     while (true) {
-        int last = 0; // keep the cursor on the row that was just used
         int cur = bruceConfig.badUSBBLEKeyboardLayout;
         std::vector<Option> localOptions;
         for (int i = 0; i < badusbLayoutCount(); i++) {
@@ -1570,8 +1660,8 @@ static void badUsbHidTypeMenu() {
 **  Attack speed / timing (key delay, string delay and presets)
 **********************************************************************/
 static void badUsbTimingMenu() {
+    int last = 0; // keep the cursor on the row that was just used
     while (true) {
-        int last = 0; // keep the cursor on the row that was just used
         std::vector<Option> localOptions = {
             {String("Key Delay: ") + String(bruceConfig.badUSBBLEKeyDelay) + " ms",
              []() {

@@ -16,6 +16,27 @@ int gsetRotation(bool set = false);
 
 void setBrightnessMenu();
 
+// Battery (Config > Battery): the power-saving mode and the charge limit.
+// Both read bruceConfig and are safe to call on any board.
+void applyBatterySaver();
+
+void applyChargeLimit();
+
+int chargeLimitPercent();
+
+// Brightness the firmware will apply: bruceConfig.bright, capped while Battery
+// Saver is on. Lets the `battery` console verb report the setting rather than
+// the transient 0 the power-save timer writes when it blanks the panel.
+int effectiveScreenBrightness();
+
+// CPU clock the firmware should run at: `defaultMhz` normally, or the saver's
+// lower clock while Battery Saver is on. Every place that restores the CPU
+// clock on its way out (sleep wake, Developer Mode, the Wi-Fi cracker) uses
+// this, so none of them can silently undo the saver.
+int batterySaverClock(int defaultMhz);
+
+void setChargeLimitMenu();
+
 void setUIColor();
 
 bool setCustomUIColorMenu();

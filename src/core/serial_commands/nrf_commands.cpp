@@ -16,6 +16,7 @@
 //   nrfcap freqrange <startMhz> <endMhz>
 //   nrfcap scan [dwellMs]
 //   nrfcap capture <ms> [hop]
+//   nrfcap hunt [msPerCombo]   - bring own remote, press it during the sweep
 //   nrfcap multifreq [ms]
 //   nrfcap list
 //   nrfcap replay <hex> [channel] [repeat]
@@ -197,6 +198,43 @@ uint32_t nrfCapCallback(cmd *c) {
                 " len=" + String(p.len) + " ts=" + String(p.timestamp) + " data=" + nrfHex(p.data, p.len)
             );
         }
+        return true;
+    }
+    if (mode == "hunt") {
+        // nrfcap hunt [msPerCombo] - sweep rate x address width x payload length
+        // on the busiest channels and report the parameters of the first frame
+        // that repeats. This is the console twin of the menu's Hunt row, so a
+        // headless session can identify a remote without looking at the screen.
+        uint32_t ms = a.length() ? a.toInt() : 1200;
+        serialDevice->println("hunt start combos=48");
+        // A full sweep runs for about a minute. Printing one line every 8 combos
+        // keeps the console link alive (a silent command looks finished to the
+        // host runner) without turning the transcript into 48 lines of noise.
+        NrfHuntResult r = nrfCaptureHunt(ms, [](const NrfHuntProgress &p) {
+            if (p.step == 0 || (p.step % 8) == 0) {
+                const char *rn = p.rate == NRF_RATE_2MBPS ? "2M" : (p.rate == NRF_RATE_250KBPS ? "250k" : "1M");
+                serialDevice->println(
+                    String("hunt step=") + String(p.step + 1) + "/" + String(p.steps) + " rate=" + rn +
+                    " addr=" + String(p.addressWidth) + " len=" + String(p.payloadLen)
+                );
+            }
+            return true;
+        });
+        if (!r.found) {
+            serialDevice->println(
+                String("RESULT hunt found=0 aborted=") + (r.aborted ? "1" : "0") + " packets=" +
+                String(nrfCaptureCount())
+            );
+            return true;
+        }
+        const char *rateName = r.rate == NRF_RATE_2MBPS ? "2M" : (r.rate == NRF_RATE_250KBPS ? "250k" : "1M");
+        serialDevice->println(
+            String("RESULT hunt found=1 rate=") + rateName + " rateIndex=" + String(r.rate) +
+            " addrWidth=" + String(r.addressWidth) + " payloadLen=" + String(r.payloadLen) +
+            " channel=" + String(r.channel) + " freq=" + String(2400 + r.channel) +
+            " repeats=" + String(r.repeatCount) + " packets=" + String(r.packetCount)
+        );
+        serialDevice->println(String("payload=") + nrfHex(r.payload, r.payloadLen));
         return true;
     }
     if (mode == "multifreq") {
@@ -463,7 +501,7 @@ uint32_t nrfCapCallback(cmd *c) {
         return true;
     }
     serialDevice->println(
-        "modes: info init promisc channel rate power freqrange scan capture capch lock rgb multifreq "
+        "modes: info init promisc channel rate power freqrange scan capture capch lock hunt rgb multifreq "
         "profile profiles repeat list replay save load analyze"
     );
     return false;

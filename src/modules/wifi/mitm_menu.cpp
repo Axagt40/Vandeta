@@ -722,6 +722,14 @@ static String mitmTargetLabel() {
 
 /// Scan, then let the user switch networks. Picking one runs Bruce's own
 /// connect path: saved password first, keyboard prompt when it is unknown.
+///
+/// The candidate rows are built into a LOCAL vector on purpose. They used to be
+/// pushed into the shared global `options`, which is the vector the MITM page
+/// itself is iterating while this handler runs: clearing it here destroyed the
+/// page's Option objects (including the std::function that was executing) and
+/// the page restarted or froze, so "Network: pick one" looked like it did
+/// nothing. A local vector leaves the caller's menu untouched, exactly like the
+/// nested-menu guard in loopOptions() does for other pages.
 static void mitmPickNetwork() {
     // The MITM engine needs the radio more than any background feature does, so
     // free what the other pages leave behind (BLE host, Web UI, a stale capture)
@@ -735,29 +743,40 @@ static void mitmPickNetwork() {
     int found = wifiScanNets(false);
     if (found <= 0) {
         mitmAttackNote = "err: no networks found";
+        // Say it on screen: the row that opened this picker still reads "pick
+        // one", so returning to it silently is what made this look broken.
+        displayError("No networks found", true);
+        mitmClearKeys();
         return;
     }
 
-    options.clear();
+    std::vector<Option> nets;
     for (int i = 0; i < found && i < 24; i++) {
         String ssid = WiFi.SSID(i);
         int enc = WiFi.encryptionType(i);
+        // Channel + BSSID from the scan are the direct-association fast path
+        // (see _connectToWifiNetwork): without them the driver sweeps every
+        // channel looking for the SSID before it associates.
+        uint8_t ch = (uint8_t)WiFi.channel(i);
+        uint8_t bssid[6] = {0};
+        if (WiFi.BSSID(i) != nullptr) memcpy(bssid, WiFi.BSSID(i), 6);
+        String joined = WiFi.isConnected() ? WiFi.SSID() : String("");
         String label = ssid.length() ? ssid : String("(hidden)");
+        if (ssid.length() && ssid == joined) label += "  joined";
         label += (enc == WIFI_AUTH_OPEN) ? "  open" : "  locked";
         label += "  " + String(WiFi.RSSI(i)) + "dBm";
-        options.push_back({label, [ssid, enc]() {
-                               if (ssid.length() == 0) {
-                                   mitmAttackNote = "err: hidden network needs its name";
-                                   return;
-                               }
-                               if (!_wifiConnect(ssid, enc)) {
-                                   displayError("Could not join " + ssid, true);
-                               }
-                           }});
+        nets.push_back({label, [ssid, enc, ch, bssid]() {
+                            if (ssid.length() == 0) {
+                                mitmAttackNote = "err: hidden network needs its name";
+                                return;
+                            }
+                            if (!_wifiConnect(ssid, enc, ch, bssid)) {
+                                displayError("Could not join " + ssid, true);
+                            }
+                        }});
     }
-    options.push_back({"Back", []() {}});
-    loopOptions(options, MENU_TYPE_SUBMENU, "MITM Network");
-    options.clear();
+    nets.push_back({"Back", []() {}});
+    loopOptions(nets, MENU_TYPE_SUBMENU, "MITM Network");
     mitmClearKeys();
 }
 
@@ -779,9 +798,11 @@ static void mitmPickTargets() {
     }
     if (found == 0) mitmAttackNote = "warn: no host answered ARP";
 
-    options.clear();
-    options.push_back({String("Last: ") + mitmNoteLabel(mitmAttackNote), []() {}});
-    options.push_back({String("All devices (") + String(found) + " hosts)", []() { mitmSetTargetAll(); }});
+    // Local rows, for the same reason as mitmPickNetwork(): this runs while the
+    // MITM page is iterating its own vector, and "Re-scan" re-enters it.
+    std::vector<Option> targets;
+    targets.push_back({String("Last: ") + mitmNoteLabel(mitmAttackNote), []() {}});
+    targets.push_back({String("All devices (") + String(found) + " hosts)", []() { mitmSetTargetAll(); }});
     for (int i = 0; i < netspoof_target_count(); i++) {
         const NetSpoofTarget *t = netspoof_target(i);
         if (!t || t->gateway) continue; // the gateway is a pair's far end, never a victim
@@ -790,12 +811,11 @@ static void mitmPickTargets() {
         memcpy(mac, t->mac, 6);
         IPAddress ip = t->ip;
         String label = ip.toString() + "  " + t->macStr;
-        options.push_back({label, [ip, mac]() { mitmSetTargetOne(ip, mac); }});
+        targets.push_back({label, [ip, mac]() { mitmSetTargetOne(ip, mac); }});
     }
-    options.push_back({"Re-scan", []() { mitmPickTargets(); }});
-    options.push_back({"Back", []() {}});
-    loopOptions(options, MENU_TYPE_SUBMENU, "MITM Targets");
-    options.clear();
+    targets.push_back({"Re-scan", []() { mitmPickTargets(); }});
+    targets.push_back({"Back", []() {}});
+    loopOptions(targets, MENU_TYPE_SUBMENU, "MITM Targets");
     mitmClearKeys();
 }
 
@@ -1381,37 +1401,42 @@ void mitmAttackMenu() {
     }
 
     int last = 0; // keep the cursor on the row that was just used
+    // The page owns its rows (a local vector, not the shared global `options`):
+    // every handler here opens a picker or the engine, and those used to rebuild
+    // the global vector while this loop was iterating it - which is what made
+    // "Network: pick one" do nothing. See mitmPickNetwork().
+    std::vector<Option> rows;
 AGAIN:
-    options.clear();
+    rows.clear();
     // Network and Payload are the selectors: each row shows what is selected
     // and opens its picker when chosen, so there is no second row that only
     // displays the same value.
-    options.push_back({String("Network: ") + (WiFi.isConnected() ? WiFi.SSID() : String("pick one")), []() {
-                           mitmPickNetwork();
-                       }});
-    options.push_back({String("Target: ") + mitmTargetLabel(), []() { mitmPickTargets(); }});
-    options.push_back({String("Payload: ") + (mitmScriptPath.length() ? mitmShortPath(mitmScriptPath) : String("none")),
-                       []() { mitmPickPayload(); }});
-    options.push_back({"Preview payload", []() { mitmPreviewPayload(); }});
+    rows.push_back({String("Network: ") + (WiFi.isConnected() ? WiFi.SSID() : String("pick one")), []() {
+                        mitmPickNetwork();
+                    }});
+    rows.push_back({String("Target: ") + mitmTargetLabel(), []() { mitmPickTargets(); }});
+    rows.push_back({String("Payload: ") + (mitmScriptPath.length() ? mitmShortPath(mitmScriptPath) : String("none")),
+                    []() { mitmPickPayload(); }});
+    rows.push_back({"Preview payload", []() { mitmPreviewPayload(); }});
     if (netspoof_dns_active() || netspoof_http_active() || netspoof_https_active() || netspoof_arp_active()) {
-        options.push_back({"Stop + restore", []() {
-                               String err;
-                               if (netspoof_https_active()) netspoof_https_stop(err);
-                               if (netspoof_http_active()) netspoof_http_stop(err);
-                               if (netspoof_dns_active()) netspoof_dns_stop(err);
-                               if (netspoof_arp_active()) netspoof_arp_stop(err);
-                           }});
+        rows.push_back({"Stop + restore", []() {
+                            String err;
+                            if (netspoof_https_active()) netspoof_https_stop(err);
+                            if (netspoof_http_active()) netspoof_http_stop(err);
+                            if (netspoof_dns_active()) netspoof_dns_stop(err);
+                            if (netspoof_arp_active()) netspoof_arp_stop(err);
+                        }});
     } else {
-        options.push_back({"Start attack", []() { mitmRunAttack(); }});
+        rows.push_back({"Start attack", []() { mitmRunAttack(); }});
     }
-    options.push_back({"Captures", []() { mitmShowCaptures(); }});
+    rows.push_back({"Captures", []() { mitmShowCaptures(); }});
     mitmMainPicked = false;
-    options.push_back({"Main Menu", []() {
-                           mitmMainPicked = true;
-                           backToMenu();
-                       }});
-    int sel = loopOptions(options, MENU_TYPE_SUBMENU, "MITM Attack", last);
-    options.clear();
+    rows.push_back({"Main Menu", []() {
+                        mitmMainPicked = true;
+                        backToMenu();
+                    }});
+    int sel = loopOptions(rows, MENU_TYPE_SUBMENU, "MITM Attack", last);
+    rows.clear();
     if (sel < 0 || mitmMainPicked) {
         mitmTeardown();
         mitmClearKeys();

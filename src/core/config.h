@@ -95,6 +95,11 @@ public:
     int usbDebugDevMode = 0; // alias of usbDebug (speed over stability profile)
     int usbDebugBinary = 0;  // 0 = text CLI, 1 = framed binary protocol
 
+    // Battery (Config > Battery). Plain persisted ints: a bruce.conf written
+    // before these existed simply keeps the defaults below.
+    int batterySaver = 0; // 0 = off, 1 = lower the CPU clock and cap the backlight
+    int chargeLimit = 0;  // index: 0=100% 1=90% 2=80% 3=70%, applied to the charger
+
     // UI gradient: paint primary-coloured UI furniture with the boot splash's
     // pink -> purple ramp instead of one flat colour. Read by ui_gradient.h;
     // toggle lives in Config > Display & UI > UI Color.
@@ -236,6 +241,10 @@ public:
     void validateUsbDebugDevModeValue();
     void setUsbDebugBinary(int value);
     void validateUsbDebugBinaryValue();
+    void setBatterySaver(int value);
+    void validateBatterySaverValue();
+    void setChargeLimit(int value);
+    void validateChargeLimitValue();
     void setColorInverted(int value);
     void validateColorInverted();
     void setBadUSBBLEKeyboardLayout(int value);

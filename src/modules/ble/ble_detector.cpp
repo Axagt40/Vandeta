@@ -42,8 +42,21 @@ struct BleDetEntry {
     bool apple; // Apple Continuity advert (iPhone/iPad/Watch/AirPods)
 };
 
-static BleDetEntry bleDet[BLE_DET_MAX];
+// The device table is only live while the detector page is open, so it comes from
+// PSRAM on first use (internal heap as the fallback) rather than holding 1.4 KB of
+// internal DRAM in .bss for the whole session (DISCOVERIES 79). The allocation
+// happens once in bleDetectorRun(), before the first scan is armed; the callback
+// only ever reads the pointer.
+#define BLE_DET_BYTES (sizeof(BleDetEntry) * BLE_DET_MAX)
+static BleDetEntry *bleDet = nullptr;
 static int bleDetCount = 0;
+
+static bool bleDetEnsure() {
+    if (bleDet) return true;
+    bleDet = (BleDetEntry *)(psramFound() ? ps_malloc(BLE_DET_BYTES) : malloc(BLE_DET_BYTES));
+    if (bleDet) memset(bleDet, 0, BLE_DET_BYTES);
+    return bleDet != nullptr;
+}
 static uint32_t bleDetTotal = 0;
 static uint32_t bleDetStartMs = 0;
 static portMUX_TYPE bleDetMux = portMUX_INITIALIZER_UNLOCKED;
@@ -124,6 +137,7 @@ static const char *bleDetAppleLabel(const std::string &m) {
 class BleDetCallbacks : public NimBLEScanCallbacks {
     void onResult(const NimBLEAdvertisedDevice *dev) override {
         if (dev == nullptr) return;
+        if (bleDet == nullptr) return; // no table: nothing to record into
 
         uint8_t addr[6] = {0};
         const uint8_t *raw = dev->getAddress().getBase()->val;
@@ -301,6 +315,13 @@ void bleDetectorRun() {
         return;
     }
 
+    // Table first: a detector that cannot record devices is better refused before
+    // the BLE stack is brought up than after.
+    if (!bleDetEnsure()) {
+        displayError("BLE: out of RAM", true);
+        return;
+    }
+
     bool weStarted = !NimBLEDevice::isInitialized();
     if (weStarted && !bleInit("Vandeta-BLE")) {
         displayError("BLE init failed (low RAM)", true);
@@ -324,7 +345,7 @@ void bleDetectorRun() {
     scan->clearResults();
 
     portENTER_CRITICAL(&bleDetMux);
-    memset(bleDet, 0, sizeof(bleDet));
+    memset(bleDet, 0, BLE_DET_BYTES);
     bleDetCount = 0;
     bleDetTotal = 0;
     portEXIT_CRITICAL(&bleDetMux);
@@ -406,7 +427,7 @@ void bleDetectorRun() {
                 {"Clear list",
                  [&]() {
                      portENTER_CRITICAL(&bleDetMux);
-                     memset(bleDet, 0, sizeof(bleDet));
+                     memset(bleDet, 0, BLE_DET_BYTES);
                      bleDetCount = 0;
                      bleDetTotal = 0;
                      portEXIT_CRITICAL(&bleDetMux);
@@ -431,7 +452,7 @@ void bleDetectorRun() {
     if (weStarted) stopBLEStack();
 
     portENTER_CRITICAL(&bleDetMux);
-    memset(bleDet, 0, sizeof(bleDet));
+    if (bleDet != nullptr) memset(bleDet, 0, BLE_DET_BYTES);
     bleDetCount = 0;
     portEXIT_CRITICAL(&bleDetMux);
     returnToMenu = true;

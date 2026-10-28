@@ -1,4 +1,5 @@
 #include "emit.h"
+#include "core/ui_gradient.h" // the same pink -> purple ramp the recorder and the UI use
 #include "modules/rf/rf_utils.h" // for initRfModule
 #include <ELECHOUSE_CC1101_SRC_DRV.h>
 #include <freertos/FreeRTOS.h>
@@ -50,8 +51,10 @@ void rf_raw_emit_draw(void *parameter) {
         int x = 20 + (int)(rssiCount * 1.35);
         int yTop = centerY - barHeight;
 
-        // Draw the bar
-        tft.drawFastVLine(x, yTop, barHeight * 2, bruceConfig.priColor);
+        // Same per-column ramp as the recorder's wave (record.cpp): the trace a
+        // save->replay round shows is the same picture, so it must not fall back
+        // to one flat colour.
+        tft.drawFastVLine(x, yTop, barHeight * 2, uiGradientColorAt(x));
 
         // Delay for 100ms
         vTaskDelay(pdMS_TO_TICKS(100));

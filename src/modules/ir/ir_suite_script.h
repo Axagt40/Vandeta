@@ -31,11 +31,17 @@ static const char IR_SUITE_JS[] PROGMEM = R"VNDIRSUITE(
 var W = display.width();
 var H = display.height();
 var C_BG = display.color(0, 0, 0);
-var C_TITLE = display.color(170, 20, 20);
+// Vandeta gradient: rgb(255,20,147) -> rgb(128,0,255). These are the endpoint
+// colours of the boot-splash crown, i.e. the same ramp core/ui_gradient.cpp
+// paints the firmware's frame, status-bar rule and menu highlight with, so the
+// suite and the stock pages around it read as one design. C_INK is the text
+// colour for anything drawn on the band (the firmware does the same: black text
+// on the gradient highlight).
+var C_V1 = display.color(255, 20, 147);
+var C_V2 = display.color(128, 0, 255);
+var C_INK = display.color(0, 0, 0);
 var C_TEXT = display.color(255, 255, 255);
 var C_DIM = display.color(150, 150, 150);
-var C_SEL = display.color(60, 60, 60);
-var C_BTN = display.color(30, 70, 140);
 
 // The suite's own identity, shown in the title bar of every screen. Bump
 // APP_VERSION when the script changes in a way users should be able to see.
@@ -184,6 +190,48 @@ function basename(path) {
     return i >= 0 ? path.slice(i + 1) : path;
 }
 
+// The one gradient surface the whole suite is built from: a full-brightness
+// left-to-right Vandeta band, drawn in GD_STEP px columns of one colour each -
+// the same banding, the same endpoints and the same colour arithmetic as
+// core/ui_gradient.cpp, so a JS page and the C++ BLE Suite (which calls
+// uiGradientFillRect) are pixel for pixel the same. A per-pixel
+// display.drawFillRectGradient() would be smoother but would not match the
+// firmware's own chrome.
+var GD_STEP = 5;
+var GD = [];
+
+// C integer division, truncating toward zero - what ui_gradient.cpp uses.
+// Math.round() instead moves 26 of the 64 bands by one colour step, which is
+// exactly the drift the shared look is meant to avoid.
+function idiv(a, b) {
+    var q = Math.floor(Math.abs(a) / Math.abs(b));
+    return (a < 0) == (b < 0) ? q : -q;
+}
+
+function buildGrad() {
+    for (var i = 0; i * GD_STEP < W; i++) {
+        var t = Math.floor((i * GD_STEP) * 255 / (W - 1));
+        if (t > 255) t = 255;
+        var r = 255 + idiv((128 - 255) * t, 255);
+        var g = 20 + idiv((0 - 20) * t, 255);
+        var b = 147 + idiv((255 - 147) * t, 255);
+        GD.push(display.color(r, g, b));
+    }
+}
+
+function gradBand(x, y, w, h) {
+    // Built on first use: GD_STEP/GD are assigned further down this file, and a
+    // call at load time would run before those lines (var hoists, assignments do
+    // not).
+    if (GD.length == 0) buildGrad();
+    for (var dx = 0; dx < w; dx += GD_STEP) {
+        var col = GD[Math.floor((x + dx) / GD_STEP)];
+        if (col === undefined) col = GD[GD.length - 1];
+        var step = w - dx < GD_STEP ? w - dx : GD_STEP;
+        display.drawFillRect(x + dx, y, step, h, col);
+    }
+}
+
 function text(str, x, y, col, size) {
     display.setTextColor(col === undefined ? C_TEXT : col);
     display.setTextSize(size === undefined ? 1 : size);
@@ -323,19 +371,19 @@ function saveSelection() {
 // chrome: title bar + the remote button that sits on top of every screen
 // ---------------------------------------------------------------------------
 function drawTitle(sub) {
-    display.drawFillRect(0, 0, W, TITLE_H, C_TITLE);
+    gradBand(0, 0, W, TITLE_H);
     display.setTextAlign("left", "top");
-    text(APP_NAME, 8, 5, C_TEXT, 2);
+    text(APP_NAME, 8, 5, C_INK, 2);
     display.setTextAlign("right", "top");
-    text(sub ? sub : "SEL / ESC", W - 8, 9, C_TEXT, 1);
+    text(sub ? sub : "SEL / ESC", W - 8, 9, C_INK, 1);
     display.setTextAlign("left", "top");
 }
 
 function drawRemoteButton() {
     var label = selectedRemote == "" ? "Remote: <pick one>" : "Remote: " + basename(selectedRemote);
     if (label.length > 26) label = label.slice(0, 23) + "...";
-    display.drawFillRoundRect(6, BTN_Y, W - 12, BTN_H, 5, C_BTN);
-    text(label, 12, BTN_Y + 6, C_TEXT, 1);
+    gradBand(6, BTN_Y, W - 12, BTN_H);
+    text(label, 12, BTN_Y + 7, C_INK, 1);
 }
 
 // Status screens: the frame is drawn when the title changes, then only the two
@@ -395,8 +443,8 @@ function drawMenu() {
     for (var i = 0; i < MENU.length; i++) {
         var y = MENU_TOP + i * ROW_H;
         var rowSel = (sel == i + 1);
-        if (rowSel) display.drawFillRect(4, y - 2, W - 8, ROW_H, C_SEL);
-        text((rowSel ? "> " : "  ") + MENU[i].label, 6, y + 4, rowSel ? C_TEXT : C_DIM, 1);
+        if (rowSel) gradBand(4, y - 2, W - 8, ROW_H);
+        text((rowSel ? "> " : "  ") + MENU[i].label, 6, y + 4, rowSel ? C_INK : C_DIM, 1);
     }
 }
 
@@ -865,8 +913,8 @@ function buttonPad(path) {
                 if (idx >= names.length) break;
                 var y = MENU_TOP - 4 + r * ROW_H;
                 var on = (idx == selIdx);
-                if (on) display.drawFillRect(4, y - 2, W - 8, ROW_H, C_SEL);
-                text((on ? "> " : "  ") + names[idx], 6, y + 3, on ? C_TEXT : C_DIM, 1);
+                if (on) gradBand(4, y - 2, W - 8, ROW_H);
+                text((on ? "> " : "  ") + names[idx], 6, y + 3, on ? C_INK : C_DIM, 1);
             }
             centered((selIdx + 1) + " / " + names.length, H - 16, C_DIM, 1);
             lastSel = selIdx;

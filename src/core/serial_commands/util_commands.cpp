@@ -3,12 +3,14 @@
 #include "core/display.h" // activeMenuOptions()
 #include "core/main_menu.h"
 #include "core/sd_functions.h"
+#include "core/settings.h" // chargeLimitPercent()
 #include "core/utils.h" // to return optionsJSON
 #include "core/wifi/webInterface.h"
 #include "core/wifi/wifi_common.h" //to return MAC addr
 #include "core/bus_HAL.h"
 #include "modules/badusb_ble/ducky_typer.h"
 #include <globals.h>
+#include <interface.h> // getBattery/isCharging/getChargeLimitVoltage
 
 // Upper bound on how long a `nav` command waits for the UI to consume the
 // previous press of the same key before deciding this screen ignores that key
@@ -539,8 +541,41 @@ uint32_t loaderCallback(cmd *c) {
     return false;
 }
 
+/*********************************************************************
+**  Function: batteryCallback
+**  `battery` - one-line report of the Battery settings and what the board
+**  really has: saver state, CPU clock, backlight, the persisted charge limit
+**  and the charger's own charge-target voltage, plus charge state.
+**********************************************************************/
+uint32_t batteryCallback(cmd *c) {
+    Command cmd(c);
+    int mv = getChargeLimitVoltage();
+    int configured = bruceConfig.bright;
+    int effective = effectiveScreenBrightness();
+    serialDevice->println("Battery saver : " + String(bruceConfig.batterySaver ? "ON" : "OFF"));
+    serialDevice->println("CPU clock     : " + String(getCpuFrequencyMhz()) + " MHz");
+    if (effective != configured) {
+        serialDevice->println(
+            "Backlight     : " + String(effective) + "% (saver cap, configured " + String(configured) + "%)"
+        );
+    } else {
+        serialDevice->println("Backlight     : " + String(effective) + "%");
+    }
+    serialDevice->println("Charge limit  : " + String(chargeLimitPercent()) + "%");
+    if (mv > 0) {
+        serialDevice->println("Charge target : " + String(mv) + " mV");
+    } else {
+        serialDevice->println("Charge target : unavailable (no readable charger)");
+    }
+    serialDevice->println(
+        "Battery       : " + String(getBattery()) + "%" + (isCharging() ? " (charging)" : "")
+    );
+    return true;
+}
+
 void createUtilCommands(SimpleCLI *cli) {
     cli->addCommand("uptime", uptimeCallback);
+    cli->addCommand("battery", batteryCallback);
     cli->addCommand("date", dateCallback);
     Command i2cCmd = cli->addCommand("i2c", i2cCallback);
     i2cCmd.addPosArg("op", "scan");

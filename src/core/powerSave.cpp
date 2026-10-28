@@ -49,7 +49,9 @@ void sleepModeOn() {
 
 void sleepModeOff() {
     isSleeping = false;
-    setCpuFrequencyMhz(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
+    // Restore the running clock, but honour Battery Saver: waking from Sleep
+    // must not silently undo the saver's downclock.
+    setCpuFrequencyMhz(batterySaverClock(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ));
 
     panelSleep(false); // wake the screen back up
 

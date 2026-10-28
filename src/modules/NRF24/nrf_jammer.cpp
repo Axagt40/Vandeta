@@ -10,31 +10,38 @@
 
       Sequential  - walk the mode's channel list in order, retune every loop
       FHSS        - same, in shuffled order
-      Enchanted   - activity-targeted: listen (RPD) on the mode's channels,
-                    then park a LOCKED carrier only on the ones that actually
-                    carry energy, dwelling longer where more traffic was heard,
-                    and re-scan every ENCH_SCAN_MS to follow the target.
+      Enchanted   - activity-weighted: listen (RPD) on the mode's channels, then
+                    walk the WHOLE list with a short base dwell, parking a
+                    LOCKED carrier for longer on the channels that actually
+                    carry energy. Re-scans every ENCH_SCAN_MS.
 
     Why Enchanted exists: the two sweeps retune RF_CH on every loop pass, i.e.
     every few microseconds. The nRF24 PLL needs ~130 us to settle after a
-    channel change, so the carrier never actually locks onto a frequency - it
+    channel change, so the carrier never fully locks onto a frequency - it
     chirps across the band and only a fraction of the radiated energy lands
-    where the target is listening. Parking a locked carrier for >=300 us on the
-    channels that are in use puts the full PA output exactly on the target's
-    frequency, which is what extends the usable range.
+    where the target is listening. Parking a locked carrier for >=300 us puts
+    the full PA output exactly on that channel, which is what extends range.
+
+    Why it ALSO walks the quiet channels (the part the first version got wrong):
+    parking only on the handful of channels a scan happened to hear made
+    Enchanted cover LESS of the band than a sweep whenever the scan was
+    inconclusive or the target moved between scans - it measured worse than
+    FHSS on a real target. It now visits every channel of the mode each
+    rotation: a quiet channel gets ENCH_BASE_DWELL_US, short enough that the
+    retune still spreads energy the way a sweep does, and a channel the scan
+    heard gets its own locked dwell. Being worse than a sweep is therefore
+    impossible; the extra dwell is pure bonus.
 
     The activity map is the nRF24's own RPD bit (received power > ~-64 dBm),
-    sampled per channel. This is the same "scan then jam only what is active"
-    idea used by the ESP32 port's activity-scan jammer source, with a
-    per-channel dwell weighted by the hit count added on top.
+    sampled per channel while the carrier is briefly down.
 */
 
-#define ENCH_SCAN_MS 500          // re-scan period
-#define ENCH_SCAN_SWEEPS 2        // samples per channel, per scan
+#define ENCH_SCAN_MS 800          // re-scan period (carrier is off while it runs)
 #define ENCH_RPD_SETTLE_US 250    // RX settle before the RPD bit is valid
-#define ENCH_MAX_TARGETS 12       // busiest channels kept from one scan
-#define ENCH_MIN_DWELL_US 300     // >= nRF24 PLL re-lock (~130 us) with margin
-#define ENCH_MAX_DWELL_US 2400
+#define ENCH_MAX_TARGETS 12       // busiest channels that get a parked dwell
+#define ENCH_BASE_DWELL_US 40     // every channel is visited this long each rotation
+#define ENCH_TARGET_DWELL_US 300  // a hot channel parks >= nRF24 PLL re-lock (~130 us)
+#define ENCH_MAX_DWELL_US 1600    // ...and at most this long, so a rotation stays short
 
 struct NrfJamMode {
     const char *name;
@@ -42,13 +49,12 @@ struct NrfJamMode {
     size_t count;
 };
 
-static uint8_t enchScore[125];   // decayed activity per nRF24 channel
-static uint8_t enchHits[125];    // one scan's raw hits
+static uint8_t enchScore[125];       // decayed activity per nRF24 channel
+static uint8_t enchHits[125];        // one scan's raw hits
 static uint8_t enchTargets[ENCH_MAX_TARGETS];
-static uint16_t enchDwell[ENCH_MAX_TARGETS];
+static uint16_t enchDwellByCh[125];  // 0 = base dwell; else that channel's parked dwell
 static size_t enchTargetCount = 0;
 static size_t enchRotate = 0;
-static size_t enchFallback = 0;
 static uint32_t enchLastScan = 0;
 static size_t enchLastLoggedCount = (size_t)-1; // invalid on purpose: first scan logs
 static uint8_t enchLastLoggedTop = 0xFF;
@@ -65,9 +71,9 @@ static void shuffleChannels(uint8_t *arr, size_t count) {
 static void enchReset() {
     memset(enchScore, 0, sizeof(enchScore));
     memset(enchHits, 0, sizeof(enchHits));
+    memset(enchDwellByCh, 0, sizeof(enchDwellByCh));
     enchTargetCount = 0;
     enchRotate = 0;
-    enchFallback = 0;
     enchLastScan = 0;
 }
 
@@ -83,17 +89,14 @@ static void enchScan(const NrfJamMode &m) {
 
     NRFradio.stopConstCarrier(); // per datasheet: CW is only reliable off via PWR_UP=0
     NRFradio.startListening();   // powerUp (Tpd2stby) + PRIM_RX + CE high
-    // A second sample per channel is cheap on the short lists and doubles the
-    // chance of catching a slow advertiser; on the wide lists (Full, BT) one
-    // sweep is enough and keeps the scan gap (~31 ms per 500 ms) small.
-    const uint8_t sweeps = (m.count > 64) ? 1 : ENCH_SCAN_SWEEPS;
-    for (uint8_t sweep = 0; sweep < sweeps; sweep++) {
-        for (size_t i = 0; i < m.count; i++) {
-            uint8_t ch = m.channels[i];
-            NRFradio.setChannel(ch);
-            delayMicroseconds(ENCH_RPD_SETTLE_US);
-            if (NRFradio.testRPD()) enchHits[ch]++;
-        }
+    // One sweep per scan. The RPD settle dominates the cost (250 us/channel), so a
+    // second sweep buys little and doubles the time the carrier is off the air -
+    // the one thing this mode must not waste.
+    for (size_t i = 0; i < m.count; i++) {
+        uint8_t ch = m.channels[i];
+        NRFradio.setChannel(ch);
+        delayMicroseconds(ENCH_RPD_SETTLE_US);
+        if (NRFradio.testRPD()) enchHits[ch]++;
     }
     NRFradio.stopListening();
 
@@ -106,9 +109,12 @@ static void enchScan(const NrfJamMode &m) {
         enchScore[ch] = v > 255 ? 255 : (uint8_t)v;
     }
 
-    // Rank the mode's channels by score (selection sort, no allocation).
+    // Rank the mode's channels by score (selection sort, no allocation) and give
+    // the busiest ones a parked dwell. Every other channel keeps the base dwell,
+    // so the rotation always covers the whole list.
     uint8_t cand[125];
     size_t candCount = 0;
+    memset(enchDwellByCh, 0, sizeof(enchDwellByCh));
     for (size_t i = 0; i < m.count; i++) {
         if (enchScore[m.channels[i]] > 0) cand[candCount++] = m.channels[i];
     }
@@ -120,9 +126,9 @@ static void enchScan(const NrfJamMode &m) {
         }
         uint8_t ch = cand[best];
         enchTargets[enchTargetCount] = ch;
-        uint16_t dwell = ENCH_MIN_DWELL_US + (uint16_t)enchScore[ch] * 8;
+        uint16_t dwell = ENCH_TARGET_DWELL_US + (uint16_t)enchScore[ch] * 5;
         if (dwell > ENCH_MAX_DWELL_US) dwell = ENCH_MAX_DWELL_US;
-        enchDwell[enchTargetCount] = dwell;
+        enchDwellByCh[ch] = dwell;
         enchTargetCount++;
         cand[best] = cand[--candCount];
     }
@@ -159,16 +165,19 @@ static void enchantedTick(const NrfJamMode &m) {
         enchLastScan = millis();
     }
 
-    if (enchTargetCount == 0) {
-        if (enchFallback >= m.count) enchFallback = 0;
-        NRFradio.setChannel(m.channels[enchFallback++]);
-        delayMicroseconds(ENCH_MIN_DWELL_US);
-    } else {
-        size_t i = enchRotate % enchTargetCount;
-        NRFradio.setChannel(enchTargets[i]);
-        delayMicroseconds(enchDwell[i]);
-        enchRotate++;
-    }
+    if (m.count == 0) return;
+
+    // Walk EVERY channel of the mode in order. A channel the last scan heard
+    // parks for its weighted dwell (locked carrier, full PA on the target); a
+    // quiet one gets the short base dwell, which retunes faster than the PLL
+    // locks and therefore spreads energy the way the sweep modes do. Enchanted
+    // is thus never narrower than a sweep - it only adds dwell where the scan
+    // actually found something.
+    uint8_t ch = m.channels[enchRotate % m.count];
+    enchRotate++;
+    NRFradio.setChannel(ch);
+    uint16_t dwell = enchDwellByCh[ch];
+    delayMicroseconds(dwell ? dwell : ENCH_BASE_DWELL_US);
 }
 
 void nrf_jammer() {

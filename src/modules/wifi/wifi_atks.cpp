@@ -1086,7 +1086,14 @@ struct RawCaptureSession {
     RawCaptureEntry entries[WIFI_CAP_MAX_PACKETS];
 };
 
-static RawCaptureSession rawCaptureSessions[WIFI_CAP_MAX_SESSIONS];
+// 8 sessions x 307 B of bookkeeping that is only touched while a raw capture is
+// armed: allocated from PSRAM on first use (internal heap as the fallback) rather
+// than holding 2.5 KB of internal DRAM in .bss for every session. The RX callback
+// below is the one place that must not allocate, so it only ever reads this
+// pointer - the table is put in place by wifi_raw_capture_start() before any
+// session can become active.
+#define RAW_SESSIONS_BYTES (sizeof(RawCaptureSession) * WIFI_CAP_MAX_SESSIONS)
+static RawCaptureSession *rawCaptureSessions = nullptr;
 static volatile int rawActiveSession = -1;
 static portMUX_TYPE rawCaptureMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint32_t rawPromiscPackets = 0;
@@ -1127,6 +1134,14 @@ static void raw_promisc_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
 
 // Promiscuous RX callback: copies the frame into the active session's PSRAM pool.
 // Runs in the WiFi task, so keep the critical section tiny and allocation-free.
+static bool rawSessionsEnsure() {
+    if (rawCaptureSessions) return true;
+    rawCaptureSessions =
+        (RawCaptureSession *)(psramFound() ? ps_malloc(RAW_SESSIONS_BYTES) : malloc(RAW_SESSIONS_BYTES));
+    if (rawCaptureSessions) memset(rawCaptureSessions, 0, RAW_SESSIONS_BYTES);
+    return rawCaptureSessions != nullptr;
+}
+
 static void raw_capture_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
     (void)type;
     const wifi_promiscuous_pkt_t *pkt = (const wifi_promiscuous_pkt_t *)buf;
@@ -1139,7 +1154,7 @@ static void raw_capture_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
     rawPromiscPackets = rawPromiscPackets + 1;
 
     int sid = rawActiveSession;
-    if (sid < 0) return;
+    if (sid < 0 || rawCaptureSessions == nullptr) return;
 
     RawCaptureSession &s = rawCaptureSessions[sid];
     uint32_t now = millis();
@@ -1292,6 +1307,37 @@ WifiRawTxResult wifi_raw_inject(
     return res;
 }
 
+// Hand the WiFi driver back when the last raw capture closes.
+//
+// wifi_raw_prepare() opens the driver and only records that it did so
+// (rawWifiStartedByUs); nothing on the stop path ever used that flag, so a
+// scripted capture left the driver's buffers held until the next Wi-Fi feature
+// or a reboot. Measured on the 2026-10-27 build: 25,171 bytes still allocated
+// after wifi.captureStop(). The packet monitor's fix for the same leak is the
+// reference: disconnect, then esp_wifi_deinit(), and leave the default event
+// loop alone - here it belongs to the Arduino WiFi stack, not to the capture.
+// Deliberately only when WE brought the driver up: a script that captured while
+// the user was connected to an AP must not lose that connection.
+static void raw_release_driver_if_idle() {
+    if (rawActiveSession >= 0) return;                // another session still owns the radio
+    if (rawPromiscOn || rawStandalonePromisc) return; // standalone promiscuous mode is still on
+    if (!rawWifiStartedByUs) return;                  // the driver was already up: leave it up
+    // The capture opened the driver, but something may have associated it since
+    // (a script's wifi.connectTo, the WiFi menu, the MITM engine). Dropping the
+    // driver would take that link down, so hand ownership over instead of
+    // tearing down: the flag stays false, so no later capture stop can deinit a
+    // driver that is now in use.
+    if (WiFi.isConnected()) {
+        rawWifiStartedByUs = false;
+        return;
+    }
+    rawWifiStartedByUs = false;
+    wifiDisconnect(); // Arduino's mode must go to NULL before a raw deinit
+    esp_err_t e = esp_wifi_deinit();
+    if (e != ESP_OK && e != ESP_ERR_WIFI_NOT_INIT)
+        Serial.printf("[WIFI_RAW] wifi_deinit: %s\n", esp_err_to_name(e));
+}
+
 bool wifi_raw_capture_poll() {
     bool reaped = false;
 
@@ -1313,14 +1359,31 @@ bool wifi_raw_capture_poll() {
         raw_promisc_apply(rawStandalonePromisc);
         reaped = true;
     }
+    // A timed-out capture must release the driver too: reaping it is the only
+    // moment the radio is provably idle, so the same teardown the stop path uses
+    // belongs here as well (otherwise wifi.captureStart(ch, 2000) followed by a
+    // script that just reads the packets leaks the driver for the whole boot).
+    if (reaped) raw_release_driver_if_idle();
     return reaped;
 }
 
 int wifi_raw_capture_start(uint8_t channel, uint32_t timeoutMs) {
     if (channel < 1 || channel > 14) return -1;
+    if (!rawSessionsEnsure()) {
+        Serial.println("[WIFI_RAW] session table allocation failed");
+        return -1;
+    }
 
     wifi_raw_capture_poll();
     if (rawActiveSession >= 0) return -1; // one capture at a time (single radio)
+
+    // The driver's RX/TX buffers come from DMA-capable internal DRAM, so a stale
+    // BLE stack or Web UI makes esp_wifi_init() fail with ESP_ERR_NO_MEM. Same
+    // guard every on-screen Wi-Fi tool uses before bringing the radio up.
+    if (WiFi.getMode() == WIFI_MODE_NULL && !wifiEnsureRadioMem()) {
+        Serial.println("[WIFI_RAW] not enough internal RAM for the WiFi driver");
+        return -1;
+    }
 
     if (timeoutMs == 0) timeoutMs = 60000;
     if (timeoutMs < 200) timeoutMs = 200;
@@ -1387,7 +1450,7 @@ int wifi_raw_capture_start(uint8_t channel, uint32_t timeoutMs) {
 bool wifi_raw_capture_stop(int sessionId) {
     int slot = sessionId - 1;
     if (slot < 0 || slot >= WIFI_CAP_MAX_SESSIONS) return false;
-    if (!rawCaptureSessions[slot].used) return false;
+    if (rawCaptureSessions == nullptr || !rawCaptureSessions[slot].used) return false;
 
     wifi_raw_capture_poll(); // reap it first if its deadline already passed
     bool ownsRadio = (rawActiveSession == slot) || (rawActiveSession < 0 && rawCapturePromisc);
@@ -1398,34 +1461,35 @@ bool wifi_raw_capture_stop(int sessionId) {
         rawCapturePromisc = false;
         // Captured data stays in the pool for wifi_raw_capture_packet().
         raw_promisc_apply(rawStandalonePromisc);
+        raw_release_driver_if_idle();
     }
     return true;
 }
 
 bool wifi_raw_capture_running(int sessionId) {
     int slot = sessionId - 1;
-    if (slot < 0 || slot >= WIFI_CAP_MAX_SESSIONS) return false;
+    if (slot < 0 || slot >= WIFI_CAP_MAX_SESSIONS || rawCaptureSessions == nullptr) return false;
     return rawCaptureSessions[slot].used && rawCaptureSessions[slot].running;
 }
 
 int wifi_raw_capture_packet_count(int sessionId) {
     int slot = sessionId - 1;
     if (slot < 0 || slot >= WIFI_CAP_MAX_SESSIONS) return -1;
-    if (!rawCaptureSessions[slot].used) return -1;
+    if (rawCaptureSessions == nullptr || !rawCaptureSessions[slot].used) return -1;
     return (int)rawCaptureSessions[slot].packetCount;
 }
 
 int wifi_raw_capture_dropped(int sessionId) {
     int slot = sessionId - 1;
     if (slot < 0 || slot >= WIFI_CAP_MAX_SESSIONS) return -1;
-    if (!rawCaptureSessions[slot].used) return -1;
+    if (rawCaptureSessions == nullptr || !rawCaptureSessions[slot].used) return -1;
     return (int)rawCaptureSessions[slot].dropped;
 }
 
 int wifi_raw_capture_channel(int sessionId) {
     int slot = sessionId - 1;
     if (slot < 0 || slot >= WIFI_CAP_MAX_SESSIONS) return 0;
-    if (!rawCaptureSessions[slot].used) return 0;
+    if (rawCaptureSessions == nullptr || !rawCaptureSessions[slot].used) return 0;
     return rawCaptureSessions[slot].channel;
 }
 
@@ -1434,7 +1498,7 @@ bool wifi_raw_capture_packet(
     uint16_t *len
 ) {
     int slot = sessionId - 1;
-    if (slot < 0 || slot >= WIFI_CAP_MAX_SESSIONS) return false;
+    if (slot < 0 || slot >= WIFI_CAP_MAX_SESSIONS || rawCaptureSessions == nullptr) return false;
 
     RawCaptureSession &s = rawCaptureSessions[slot];
     portENTER_CRITICAL(&rawCaptureMux);
@@ -1468,7 +1532,7 @@ bool wifi_raw_set_promiscuous(bool enable, uint8_t channel) {
 
     rawStandalonePromisc = false;
     int sid = rawActiveSession;
-    if (sid >= 0) { rawCaptureSessions[sid].running = false; }
+    if (sid >= 0 && rawCaptureSessions != nullptr) { rawCaptureSessions[sid].running = false; }
     rawActiveSession = -1;
     rawCapturePromisc = false;
     raw_promisc_apply(false);
@@ -1477,7 +1541,7 @@ bool wifi_raw_set_promiscuous(bool enable, uint8_t channel) {
 
 void wifi_raw_cleanup() {
     rawActiveSession = -1;
-    for (int i = 0; i < WIFI_CAP_MAX_SESSIONS; i++) {
+    for (int i = 0; rawCaptureSessions != nullptr && i < WIFI_CAP_MAX_SESSIONS; i++) {
         rawCaptureSessions[i].running = false;
         if (rawCaptureSessions[i].pool != NULL) {
             free(rawCaptureSessions[i].pool);

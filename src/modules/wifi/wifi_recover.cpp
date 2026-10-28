@@ -939,14 +939,14 @@ void wifi_crack_handshake(const String &wordlist_path, const String &pcap_path) 
 
     FS *fs = nullptr;
     if (!getFsStorage(fs)) {
-        setCpuFrequencyMhz(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
+        setCpuFrequencyMhz(batterySaverClock(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ));
         displayError("No filesystem available", true);
         return;
     }
 
     HandshakeData hs;
     if (!parse_pcap_handshake(*fs, pcap_path, hs)) {
-        setCpuFrequencyMhz(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
+        setCpuFrequencyMhz(batterySaverClock(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ));
         displayError("Failed to parse handshake", true);
         vTaskDelay(pdMS_TO_TICKS(3000));
         return;
@@ -967,7 +967,7 @@ void wifi_crack_handshake(const String &wordlist_path, const String &pcap_path) 
         padprintln("SSID not found in PCAP");
         String ssid = keyboard("", 32, "Enter SSID:");
         if (ssid.length() == 0 || ssid == "\x1B") {
-            setCpuFrequencyMhz(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
+            setCpuFrequencyMhz(batterySaverClock(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ));
             displayError("SSID required", true);
             return;
         }
@@ -980,14 +980,14 @@ void wifi_crack_handshake(const String &wordlist_path, const String &pcap_path) 
 
     File wf = fs->open(wordlist_path, FILE_READ);
     if (!wf) {
-        setCpuFrequencyMhz(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
+        setCpuFrequencyMhz(batterySaverClock(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ));
         displayError("Cannot open wordlist", true);
         return;
     }
 
     WordlistReader reader;
     if (!reader.init(&wf)) {
-        setCpuFrequencyMhz(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
+        setCpuFrequencyMhz(batterySaverClock(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ));
         displayError("Out of memory", true);
         return;
     }
@@ -1002,7 +1002,7 @@ void wifi_crack_handshake(const String &wordlist_path, const String &pcap_path) 
     shared.done_sem = xSemaphoreCreateBinary();
 
     if (!shared.queue || !shared.done_sem) {
-        setCpuFrequencyMhz(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
+        setCpuFrequencyMhz(batterySaverClock(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ));
         displayError("Queue alloc failed", true);
         if (shared.queue) vQueueDelete(shared.queue);
         if (shared.done_sem) vSemaphoreDelete(shared.done_sem);
@@ -1114,7 +1114,7 @@ void wifi_crack_handshake(const String &wordlist_path, const String &pcap_path) 
     }
 
     // Restore CPU frequency to firmware default before returning
-    setCpuFrequencyMhz(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
+    setCpuFrequencyMhz(batterySaverClock(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ));
 
     vTaskDelay(pdMS_TO_TICKS(200));
 }

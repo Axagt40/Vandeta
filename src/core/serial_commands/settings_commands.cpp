@@ -90,6 +90,8 @@ uint32_t settingsCallback(cmd *c) {
     if (setting_name == "usbDebug") bruceConfig.setUsbDebug(setting_value.toInt());
     if (setting_name == "usbDebugDevMode") bruceConfig.setUsbDebugDevMode(setting_value.toInt());
     if (setting_name == "usbDebugBinary") bruceConfig.setUsbDebugBinary(setting_value.toInt());
+    if (setting_name == "batterySaver") bruceConfig.setBatterySaver(setting_value.toInt());
+    if (setting_name == "chargeLimit") bruceConfig.setChargeLimit(setting_value.toInt());
     if (setting_name == "disabledMenus") bruceConfig.addDisabledMenu(setting_value);
 
     return true;

@@ -12,8 +12,22 @@
 // State
 // ============================================================================
 
-static BleCapturedPacket bleCap[BLE_CAP_MAX_PACKETS];
+// The capture table (48 x 48 B) is only touched while a capture page is open, so
+// it is allocated from PSRAM on first use (internal heap as the fallback) instead
+// of holding internal DRAM in .bss for every session - the same pattern as the
+// other per-feature scratch areas (DISCOVERIES 79). Every reader is bounded by
+// bleCapCount, and the three writers below ensure the table first, so a null
+// pointer can never be indexed.
+static BleCapturedPacket *bleCap = nullptr;
 static int bleCapCount = 0;
+
+static bool bleCapEnsure() {
+    if (bleCap) return true;
+    const size_t bytes = sizeof(BleCapturedPacket) * BLE_CAP_MAX_PACKETS;
+    bleCap = (BleCapturedPacket *)(psramFound() ? ps_malloc(bytes) : malloc(bytes));
+    if (bleCap) memset(bleCap, 0, bytes);
+    return bleCap != nullptr;
+}
 static int bleCapDropped = 0;
 static bool bleCapScanning = false;
 static bool bleCapInitFailed = false; // latched: stop retrying within this boot
@@ -58,7 +72,8 @@ const char *bleCaptureFolder() { return "/BruceBLE"; }
 class BleCaptureCallbacks : public NimBLEScanCallbacks {
     void onResult(const NimBLEAdvertisedDevice *dev) override {
         if (dev == nullptr) return;
-        if (bleCapCount >= BLE_CAP_MAX_PACKETS) {
+        // Out of table memory: count the loss instead of dropping out of the scan.
+        if (!bleCapEnsure() || bleCapCount >= BLE_CAP_MAX_PACKETS) {
             bleCapDropped++;
             return;
         }
@@ -137,6 +152,12 @@ bool bleCaptureStart(uint32_t maxMs) {
     if (bleCapTask != nullptr) return false;
     if (maxMs < 200) maxMs = 200;
     if (maxMs > 600000) maxMs = 600000;
+    // Allocate the table before the scan starts, not from the scan callback: a
+    // capture that cannot store anything should refuse to start.
+    if (!bleCapEnsure()) {
+        serialDevice->println("[BLE] capture table: out of RAM");
+        return false;
+    }
 
     bleCapStopReq = false;
     bleCaptureClear();
@@ -367,6 +388,10 @@ int bleCaptureLoad(const String &path, String *labelOut) {
     if (!fs->exists(full)) return 0;
     File f = fs->open(full, FILE_READ);
     if (!f) return 0;
+    if (!bleCapEnsure()) {
+        f.close();
+        return 0;
+    }
 
     bleCaptureClear();
     while (f.available() && bleCapCount < BLE_CAP_MAX_PACKETS) {
@@ -562,6 +587,10 @@ static void bleMenuStartCapture() {
         }
         vTaskDelay(pdMS_TO_TICKS(50));
     }
+    // The scan task owns the scan object; it must be gone before the stack is
+    // pulled down, or the teardown races a task that is still calling into
+    // NimBLE. bleCaptureStop() waits for the task, so this is the ordering that
+    // matters when the page is closed with a capture still running.
     if (bleCaptureRunning()) bleCaptureStop();
 
     drawMainBorderWithTitle("BLE Capture");
@@ -588,8 +617,15 @@ static void bleMenuShowPackets(const String &filter) {
         if (!bleCapturePacket(idx[i], &p)) continue;
         lines[written++] = bleCaptureDescribe(p).substring(0, 40);
     }
-    if (written == 0) lines[written++] = "No packets match";
-    else lines[written++] = String("Showing ") + String(written) + "/" + String(n);
+    if (written == 0) {
+        lines[written++] = "No packets match";
+    } else {
+        // Read the count BEFORE the increment: `lines[written++] = ... written ...`
+        // reads and writes `written` in one unsequenced expression, which is
+        // undefined behaviour (gcc reports it as -Wsequence-point).
+        int shown = written;
+        lines[written++] = String("Showing ") + String(shown) + "/" + String(n);
+    }
     bleShowLines("Packets", lines, written);
 }
 
@@ -638,6 +674,12 @@ static void bleMenuDetailedScan() {
 
 void bleCaptureMenu() {
     static String filter = "";
+    // Leaving this page used to keep the BLE controller up: BLE Detector hands
+    // back ~106 KB of internal RAM after its teardown, this page handed back
+    // ~49 KB, i.e. the whole stack stayed held (measured 2026-10-27). Remember
+    // whether the stack was already up when we arrived, so a caller that owns it
+    // (BLE Suite, the packet-monitor tap) is not torn down underneath itself.
+    const bool bleWasUpOnEntry = NimBLEDevice::isInitialized();
 AGAIN:
     options = {
         {"Start capture (5s)", []() { bleMenuStartCapture(); }                                    },
@@ -692,8 +734,14 @@ AGAIN:
     int selected = loopOptions(options, MENU_TYPE_SUBMENU, "Capture & Replay");
     // A negative index is the physical Back button: leave this page instead of
     // rebuilding it, which used to look like "Back reloads the current menu".
-    if (selected < 0) return;
-    if (returnToMenu) return; // "Main Menu" entry
+    if (selected < 0) goto DONE;
+    if (returnToMenu) goto DONE; // "Main Menu" entry
     // Any other entry: rebuild, so the Remote type label stays accurate.
     goto AGAIN;
+
+DONE:
+    if (bleCaptureRunning()) bleCaptureStop();
+    // Only tear down what this page brought up. stopBLEStack() is idempotent and
+    // no-ops when NimBLE is already down, so a second Back cannot double-free.
+    if (!bleWasUpOnEntry) stopBLEStack();
 }

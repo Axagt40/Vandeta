@@ -197,6 +197,55 @@ int nrfFindStrongestChannels(
     uint8_t *out, int maxOut, uint32_t dwellMs = 8, const NrfCaptureProgressFn &progress = nullptr
 );
 
+// ---------------------------------------------------------------------------
+// Unknown-remote hunt
+// ---------------------------------------------------------------------------
+
+/// Result of nrfCaptureHunt(): the on-air parameters of a remote whose protocol
+/// is NOT one of the known profiles. Everything a replay needs is here.
+struct NrfHuntResult {
+    bool found = false;
+    bool aborted = false;
+    uint8_t rate = NRF_RATE_1MBPS;   // NrfDataRate index of the hit
+    uint8_t addressWidth = 2;        // 2..5 bytes the chip was matching on
+    uint8_t payloadLen = 0;          // fixed RX payload length the frame arrived in
+    uint8_t channel = 0;             // channel the frame was heard on
+    uint16_t repeatCount = 0;        // how many identical copies were seen
+    uint16_t packetCount = 0;        // packets captured in the combo that hit
+    uint8_t payload[NRF_CAP_MAX_PAYLOAD] = {0}; // raw bytes (trailing zeros padded)
+};
+
+/// Progress of a hunt; returning false aborts it (that is how BACK stops one).
+struct NrfHuntProgress {
+    int step = 0;          // combo being tried, 0-based
+    int steps = 0;         // total combos in this sweep
+    uint8_t rate = 0;
+    uint8_t addressWidth = 0;
+    uint8_t payloadLen = 0;
+    uint16_t packets = 0;  // packets seen in the combo so far
+};
+
+typedef std::function<bool(const NrfHuntProgress &p)> NrfHuntProgressFn;
+
+/// Hunt an unknown 2.4 GHz remote by sweeping the receive parameters, because a
+/// single data rate + address width is why the Spectrum sees a remote that raw
+/// capture never hears: the chip filters by address in hardware, and a remote
+/// using another rate/width is dropped before software runs.
+///
+/// It first finds the busiest channels (pressing the remote during the scan is
+/// what makes them visible), then tries every data rate (1M/2M/250k) x address
+/// width (2..5) x payload length (8/16/24/32) on just those channels, ~2 s each.
+/// A combo is a hit when the same frame repeats >= 3 times, because a remote
+/// repeats its command and ambient 2.4 GHz noise does not. Stops on the first
+/// hit. `msPerCombo` is clamped to 200..5000 ms and defaults to 1200 ms, so a
+/// full 48-combo sweep takes about a minute plus the channel scans.
+///
+/// The radio is put back exactly where the caller had it (rate, channel and the
+/// applied profile, or the noise configuration) on every exit path, including an
+/// abort. The packets of the combo that hit stay in the capture buffer so they
+/// can be replayed straight away.
+NrfHuntResult nrfCaptureHunt(uint32_t msPerCombo = 1200, const NrfHuntProgressFn &progress = nullptr);
+
 int nrfCaptureCount();
 int nrfCaptureDropped();
 bool nrfCapturePacket(int index, NrfCapturedPacket *out);

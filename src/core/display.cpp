@@ -144,6 +144,15 @@ void panelSleep(bool on) {
 }
 
 bool __attribute__((weak)) isCharging() { return false; }
+
+// Battery charge limit: boards with a programmable charger override these in
+// their interface.cpp. The defaults report "no charger", which is honest for a
+// board the firmware cannot control.
+bool __attribute__((weak)) setChargeLimitPercent(int percent) {
+    (void)percent;
+    return false;
+}
+int __attribute__((weak)) getChargeLimitVoltage() { return 0; }
 /***************************************************************************************
 ** Function name: displayScrollingText
 ** Description:   Scroll large texts into screen

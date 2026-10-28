@@ -19,6 +19,7 @@ private:
     void audioMenu(void);
     void systemMenu(void);
     void advancedMenu(void);
+    void batteryMenu(void);
     void powerMenu(void);
     void pinsMenu(void);
     void usbDebugMenu(void);

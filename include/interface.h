@@ -83,3 +83,20 @@ void checkReboot();
 ** Description:   Determines if the device is charging
 ***************************************************************************************/
 bool isCharging();
+
+/***************************************************************************************
+** Function name: setChargeLimitPercent()
+** location: interface.cpp (per board)
+** Description:   Applies a battery charge limit (approximate percent, 100 = full) to
+**                the board's charger. Returns false when the board has no
+**                programmable charger or the value could not be written.
+***************************************************************************************/
+bool setChargeLimitPercent(int percent);
+
+/***************************************************************************************
+** Function name: getChargeLimitVoltage()
+** location: interface.cpp (per board)
+** Description:   Reads back the charger's charge-target voltage in mV, or 0 when the
+**                board has no readable charger.
+***************************************************************************************/
+int getChargeLimitVoltage();

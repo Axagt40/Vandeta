@@ -8,11 +8,39 @@
 // re-runs i2c.begin() with different pins (or a fresh interpreter run acquires it again).
 static TwoWire *jsI2CBus = nullptr;
 
-static void i2c_require_ready(JSContext *ctx) {
+// Returns false with the exception already raised. Callers must return
+// JS_EXCEPTION then - continuing after a throw here used to dereference a null
+// bus (the throw does not unwind C code by itself).
+static bool i2c_require_ready(JSContext *ctx) {
+    if (!jsI2CBus) {
+        JS_ThrowInternalError(ctx, "i2c not initialized: call i2c.begin(sda,scl,hz) first");
+        return false;
+    }
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue v = JS_GetPropertyStr(ctx, global, "\xffi2c_ready");
     bool ready = JS_IsBool(v) ? JS_ToBool(ctx, v) : false;
-    if (!ready) JS_ThrowInternalError(ctx, "i2c not initialized: call i2c.begin(sda,scl,hz) first");
+    if (!ready) {
+        JS_ThrowInternalError(ctx, "i2c not initialized: call i2c.begin(sda,scl,hz) first");
+        return false;
+    }
+    return true;
+}
+
+// A read returns an array of byte numbers: mquickjs has no JS_NewArrayBufferCopy(),
+// so an ArrayBuffer cannot be handed back from a binding. Pinned, because
+// JS_SetPropertyUint32() grows the backing store and the heap may compact.
+static JSValue i2c_bytes_to_array(JSContext *ctx, const uint8_t *buf, size_t len) {
+    JSGCRef arr_ref;
+    JSValue *arr = JS_PushGCRef(ctx, &arr_ref);
+    *arr = JS_NewArray(ctx, (int)len);
+    if (JS_IsException(*arr)) {
+        JS_PopGCRef(ctx, &arr_ref);
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    for (size_t i = 0; i < len; i++) {
+        JS_SetPropertyUint32(ctx, *arr, (uint32_t)i, JS_NewInt32(ctx, buf[i]));
+    }
+    return JS_PopGCRef(ctx, &arr_ref);
 }
 
 JSValue native_i2c_begin(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
@@ -37,7 +65,7 @@ JSValue native_i2c_begin(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
 }
 
 JSValue native_i2c_scan(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
-    i2c_require_ready(ctx);
+    if (!i2c_require_ready(ctx)) return JS_EXCEPTION;
     // Pinned: JS_SetPropertyUint32() can allocate (the backing store grows), so a
     // plain local would not survive the loop.
     JSGCRef arr_ref;
@@ -58,7 +86,7 @@ JSValue native_i2c_scan(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
 }
 
 JSValue native_i2c_write(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
-    i2c_require_ready(ctx);
+    if (!i2c_require_ready(ctx)) return JS_EXCEPTION;
     int addr = 0;
     if (argc > 0 && JS_IsNumber(ctx, argv[0])) JS_ToInt32(ctx, &addr, argv[0]);
     std::vector<uint8_t> tmp;
@@ -89,22 +117,23 @@ JSValue native_i2c_write(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
 }
 
 JSValue native_i2c_read(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
-    i2c_require_ready(ctx);
+    if (!i2c_require_ready(ctx)) return JS_EXCEPTION;
     int addr = 0;
     int len = 0;
     if (argc > 0 && JS_IsNumber(ctx, argv[0])) JS_ToInt32(ctx, &addr, argv[0]);
     if (argc > 1 && JS_IsNumber(ctx, argv[1])) JS_ToInt32(ctx, &len, argv[1]);
+    if (addr < 1 || addr > 127) return JS_ThrowRangeError(ctx, "i2c.read: addr must be 1..127");
+    if (len < 1 || len > 255) return JS_ThrowRangeError(ctx, "i2c.read: len must be 1..255");
+
     size_t got = jsI2CBus->requestFrom((uint8_t)addr, (uint8_t)len, (uint8_t)true);
-    std::vector<uint8_t> buf(got);
-    for (size_t i = 0; i < got && jsI2CBus->available(); i++) buf[i] = jsI2CBus->read();
-    // TODO: Create JS_NewArrayBufferCopy in MicroQuickJS
-    // JSValue arrbuf = JS_NewArrayBufferCopy(ctx, (const uint8_t *)buf.data(), got);
-    // return arrbuf;
-    return JS_ThrowInternalError(ctx, "i2c.read: not implemented");
+    uint8_t buf[255];
+    size_t n = 0;
+    while (n < got && jsI2CBus->available()) buf[n++] = (uint8_t)jsI2CBus->read();
+    return i2c_bytes_to_array(ctx, buf, n);
 }
 
 JSValue native_i2c_write_read(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
-    i2c_require_ready(ctx);
+    if (!i2c_require_ready(ctx)) return JS_EXCEPTION;
     int addr = 0;
     if (argc > 0 && JS_IsNumber(ctx, argv[0])) JS_ToInt32(ctx, &addr, argv[0]);
     std::vector<uint8_t> tmp;
@@ -130,18 +159,20 @@ JSValue native_i2c_write_read(JSContext *ctx, JSValue *this_val, int argc, JSVal
     int wait = 0;
     if (argc > 3 && JS_IsNumber(ctx, argv[3])) JS_ToInt32(ctx, &wait, argv[3]);
 
+    if (addr < 1 || addr > 127) return JS_ThrowRangeError(ctx, "i2c.writeRead: addr must be 1..127");
+    if (rlen < 1 || rlen > 255) return JS_ThrowRangeError(ctx, "i2c.writeRead: read length must be 1..255");
+    if (wait < 0) wait = 0;
+
     jsI2CBus->beginTransmission((uint8_t)addr);
     jsI2CBus->write(wbuf, (size_t)wlen);
     uint8_t err = jsI2CBus->endTransmission(false);
     if (err != 0) { return JS_NewInt32(ctx, -err); }
     if (wait > 0) delay(wait);
     size_t got = jsI2CBus->requestFrom((uint8_t)addr, (uint8_t)rlen, (uint8_t)true);
-    std::vector<uint8_t> buf(got);
-    for (size_t i = 0; i < got && jsI2CBus->available(); i++) buf[i] = jsI2CBus->read();
-    // TODO: Create JS_NewArrayBufferCopy in MicroQuickJS
-    // JSValue arrbuf = JS_NewArrayBufferCopy(ctx, (const uint8_t *)buf.data(), got);
-    // return arrbuf;
-    return JS_ThrowInternalError(ctx, "i2c.writeRead: not implemented");
+    uint8_t buf[255];
+    size_t n = 0;
+    while (n < got && jsI2CBus->available()) buf[n++] = (uint8_t)jsI2CBus->read();
+    return i2c_bytes_to_array(ctx, buf, n);
 }
 
 #endif

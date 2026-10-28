@@ -2,6 +2,7 @@
 #include "protocols/rf_config.h"
 #include "protocols/rf_decoder.h"
 #include "rf_utils.h"
+#include "core/ui_gradient.h" // the same pink -> purple ramp the UI draws its chrome with
 #include <ELECHOUSE_CC1101_SRC_DRV.h>
 static bool
 record_rmt_rx_done_callback(rmt_channel_t *channel, const rmt_rx_done_event_data_t *edata, void *user_data) {
@@ -27,7 +28,13 @@ void sinewave_animation() {
         int lastY = centerY + amplitude * sin(lastPhase + x * 0.05);
         int y = centerY + amplitude * sin(phase + x * 0.05);
         tft.drawFastVLine(x, lastY, sinewaveWidth, bruceConfig.bgColor);
-        tft.drawFastVLine(x, y, sinewaveWidth, bruceConfig.priColor);
+        // The wave is drawn a column at a time, so it can carry the UI's own
+        // pink -> purple ramp instead of one flat colour: each column takes the
+        // colour the frame/status bar above it already uses (core/ui_gradient.cpp),
+        // which makes the recorder look like part of the same screen family.
+        // Falls back to priColor when Config > Display & UI > UI Color > Gradient
+        // is off, so nothing changes for a user who turned it off.
+        tft.drawFastVLine(x, y, sinewaveWidth, uiGradientColorAt(x));
     }
 
     lastPhase = phase;
@@ -77,8 +84,9 @@ void rf_raw_record_draw(RawRecordingStatus status) {
         int x = 20 + (int)(status.rssiCount * 1.35);
         int yTop = centerY - barHeight;
 
-        // Draw the bar
-        tft.drawFastVLine(x, yTop, barHeight * 2, bruceConfig.priColor);
+        // Draw the bar in the same per-column ramp as the waiting wave above, so
+        // the live RSSI trace reads as one continuous waveform.
+        tft.drawFastVLine(x, yTop, barHeight * 2, uiGradientColorAt(x));
     }
 }
 

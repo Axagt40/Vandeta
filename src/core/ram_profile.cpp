@@ -25,12 +25,14 @@ void ramProfileLog(const char *stage) {
         "largest=%7u dma=%7u | psram free=%8u\n",
         millis(),
         stage,
-        freeHeap,
-        minFreeEver,
-        internalFree,
-        internalLargest,
-        dmaLargest,
-        psramFree
+        // Cast to unsigned: uint32_t is `unsigned long` on xtensa, so %u would
+        // be a format mismatch even though the widths happen to match.
+        (unsigned)freeHeap,
+        (unsigned)minFreeEver,
+        (unsigned)internalFree,
+        (unsigned)internalLargest,
+        (unsigned)dmaLargest,
+        (unsigned)psramFree
     );
     Serial.flush();
 }

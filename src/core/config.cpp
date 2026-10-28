@@ -1,4 +1,5 @@
 #include "config.h"
+#include "core/settings.h"            // applyBatterySaver/applyChargeLimit on change
 #include "core/usb_debug/usbdebug.h" // applyEnabled/releaseResources on toggle
 #include "mifare_keys_manager.h"
 #include "sd_functions.h"
@@ -71,6 +72,8 @@ JsonDocument BruceConfig::toJson() const {
     setting["usbDebug"] = usbDebug;
     setting["usbDebugDevMode"] = usbDebugDevMode;
     setting["usbDebugBinary"] = usbDebugBinary;
+    setting["batterySaver"] = batterySaver;
+    setting["chargeLimit"] = chargeLimit;
     setting["uiGradient"] = uiGradient;
     setting["colorInverted"] = colorInverted;
 
@@ -421,8 +424,10 @@ void BruceConfig::fromFile(bool checkFS) {
         count++;
         log_e("Fail");
     }
-    // New key: a bruce.conf written before it existed simply has no entry, so
-    // it is not a failure - keep the default (on) instead of logging/counting.
+    // New keys: a bruce.conf written before they existed simply has no entry,
+    // so they are not failures - keep the defaults instead of logging/counting.
+    if (!setting["batterySaver"].isNull()) { batterySaver = setting["batterySaver"].as<int>(); }
+    if (!setting["chargeLimit"].isNull()) { chargeLimit = setting["chargeLimit"].as<int>(); }
     if (!setting["uiGradient"].isNull()) { uiGradient = setting["uiGradient"].as<int>() != 0; }
     if (!setting["colorInverted"].isNull()) {
         colorInverted = setting["colorInverted"].as<int>();
@@ -614,6 +619,8 @@ void BruceConfig::validateConfig() {
     validateUsbDebugValue();
     validateUsbDebugDevModeValue();
     validateUsbDebugBinaryValue();
+    validateBatterySaverValue();
+    validateChargeLimitValue();
     // One switch, three keys: `usbDebug` is the source of truth and the two
     // legacy aliases follow it. A /bruce.conf written by an older build can
     // still carry devMode=1 with usbDebug=0 (the old hidden page) or a
@@ -954,6 +961,34 @@ void BruceConfig::setUsbDebugBinary(int value) {
 void BruceConfig::validateUsbDebugBinaryValue() {
     if (usbDebugBinary > 1) usbDebugBinary = 1;
     if (usbDebugBinary < 0) usbDebugBinary = 0;
+}
+
+void BruceConfig::setBatterySaver(int value) {
+    batterySaver = value;
+    validateBatterySaverValue();
+    saveFile();
+    // Apply immediately: the saver changes the CPU clock and the backlight cap,
+    // so leaving it to the next boot would make the toggle look dead.
+    applyBatterySaver();
+}
+
+void BruceConfig::validateBatterySaverValue() {
+    if (batterySaver > 1) batterySaver = 1;
+    if (batterySaver < 0) batterySaver = 0;
+}
+
+void BruceConfig::setChargeLimit(int value) {
+    chargeLimit = value;
+    validateChargeLimitValue();
+    saveFile();
+    // Push the new target voltage to the charger now (no-op on boards without
+    // a programmable one - setChargeLimitPercent() reports that).
+    applyChargeLimit();
+}
+
+void BruceConfig::validateChargeLimitValue() {
+    if (chargeLimit < 0) chargeLimit = 0;
+    if (chargeLimit > 3) chargeLimit = 3;
 }
 
 void BruceConfig::setColorInverted(int value) {

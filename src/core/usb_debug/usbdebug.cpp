@@ -2,6 +2,7 @@
 
 #include "core/sd_functions.h"
 #include "core/serial_commands/debug_commands.h" // debugPollUiWatch()
+#include "core/settings.h"                    // batterySaverClock()
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -104,16 +105,39 @@ static uint32_t s_lastPoll = 0;
 
 #define USBDBG_ERR_LINES 24
 #define USBDBG_ERR_LEN 180
-static char s_errRing[USBDBG_ERR_LINES][USBDBG_ERR_LEN];
+// The error ring (4,320 B) and the binary RX buffer (2,108 B) are static scratch
+// that only exists for the Developer Options session, so they are allocated on
+// first use - from PSRAM when the board has it - instead of sitting in .bss for
+// every boot. On this board internal DRAM is the scarce resource (DISCOVERIES 64,
+// 73, 79), and 6.4 KB of it is worth having back even when the mode is on.
+static char (*s_errRing)[USBDBG_ERR_LEN] = nullptr;
 static volatile size_t s_errHead = 0;   // next slot to write
 static volatile size_t s_errCount = 0;  // valid lines
 static volatile size_t s_errStreamed = 0; // how many already printed
 static portMUX_TYPE s_errMux = portMUX_INITIALIZER_UNLOCKED;
 
+// Both allocations happen BEFORE the critical section that guards the ring: a
+// heap call inside a portENTER_CRITICAL block can deadlock the allocator.
+static bool s_errRingEnsure() {
+    if (s_errRing) return true;
+    const size_t bytes = (size_t)USBDBG_ERR_LINES * USBDBG_ERR_LEN;
+    s_errRing = (char (*)[USBDBG_ERR_LEN])(psramFound() ? ps_malloc(bytes) : malloc(bytes));
+    if (s_errRing) memset(s_errRing, 0, bytes);
+    return s_errRing != nullptr;
+}
+
 // binary parser
-static uint8_t s_rxBuf[USBDBG_MAX_PAYLOAD + 8];
+static uint8_t *s_rxBuf = nullptr;
 static size_t s_rxLen = 0;
 static size_t s_rxWant = 0;
+
+static bool s_rxBufEnsure() {
+    if (s_rxBuf) return true;
+    const size_t bytes = USBDBG_MAX_PAYLOAD + 8;
+    s_rxBuf = (uint8_t *)(psramFound() ? ps_malloc(bytes) : malloc(bytes));
+    if (s_rxBuf) memset(s_rxBuf, 0, bytes);
+    return s_rxBuf != nullptr;
+}
 
 static File s_putFile;
 static String s_putPath;
@@ -201,6 +225,7 @@ static void recordLogLine(const char *line) {
                  strstr(line, "ERROR") || strstr(line, "error:") || strstr(line, "abort") ||
                  strstr(line, "assert");
     if (!isErr) return;
+    if (!s_errRingEnsure()) return; // no room for the ring: drop the line, never crash
 
     portENTER_CRITICAL(&s_errMux);
     size_t slot = s_errHead;
@@ -293,7 +318,7 @@ bool devMode() { return bruceConfig.usbDebugDevMode != 0; }
 
 void applyDevMode(bool on) {
     if (on) {
-        setCpuFrequencyMhz(240); // speed over stability
+        setCpuFrequencyMhz(batterySaverClock(240)); // speed over stability (Battery Saver still wins)
         // Hot reload is part of developer mode, not a separate switch: it used
         // to be a "Hot Reload: ON/OFF" row that did nothing because nothing was
         // watched. `load()` now arms a watch on every script it runs, so this
@@ -817,7 +842,7 @@ void printErrors(bool clearRing) {
     size_t count = s_errCount;
     portEXIT_CRITICAL(&s_errMux);
 
-    if (count == 0) {
+    if (count == 0 || s_errRing == nullptr) {
         outln("Log ring: empty (no error-level lines captured)");
         return;
     }
@@ -840,7 +865,7 @@ void printErrors(bool clearRing) {
 }
 
 static void streamErrors() {
-    if (!s_errorStream) return;
+    if (!s_errorStream || s_errRing == nullptr) return;
     size_t count = s_errCount;
     if (count == s_errStreamed) return;
     if (count < s_errStreamed) s_errStreamed = 0; // ring was cleared
@@ -1132,6 +1157,7 @@ static void handleFrame(uint8_t type, const uint8_t *payload, size_t len) {
 }
 
 static void feedBinary(uint8_t b) {
+    if (!s_rxBufEnsure()) return; // only reachable with binary mode on
     // Frame: A5 5A type len_lo len_hi payload... crc_lo crc_hi
     if (s_rxLen < 5) {
         if (s_rxLen == 0 && b != USBDBG_MAGIC0) return; // resync

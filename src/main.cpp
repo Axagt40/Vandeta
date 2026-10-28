@@ -660,6 +660,11 @@ void setup() {
     // Some board interfaces initialize or reset the backlight in post-setup,
     // so re-apply the stored brightness after that stage completes.
     setBrightness(bruceConfig.bright, false);
+    // Battery settings (Config > Battery): the persisted charge limit is pushed
+    // to the charger and Battery Saver applies its clock/backlight cap. Both are
+    // no-ops when off, so this runs on every boot.
+    applyChargeLimit();
+    applyBatterySaver();
     // end of post gpio begin
 
     // #ifndef USE_TFT_eSPI_TOUCH

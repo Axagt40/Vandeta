@@ -309,7 +309,19 @@ bool copyFile(FS fs, String path) {
 ** Description:   paste file to new folder
 ***************************************************************************************/
 bool pasteFile(FS fs, String path) {
-    // Using Global Buffer
+    // Two destinations, one rule: a folder keeps the file's own name (this is
+    // what the Files menu passes), anything else IS the destination file. The
+    // old code always appended the source name, so `storage copy /a.txt /b.txt`
+    // tried to open "/b.txt/a.txt" and failed - the documented bug that the
+    // Known Issues list worked around with "use read+write instead".
+    String dest = path;
+    bool destIsDir = false;
+    {
+        File probe = fs.open(path);
+        destIsDir = probe && probe.isDirectory();
+        if (probe) probe.close();
+    }
+    if (destIsDir) { dest = path + "/" + fileToCopy.substring(fileToCopy.lastIndexOf('/') + 1); }
 
     // Abrir o arquivo original
     File sourceFile = fs.open(fileToCopy, FILE_READ);
@@ -319,7 +331,7 @@ bool pasteFile(FS fs, String path) {
     }
 
     // Criar o arquivo de destino
-    File destFile = fs.open(path + "/" + fileToCopy.substring(fileToCopy.lastIndexOf('/') + 1), FILE_WRITE);
+    File destFile = fs.open(dest, FILE_WRITE);
     if (!destFile) {
         // Serial.println("Falha ao criar o arquivo de destino");
         sourceFile.close();

@@ -814,6 +814,180 @@ int nrfChooseReplayChannels(const NrfCapturedPacket *pkts, int count, uint8_t *c
 }
 
 // ============================================================================
+// Unknown-remote hunt
+// ============================================================================
+
+// How many channels a hunt listens on at once. An unknown remote transmits on a
+// handful of fixed frequencies; the strongest ones found in the spectrum are the
+// best guess, and 8 keeps a full round of the channel list at ~8 ms so a burst
+// lasting a few ms is still caught.
+#define NRF_HUNT_CHANNELS 8
+
+/// Noise addresses of an arbitrary width. Width 2 is the exact table the
+/// Spectrum uses (the documented pseudo-promiscuous configuration); wider widths
+/// reuse the same degenerate 0x55/0xAA patterns, which is what makes the address
+/// correlator give up on a frame addressed to somebody else.
+static void nrfHuntNoiseAddr(uint8_t width, uint8_t pipe, uint8_t *out) {
+    out[0] = NRF_NOISE_ADDR[pipe][0];
+    for (uint8_t i = 1; i < width; i++) out[i] = (i & 1) ? 0xAA : 0x55;
+}
+
+/// Like nrfApplyNoiseConfig(), but with a caller-chosen address width and a fixed
+/// receive payload length. A fixed length is what makes the hunt measurable: a
+/// dynamic payload of an unknown frame is reported with the wrong size, and the
+/// grouping that decides a hit needs one comparable length.
+static void nrfHuntApplyConfig(uint8_t width, uint8_t payloadLen) {
+    NRFradio.stopListening();
+    NRFradio.setAutoAck(false);
+    NRFradio.disableCRC();
+    NRFradio.setAddressWidth(width);
+    NRFradio.setDataRate(nrfRateEnum(nrfCurrRate));
+    NRFradio.disableDynamicPayloads();
+    NRFradio.setPayloadSize(payloadLen);
+    for (uint8_t i = 0; i < 6; i++) {
+        uint8_t addr[5] = {0};
+        nrfHuntNoiseAddr(width, i, addr);
+        NRFradio.openReadingPipe(i, addr);
+    }
+    NRFradio.setChannel(nrfCurrChannel);
+    NRFradio.flush_rx();
+    NRFradio.startListening();
+    nrfRxPayloadLen = payloadLen;
+    nrfCurrProfile = NRF_PROFILE_GENERIC;
+    nrfPromiscuous = true;
+    nrfNormalMode = false;
+}
+
+/// Most-repeated payload currently in the capture ring. Returns the repeat count
+/// and writes the index of one copy into `bestIdx` (-1 when the ring is empty).
+static int nrfHuntBestRepeat(int *bestIdx) {
+    int best = 0;
+    if (bestIdx) *bestIdx = -1;
+    for (int i = 0; i < nrfBufCount; i++) {
+        int count = 0;
+        const NrfCapturedPacket &a = nrfBuf[i];
+        for (int j = i; j < nrfBufCount; j++) {
+            const NrfCapturedPacket &b = nrfBuf[j];
+            if (a.len != b.len) continue;
+            bool same = true;
+            for (int k = 0; k < a.len; k++) {
+                if (a.data[k] != b.data[k]) {
+                    same = false;
+                    break;
+                }
+            }
+            if (same) count++;
+        }
+        if (count > best) {
+            best = count;
+            if (bestIdx) *bestIdx = i;
+        }
+    }
+    return best;
+}
+
+NrfHuntResult nrfCaptureHunt(uint32_t msPerCombo, const NrfHuntProgressFn &progress) {
+    NrfHuntResult res;
+    if (!nrfCapReady) return res;
+    if (msPerCombo < 200) msPerCombo = 200;
+    if (msPerCombo > 5000) msPerCombo = 5000;
+
+    // Everything the hunt changes is put back on the way out, so a hunt started
+    // from the RGB page or from a console session leaves the radio usable.
+    uint8_t entryChannel = nrfCurrChannel;
+    uint8_t entryRate = nrfCurrRate;
+    int entryProfile = nrfCurrProfile;
+    bool entryNormal = nrfNormalMode;
+
+    static const uint8_t rates[3] = {NRF_RATE_1MBPS, NRF_RATE_2MBPS, NRF_RATE_250KBPS};
+    static const uint8_t widths[4] = {2, 3, 4, 5};
+    static const uint8_t lens[4] = {8, 16, 24, 32};
+    const int steps = 3 * 4 * 4;
+    int step = 0;
+    bool abort = false;
+
+    uint8_t chans[NRF_HUNT_CHANNELS] = {0};
+    int nc = 0;
+
+    for (int r = 0; r < 3 && !abort; r++) {
+        // Re-scan the band once per data rate: a remote is pressed repeatedly
+        // while the hunt runs, and its channels are only visible in the scan
+        // that happens to overlap a press.
+        nrfCurrRate = rates[r];
+        nc = nrfFindStrongestChannels(chans, NRF_HUNT_CHANNELS, 8);
+        if (nc <= 0) {
+            // Nothing seen yet: still try, spread over the band, rather than
+            // giving up before the user has pressed the remote once.
+            nc = NRF_HUNT_CHANNELS;
+            for (int i = 0; i < nc; i++) chans[i] = (uint8_t)(i * 126 / nc);
+        }
+
+        for (int w = 0; w < 4 && !abort; w++) {
+            for (int l = 0; l < 4 && !abort; l++) {
+                NrfHuntProgress hp;
+                hp.step = step;
+                hp.steps = steps;
+                hp.rate = rates[r];
+                hp.addressWidth = widths[w];
+                hp.payloadLen = lens[l];
+                hp.packets = 0;
+                if (progress && !progress(hp)) {
+                    abort = true;
+                    break;
+                }
+
+                nrfHuntApplyConfig(widths[w], lens[l]);
+                nrfCaptureRunChannels(chans, nc, msPerCombo, 1, [&](const NrfCaptureProgress &cp) {
+                    if (!progress) return true;
+                    NrfHuntProgress p = hp;
+                    p.packets = (uint16_t)cp.units;
+                    if (!progress(p)) {
+                        abort = true;
+                        return false;
+                    }
+                    return true;
+                });
+                step++;
+                if (abort) break;
+
+                int bestIdx = -1;
+                int repeats = nrfHuntBestRepeat(&bestIdx);
+                if (repeats >= 3 && bestIdx >= 0) {
+                    res.found = true;
+                    res.rate = rates[r];
+                    res.addressWidth = widths[w];
+                    res.payloadLen = lens[l];
+                    res.repeatCount = (uint16_t)repeats;
+                    res.packetCount = (uint16_t)nrfBufCount;
+                    res.channel = nrfBuf[bestIdx].channel;
+                    memcpy(res.payload, nrfBuf[bestIdx].data, res.payloadLen > NRF_CAP_MAX_PAYLOAD
+                                                                  ? NRF_CAP_MAX_PAYLOAD
+                                                                  : res.payloadLen);
+                    abort = true; // stop the sweep the same way an abort does
+                    break;
+                }
+            }
+        }
+    }
+
+    res.aborted = abort && !res.found;
+
+    // Restore the radio exactly as the caller had it.
+    nrfCurrRate = entryRate;
+    if (entryNormal) {
+        nrfCaptureRestoreNormal();
+        NRFradio.setDataRate(nrfRateEnum(entryRate));
+    } else if (entryProfile >= 0) {
+        nrfCaptureApplyProfile(entryProfile, entryRate);
+    } else {
+        nrfCaptureSetPromiscuous(true);
+        NRFradio.setDataRate(nrfRateEnum(entryRate));
+    }
+    nrfCaptureSetChannel(entryChannel);
+    return res;
+}
+
+// ============================================================================
 // Shared menu helpers
 // ============================================================================
 
@@ -1093,12 +1267,73 @@ static void nrfMenuRgbCapture() {
     cap.finish(lines, w);
 }
 
+/// Hunt a remote whose protocol is none of the known profiles: sweep data rate,
+/// address width and payload length on the busiest channels until the same frame
+/// repeats. This is the answer to "the Spectrum sees my remote but capture never
+/// hears it" - the chip filters by address in hardware, so a single-rate /
+/// single-width capture simply never sees a remote using another setting.
+static void nrfMenuHunt() {
+    if (!nrfCaptureReady()) {
+        displayError("NRF24 not found", true);
+        return;
+    }
+    NrfRunScreen screen;
+    screen.begin("Hunt remote", "Keep pressing the remote");
+
+    uint32_t lastPaint = 0;
+    NrfHuntResult r = nrfCaptureHunt(1200, [&](const NrfHuntProgress &p) {
+        if (check(EscPress)) return false;
+        uint32_t now = millis();
+        if (now - lastPaint < 150) return true;
+        lastPaint = now;
+        tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+        tft.fillRect(8, 66, tftWidth - 16, 32, bruceConfig.bgColor);
+        tft.drawString(
+            String("Try ") + String(p.step + 1) + "/" + String(p.steps) + "  " + nrfRateName(p.rate), 10, 66
+        );
+        tft.drawString(
+            String("addr ") + String(p.addressWidth) + "  len " + String(p.payloadLen) + "  pkts " +
+                String(p.packets),
+            10, 82
+        );
+        return true;
+    });
+
+    String lines[5];
+    int w = 0;
+    if (r.found) {
+        lines[w++] = String("FOUND ") + nrfRateName(r.rate) + " addr " + String(r.addressWidth) + " len " +
+                     String(r.payloadLen);
+        lines[w++] = String("ch ") + String(2400 + r.channel) + "MHz x" + String(r.repeatCount) + " of " +
+                     String(r.packetCount);
+        static const char *HEXD = "0123456789ABCDEF";
+        for (int start = 0; start < r.payloadLen && start < 32; start += 16) {
+            String hex;
+            for (int i = start; i < start + 16 && i < r.payloadLen; i++) {
+                char h[3] = {HEXD[r.payload[i] >> 4], HEXD[r.payload[i] & 0x0F], 0};
+                hex += h;
+            }
+            lines[w++] = hex;
+        }
+        lines[w++] = "Replay it from Replay capture";
+    } else if (r.aborted) {
+        lines[w++] = "Stopped before a match";
+        lines[w++] = "Press the remote, then retry";
+    } else {
+        lines[w++] = "No repeating frame found";
+        lines[w++] = "Press the remote during the hunt";
+        lines[w++] = "and retry (48 combos tried)";
+    }
+    screen.finish(lines, w);
+}
+
 void nrfRawCaptureMenu() {
     nrfEnsureInit();
     int last = 0; // keep the cursor on the row that was just used
 AGAIN:
     options = {
         {"Capture (press remote)", []() { nrfMenuRgbCapture(); }                                    },
+        {"Hunt unknown remote", []() { nrfMenuHunt(); }                                             },
         {String("Preset: ") + (nrfCaptureGetProfile() >= 0
                                    ? String(NRF_SIGNAL_PROFILES[nrfCaptureGetProfile()].name)
                                    : String("Auto (find channels)")),

@@ -533,6 +533,9 @@ void runWhisperPairAttack(NimBLEAddress target);
 void runAdvancedExploit(NimBLEAddress target);
 void runAudioStackCrash(NimBLEAddress target);
 void runMediaCommandHijack(NimBLEAddress target);
+// Vandeta BLE Suite: capture HID reports from an advertising keyboard/remote
+// and replay them. Defined in BLE_Suite.cpp; declared here for the menu wiring.
+void runSessionHijack(NimBLEAddress target, const String &deviceName);
 void runHIDInjection(NimBLEAddress target);
 void runDuckyScriptAttack(NimBLEAddress target);
 void runPINBruteForce(NimBLEAddress target);

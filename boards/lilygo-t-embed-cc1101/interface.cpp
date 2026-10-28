@@ -29,6 +29,13 @@ XPowersPPM PPM;
 BQ27220 bq;
 #endif
 
+// True once the BQ25896 charger answered on I2C in _setup_gpio(). The charge
+// limit and its readback refuse to touch the bus when this is false (a board
+// variant without the chip, or an I2C failure at boot).
+#ifdef T_EMBED_1101
+static bool chargerReady = false;
+#endif
+
 #include "core/i2c_finder.h"
 #include "modules/rf/rf_utils.h"
 #include <Adafruit_PN532.h>
@@ -67,6 +74,7 @@ void _setup_gpio() {
     setSysI2CBus(&Wire); // PPM/bq27220 live on the default Wire object (GROVE == sys_i2c on this variant)
     Wire.begin(SYS_I2C_SDA, SYS_I2C_SCL);
     pmu_ret = PPM.init(Wire, SYS_I2C_SDA, SYS_I2C_SCL, BQ25896_SLAVE_ADDRESS);
+    chargerReady = pmu_ret;
     if (pmu_ret) {
         // https://github.com/Xinyuan-LilyGO/T-Embed-CC1101/blob/3e6df69af51befdbd5c96761aca28b9a784413eb/examples/factory_test/factory_test.ino#L399-L425
 
@@ -383,3 +391,42 @@ bool isCharging() {
 #else
 bool isCharging() { return false; }
 #endif
+
+/***************************************************************************************
+** Function name: setChargeLimitPercent()
+** Description:   Applies a charge limit to the BQ25896. The chip's charge-target
+**                voltage steps in 16 mV and its minimum is 3.84 V, so the percent
+**                is mapped to a nearest allowed value:
+**                  100% -> 4208 mV (the factory target)
+**                   90% -> 4128 mV
+**                   80% -> 4032 mV
+**                   70% -> 3936 mV
+**                Returns false when the charger was not initialised, or when the
+**                chip refused the write.
+***************************************************************************************/
+bool setChargeLimitPercent(int percent) {
+#ifdef T_EMBED_1101
+    if (!chargerReady) return false;
+    int mv;
+    if (percent >= 100) mv = 4208;
+    else if (percent >= 90) mv = 4128;
+    else if (percent >= 80) mv = 4032;
+    else mv = 3936;
+    return PPM.setChargeTargetVoltage(mv);
+#else
+    return false;
+#endif
+}
+
+/***************************************************************************************
+** Function name: getChargeLimitVoltage()
+** Description:   Reads the BQ25896's charge-target voltage back off the chip (mV),
+**                which is how a host can confirm the limit really landed.
+***************************************************************************************/
+int getChargeLimitVoltage() {
+#ifdef T_EMBED_1101
+    return chargerReady ? (int)PPM.getChargeTargetVoltage() : 0;
+#else
+    return 0;
+#endif
+}

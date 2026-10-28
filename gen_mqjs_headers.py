@@ -60,6 +60,8 @@ INCLUDES = [
     'globals_js',
     'gpio_js',
     'i2c_js',
+    'spi_js',
+    'uart_js',
     'ir_js',
     'keyboard_js',
     'led_js',

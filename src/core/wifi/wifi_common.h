@@ -80,6 +80,60 @@ bool wifiEnsureRadioMem();
  */
 int wifiScanNets(bool showHidden = false);
 
+// ---------------------------------------------------------------------------
+// Streaming scan (one channel per poll) - what the Connect-to-WiFi page uses
+// ---------------------------------------------------------------------------
+// The library's own scan only publishes its results when the whole sweep is
+// done, so a page built on it stays blank for the full ~2.4 s. This engine
+// scans ONE channel per poll instead and hands the caller the networks of that
+// channel immediately, which is what lets the scan page show the first network
+// after ~150-300 ms and grow from there.
+
+struct WifiScanAp {
+    char ssid[33];
+    uint8_t bssid[6];
+    int8_t rssi;
+    uint8_t ch;
+    uint8_t enc; // wifi_auth_mode_t
+};
+
+/**
+ * @brief Begins a streaming scan, allocating the result table on first use
+ * @return false when neither PSRAM nor internal RAM could serve the table
+ */
+bool wifiScanStreamStart(bool showHidden = false);
+
+/**
+ * @brief Scans the next channel and returns after it (blocks ~150-300 ms)
+ * @return total number of networks collected so far
+ */
+int wifiScanStreamPoll();
+
+/** @brief true once every channel of the visit order has been scanned */
+bool wifiScanStreamDone();
+
+/** @brief Number of channels already visited (for the progress line) */
+int wifiScanStreamVisited();
+
+/** @brief Total number of channels this engine will visit */
+int wifiScanStreamChannelCount();
+
+/** @brief Stops scanning and releases the library's scan list (keeps results) */
+void wifiScanStreamStop();
+
+/** @brief Networks collected so far, in the order they were found */
+int wifiScanStreamCount();
+const WifiScanAp *wifiScanStreamAp(int index);
+
+/**
+ * @brief Sorts the collected networks strongest first.
+ *
+ * The live view paints rows in discovery order (append-only, no flicker); the
+ * picker is built afterwards and shows them the way the old menu did, best
+ * signal first.
+ */
+void wifiScanStreamSortByRssi();
+
 /**
  * @brief Ensures esp_netif and the default event loop are initialized (idempotent)
  */
@@ -88,9 +142,17 @@ void ensureWifiPlatform();
 // private
 /**
  * @brief Connects to wifiNetwork
+ *
+ * @param channel AP channel from the scan, 0 when unknown
+ * @param bssid   AP BSSID from the scan, nullptr when unknown
+ *
+ * A channel + BSSID that came from a scan makes the driver associate directly
+ * instead of sweeping all 13 channels to find the SSID first, which is most of
+ * the "connecting" wait. Both hints are dropped on a retry so a network that
+ * moved to another channel is still found.
  */
-bool _wifiConnect(const String &ssid, int encryption);
-bool _connectToWifiNetwork(const String &ssid, const String &pwd);
+bool _wifiConnect(const String &ssid, int encryption, uint8_t channel = 0, const uint8_t *bssid = nullptr);
+bool _connectToWifiNetwork(const String &ssid, const String &pwd, uint8_t channel = 0, const uint8_t *bssid = nullptr);
 
 /**
  * @brief sets up wifi in AP mode

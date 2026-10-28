@@ -17,8 +17,8 @@
 **********************************************************************/
 void ConfigMenu::optionsMenu() {
     returnToMenu = false;
+    int last = 0; // keep the cursor on the row that was just used
     while (true) {
-        int last = 0; // keep the cursor on the row that was just used
         // Check if we need to exit to Main Menu (e.g., DevMode disabled)
         if (returnToMenu) {
             returnToMenu = false; // Reset flag
@@ -41,6 +41,7 @@ void ConfigMenu::optionsMenu() {
             // Others > BadUSB & HID is untouched.
             {"HID Settings",  [this]() { setBadUSBBLEMenu(); }},
 #endif
+            {"Battery",       [this]() { batteryMenu(); }  },
             {"Power",         [this]() { powerMenu(); }    },
         };
 
@@ -67,8 +68,8 @@ void ConfigMenu::optionsMenu() {
 **  Display & UI configuration submenu with auto-rebuild
 **********************************************************************/
 void ConfigMenu::displayUIMenu() {
+    int last = 0; // keep the cursor on the row that was just used
     while (true) {
-        int last = 0; // keep the cursor on the row that was just used
         std::vector<Option> localOptions = {
             {"Brightness",  [this]() { setBrightnessMenu(); }               },
             {"Dim Time",    [this]() { setDimmerTimeMenu(); }               },
@@ -93,8 +94,8 @@ void ConfigMenu::displayUIMenu() {
 **********************************************************************/
 #ifdef HAS_RGB_LED
 void ConfigMenu::ledMenu() {
+    int last = 0; // keep the cursor on the row that was just used
     while (true) {
-        int last = 0; // keep the cursor on the row that was just used
         std::vector<Option> localOptions = {
             {"LED Color",
              [this]() {
@@ -134,8 +135,8 @@ void ConfigMenu::ledMenu() {
 **  Audio configuration submenu with auto-rebuild for toggles
 **********************************************************************/
 void ConfigMenu::audioMenu() {
+    int last = 0; // keep the cursor on the row that was just used
     while (true) {
-        int last = 0; // keep the cursor on the row that was just used
         std::vector<Option> localOptions = {
 #if !defined(LITE_VERSION)
 #if defined(BUZZ_PIN) || defined(HAS_NS4168_SPKR)
@@ -168,8 +169,8 @@ void ConfigMenu::audioMenu() {
 **  System configuration submenu with auto-rebuild for toggles
 **********************************************************************/
 void ConfigMenu::systemMenu() {
+    int last = 0; // keep the cursor on the row that was just used
     while (true) {
-        int last = 0; // keep the cursor on the row that was just used
         std::vector<Option> localOptions = {
             {String("InstaBoot: ") + (bruceConfig.instantBoot ? "ON" : "OFF"),
              [this]() {
@@ -206,8 +207,8 @@ void ConfigMenu::systemMenu() {
 **  Advanced settings submenu (nested under System Config)
 **********************************************************************/
 void ConfigMenu::advancedMenu() {
+    int last = 0; // keep the cursor on the row that was just used
     while (true) {
-        int last = 0; // keep the cursor on the row that was just used
         std::vector<Option> localOptions = {
             {"Set Device pins", [this]() { pinsMenu(); }           },
 #if !defined(LITE_VERSION)
@@ -250,12 +251,37 @@ void ConfigMenu::advancedMenu() {
     }
 }
 /*********************************************************************
+**  Function: batteryMenu
+**  Battery page: the power-saving mode and the charging limit. Both rows
+**  are persisted in bruce.conf and take effect the moment they are set.
+**********************************************************************/
+void ConfigMenu::batteryMenu() {
+    int last = 0; // keep the cursor on the row that was just used
+    while (true) {
+        std::vector<Option> localOptions = {
+            {String("Battery Saver: ") + (bruceConfig.batterySaver ? "ON" : "OFF"),
+             [this]() { bruceConfig.setBatterySaver(bruceConfig.batterySaver ? 0 : 1); }},
+            {String("Charging Limit: ") + String(chargeLimitPercent()) + "%",
+             [this]() { setChargeLimitMenu(); }                                               },
+            {"Back",                                                                       []() {}},
+        };
+
+        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Battery", last);
+
+        // Exit only if user pressed Back or ESC
+        if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        last = selected;
+        // Menu rebuilds so the toggle/value labels stay accurate
+    }
+}
+
+/*********************************************************************
 **  Function: powerMenu
 **  Power management submenu with auto-rebuild
 **********************************************************************/
 void ConfigMenu::powerMenu() {
+    int last = 0; // keep the cursor on the row that was just used
     while (true) {
-        int last = 0; // keep the cursor on the row that was just used
         std::vector<Option> localOptions = {
             {"Deep Sleep", goToDeepSleep          },
             {"Sleep",      setSleepMode           },
@@ -301,8 +327,8 @@ void ConfigMenu::powerMenu() {
 **  so there is exactly one developer-mode switch in the UI.
 **********************************************************************/
 void ConfigMenu::usbDebugMenu() {
+    int last = 0; // keep the cursor on the row that was just used
     while (true) {
-        int last = 0; // keep the cursor on the row that was just used
         std::vector<Option> localOptions = {
             {String("Developer Mode: ") + (bruceConfig.usbDebug ? "ON" : "OFF"),
              [this]() {
@@ -360,8 +386,8 @@ void ConfigMenu::usbDebugMenu() {
 **  Developer mode menu for advanced hardware configuration
 **********************************************************************/
 void ConfigMenu::pinsMenu() {
+    int last = 0; // keep the cursor on the row that was just used
     while (true) {
-        int last = 0; // keep the cursor on the row that was just used
         std::vector<Option> localOptions = {
             {"I2C Finder",     [this]() { find_i2c_addresses(); }                      },
             {"CC1101 Pins",    [this]() { setSPIPinsMenu(bruceConfigPins.CC1101_bus); }},
