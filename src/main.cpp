@@ -270,11 +270,12 @@ void begin_tft() {
 static const int BOOT_TITLE_Y = 8;
 static const int BOOT_VERSION_Y = 34;
 // 1.3 is published as a pre-release, and the splash is the first thing the
-// board shows, so it says so next to the number. Deliberately here and not in
+// board shows, so it says so next to the number - just "pre", which fits the
+// line without crowding it on the 320 px panel. Deliberately here and not in
 // BRUCE_VERSION: the console `info` verb, the WebUI, the JS global and the
 // Wigle appRelease are the release identity, and they all stay "vandeta 1.3".
 // Clear this string (or drop it from the draw call) for the official release.
-static const char *BOOT_VERSION_SUFFIX = " (pre-release)";
+static const char *BOOT_VERSION_SUFFIX = " pre";
 
 void boot_screen() {
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
