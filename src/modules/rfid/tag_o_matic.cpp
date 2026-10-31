@@ -10,6 +10,7 @@
 #include "core/bus_HAL.h"
 #include "core/display.h"
 #include "core/mykeyboard.h"
+#include "core/sound_theme.h"
 #include "esp_task_wdt.h" //Include for Headless mode (long write trigger watchdog in JS)
 
 #if !defined(LITE_VERSION)
@@ -331,6 +332,14 @@ void TagOMatic::read_card() {
     // Serial.print("Tag read status: ");
     // Serial.println(_rfid->statusMessage(_rfid->pageReadStatus));
 
+    // One chirp per card, not per poll: the reader re-reads a tag that is left
+    // on the antenna every couple of seconds, and a beep every 2 s is noise.
+    static String lastCueUid;
+    if (_rfid->printableUID.uid.length() > 0 && _rfid->printableUID.uid != lastCueUid) {
+        lastCueUid = _rfid->printableUID.uid;
+        soundPlay(CUE_READ);
+    }
+
     display_banner();
     dump_card_details();
 
@@ -346,6 +355,7 @@ void TagOMatic::scan_cards() {
         // Serial.println("New tag found: " + _rfid->printableUID.uid);
         _scanned_set.insert(_rfid->printableUID.uid);
         _scanned_tags.push_back(_rfid->printableUID.uid);
+        soundPlay(CUE_READ); // one chirp per newly discovered tag
     }
 
     display_banner();

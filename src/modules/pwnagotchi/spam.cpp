@@ -27,6 +27,11 @@ volatile bool change_identity = false;
 // Global arrays to hold the faces and names
 const char *faces[30]; // Increase size if needed
 const char *names[30]; // Increase size if needed
+// The parser below fills these from a user-supplied txt file, so the number of
+// comma-separated entries is not bounded by anything we control. Extra entries
+// are dropped: without this a file with more than 30 faces wrote past the end
+// of the array (and past whatever global followed it).
+static const int PWNGRID_MAX_ENTRIES = (int)(sizeof(faces) / sizeof(faces[0]));
 int num_faces = 0;
 int num_names = 0;
 
@@ -332,11 +337,13 @@ void loadFacesAndNames() {
                 int end = faces_line.indexOf(',', start);
                 num_faces = 0;
                 while (end != -1) {
-                    faces[num_faces++] = strdup(faces_line.substring(start, end).c_str());
+                    if (num_faces < PWNGRID_MAX_ENTRIES)
+                        faces[num_faces++] = strdup(faces_line.substring(start, end).c_str());
                     start = end + 1;
                     end = faces_line.indexOf(',', start);
                 }
-                faces[num_faces++] = strdup(faces_line.substring(start).c_str());
+                if (num_faces < PWNGRID_MAX_ENTRIES)
+                    faces[num_faces++] = strdup(faces_line.substring(start).c_str());
             } else if (line.startsWith("names=")) {
                 String names_line = line.substring(6);
                 names_line.replace("\"", ""); // Remove quotes
@@ -345,11 +352,13 @@ void loadFacesAndNames() {
                 int end = names_line.indexOf(',', start);
                 num_names = 0;
                 while (end != -1) {
-                    names[num_names++] = strdup(names_line.substring(start, end).c_str());
+                    if (num_names < PWNGRID_MAX_ENTRIES)
+                        names[num_names++] = strdup(names_line.substring(start, end).c_str());
                     start = end + 1;
                     end = names_line.indexOf(',', start);
                 }
-                names[num_names++] = strdup(names_line.substring(start).c_str());
+                if (num_names < PWNGRID_MAX_ENTRIES)
+                    names[num_names++] = strdup(names_line.substring(start).c_str());
             }
         }
         file.close();

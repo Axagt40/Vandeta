@@ -132,6 +132,10 @@ void MACFlooding::change_mac_in_packet() {
 
 void MACFlooding::randomize_mac(uint8_t *mac) {
     for (int i = 0; i < 6; i++) { mac[i] = random() % 256; }
+    // Unicast, locally administered. The flood works by filling a switch's CAM
+    // table, and a switch never learns a multicast/broadcast source address, so
+    // the ~half of frames with that bit set were wasted (bench: 1118 of 2147).
+    mac[0] = (uint8_t)((mac[0] | 0x02) & 0xFE);
 }
 
 void MACFlooding::setup() {

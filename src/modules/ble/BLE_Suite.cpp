@@ -3359,6 +3359,7 @@ std::vector<FastPairDeviceInfo> FastPairExploitEngine::scanForFastPairDevices(in
 
     for (int i = 0; i < results.getCount(); i++) {
         const NimBLEAdvertisedDevice *device = results.getDevice(i);
+        if (device == nullptr) continue; // see ble_sniffer(): getDevice() may answer null
         String address = String(device->getAddress().toString().c_str());
         String name = device->getName().c_str();
         int rssi = device->getRSSI();
@@ -4330,33 +4331,55 @@ static String selectTargetVandeta(const char *title) {
         int lastSel = -1, lastScroll = -1;
         bool redraw = true;
 
+        // One visual row, painted the one way this picker paints rows. A cursor
+        // move used to run tft.fillScreen() and redraw the title, the hints, the
+        // footer and every row - 320 x 170 px of SPI traffic for a change that
+        // touches two rows - so moving down the list cost a full frame per step.
+        // Both paths now go through this lambda, so a partial update cannot draw
+        // a row differently from a full one.
+        auto drawRowAt = [&](int visualRow) {
+            if (visualRow < 0 || visualRow > maxVisible) return;
+            const int y = VDS_MENU_TOP + visualRow * VDS_ROW_H;
+            if (visualRow == 0) {
+                uint32_t age = g_scanStamp ? (millis() - g_scanStamp) / 1000 : 0;
+                String rescanLabel =
+                    sel == 0 ? "Rescan now" : ("Rescan (cached " + String(age) + "s ago)");
+                vdsRow(y, rescanLabel, sel == 0);
+                return;
+            }
+            const int idx = scroll + (visualRow - 1); // 0-based device index
+            if (idx >= count || idx < 0) return;
+            const int dev = order[(size_t)idx];
+            String label = snap->names[(size_t)dev];
+            if (label.length() > 16) label = label.substring(0, 13) + "...";
+            label += " " + String(snap->rssi[(size_t)dev]) + "dB";
+            if (snap->fastPair[(size_t)dev]) label += " FP";
+            if (snap->hfp[(size_t)dev]) label += " HFP";
+            if (snap->types[(size_t)dev] & 0x01) label += " AUD";
+            if (snap->types[(size_t)dev] & 0x02) label += " HID";
+            vdsRow(y, label, sel == idx + 1);
+        };
+
         while (true) {
-            if (redraw || sel != lastSel || scroll != lastScroll) {
+            // Moving inside the visible page repaints the row that lost the
+            // highlight and the one that gained it (~2 x 16 px rows); anything
+            // that changes what is on the page (first paint, a rescan, a scroll)
+            // still repaints all of it.
+            if (redraw || scroll != lastScroll) {
                 tft.fillScreen(VDS_BG);
                 vdsTitle((String(count) + " dev").c_str());
                 vdsHint(VDS_TITLE_H + 4, title ? title : "TARGET", VDS_TEXT);
-                uint32_t age = g_scanStamp ? (millis() - g_scanStamp) / 1000 : 0;
-                String rescanLabel = sel == 0 ? "Rescan now" : ("Rescan (cached " + String(age) + "s ago)");
-                vdsRow(VDS_MENU_TOP, rescanLabel, sel == 0);
-
-                for (int i = 0; i < maxVisible && (1 + scroll + i) < rows; i++) {
-                    int idx = scroll + i; // 0-based device index
-                    int dev = order[(size_t)idx];
-                    String label = snap->names[(size_t)dev];
-                    if (label.length() > 16) label = label.substring(0, 13) + "...";
-                    label += " " + String(snap->rssi[(size_t)dev]) + "dB";
-                    if (snap->fastPair[(size_t)dev]) label += " FP";
-                    if (snap->hfp[(size_t)dev]) label += " HFP";
-                    if (snap->types[(size_t)dev] & 0x01) label += " AUD";
-                    if (snap->types[(size_t)dev] & 0x02) label += " HID";
-                    vdsRow(VDS_MENU_TOP + 16 + (i * VDS_ROW_H), label, sel == idx + 1);
-                }
-
+                for (int i = 0; i <= maxVisible && (1 + scroll + i) < rows; i++) drawRowAt(i);
                 vdsFooter("SEL: pick   PREV/NEXT: move   ESC: back");
-                lastSel = sel;
-                lastScroll = scroll;
                 redraw = false;
+            } else if (sel != lastSel) {
+                const int wasVis = lastSel <= 0 ? 0 : lastSel - scroll;
+                const int nowVis = sel <= 0 ? 0 : sel - scroll;
+                drawRowAt(wasVis);
+                if (nowVis != wasVis) drawRowAt(nowVis);
             }
+            lastSel = sel;
+            lastScroll = scroll;
 
             if (check(EscPress)) return "";
             if (check(PrevPress) && vdsNavReady()) {
@@ -4455,8 +4478,7 @@ String selectMultipleTargetsFromScan(const char *title, std::vector<NimBLEAddres
             exitMenu = true;
             targets.clear();
             return "";
-        } else if (check(PrevPress)) {
-            delay(150);
+        } else if (check(PrevPress) && vdsNavReady()) {
             if (currentIndex > 0) {
                 currentIndex--;
                 if (currentIndex < scrollOffset) scrollOffset = currentIndex;
@@ -4464,8 +4486,7 @@ String selectMultipleTargetsFromScan(const char *title, std::vector<NimBLEAddres
                 currentIndex = deviceCount - 1;
                 scrollOffset = std::max(0, (int)deviceCount - maxVisibleItems);
             }
-        } else if (check(NextPress)) {
-            delay(150);
+        } else if (check(NextPress) && vdsNavReady()) {
             if (currentIndex < (int)deviceCount - 1) {
                 currentIndex++;
                 if (currentIndex >= scrollOffset + maxVisibleItems)

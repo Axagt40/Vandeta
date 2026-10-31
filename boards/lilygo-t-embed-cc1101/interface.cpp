@@ -79,6 +79,14 @@ void _setup_gpio() {
         // https://github.com/Xinyuan-LilyGO/T-Embed-CC1101/blob/3e6df69af51befdbd5c96761aca28b9a784413eb/examples/factory_test/factory_test.ino#L399-L425
 
         PPM.resetDefault();
+        // resetDefault() is a REG_RST write (REG14 bit7): every register goes back
+        // to its datasheet default, INCLUDING the I2C watchdog, which initImpl()
+        // had disabled just before this. An armed watchdog reloads those defaults
+        // within 40 s unless it is fed, and that is what silently undid the charge
+        // limit (measured on the board: REG06 read 4032 mV right after applying
+        // 80%, and 4208 mV - the default - 75 s later). Disable it again after the
+        // reset, before the charge target is written.
+        PPM.disableWatchdog();
         PPM.setChargeTargetVoltage(4208);
         PPM.enableMeasure(PowersBQ25896::CONTINUOUS);
     }
@@ -412,6 +420,12 @@ bool setChargeLimitPercent(int percent) {
     else if (percent >= 90) mv = 4128;
     else if (percent >= 80) mv = 4032;
     else mv = 3936;
+    // The limit only survives while the chip's I2C watchdog is off: an armed
+    // watchdog reloads the datasheet defaults (4208 mV) on its own, which is
+    // exactly how a limit that read back correctly could still be gone a minute
+    // later. Clearing it here means a limit set from Config or the console
+    // cannot be undone by a watchdog that something else re-armed.
+    if (PPM.isEnableWatchdog()) PPM.disableWatchdog();
     return PPM.setChargeTargetVoltage(mv);
 #else
     return false;

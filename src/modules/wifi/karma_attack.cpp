@@ -941,6 +941,11 @@ String extractSSID(const wifi_promiscuous_pkt_t *packet) {
 }
 
 String extractMAC(const wifi_promiscuous_pkt_t *packet) {
+    // The transmitter address sits at bytes 10-15 of the header, and this is
+    // called on frames that passed no length check (the probe filter above
+    // enforces 24 bytes, the callers here do not). A short frame left the read
+    // running off the end of the rx buffer.
+    if (packet == nullptr || packet->rx_ctrl.sig_len < 16) return "";
     const uint8_t *frame = packet->payload;
     char mac[18];
     snprintf(

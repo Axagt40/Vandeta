@@ -8,6 +8,9 @@ class EthernetMenu : public MenuItemInterface {
 private:
     EthernetHelper *eth;
     void start_ethernet();
+    // Ethernet over the USB-C cable, with the PC as the PHY (see UsbEthBridge).
+    bool start_usb_ethernet();
+    void usb_ethernet_menu();
 
 public:
     EthernetMenu() : MenuItemInterface("Ethernet") {}

@@ -32,6 +32,12 @@ bool playAudioRTTTLString(String song, PlaybackMode mode = PLAYBACK_BLOCKING);
 bool tts(String text, PlaybackMode mode = PLAYBACK_BLOCKING);
 bool isAudioFile(const String &filePath);
 void playTone(unsigned int frequency, unsigned long duration = 0UL, short waveType = 0);
+// Same generator, but at an absolute amplitude (0..1) instead of the settings
+// volume, and it never touches the button flags: it is called from a worker
+// task, where check(AnyKeyPress) would swallow the user's press. Only the
+// sound-theme cue player should use this - it derives `level` from
+// bruceConfig.soundVolume, it does not replace it.
+void playToneAtLevel(unsigned int frequency, unsigned long duration, float level);
 void _tone(unsigned int frequency, unsigned long duration = 0UL);
 
 // NEW: Async playback control API

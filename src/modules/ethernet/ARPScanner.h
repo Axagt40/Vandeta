@@ -28,6 +28,9 @@ public:
     ~ARPScanner();
 };
 
-void run_arp_scanner();
+// iface: the interface to scan on. nullptr keeps the old behaviour (the Arduino
+// ETH netif, then the "ETH_DEF" key), which is what the W5500 page uses. The
+// USB Ethernet bridge passes its own interface here.
+void run_arp_scanner(esp_netif_t *iface = nullptr);
 #endif // ARP_SCANNER_H
 #endif

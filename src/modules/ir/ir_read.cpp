@@ -12,6 +12,7 @@
 #include "core/mykeyboard.h"
 #include "core/sd_functions.h"
 #include "core/settings.h"
+#include "core/sound_theme.h"
 #include "custom_ir.h"
 #include "ir_utils.h"
 #include <IRrecv.h>
@@ -250,6 +251,8 @@ void IrRead::read_signal() {
         padprintln("Protocol: " + (proto.length() ? proto : "UNKNOWN"));
         padprintln("Bits: " + String(results.bits));
     }
+
+    soundPlay(CUE_READ); // a code landed: audible without looking at the screen
 
     padprint("RAW Data Captured:");
     String raw_signal = parse_raw_signal();

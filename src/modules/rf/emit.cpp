@@ -1,4 +1,5 @@
 #include "emit.h"
+#include "core/sound_theme.h"  // no cue while the radio is transmitting
 #include "core/ui_gradient.h" // the same pink -> purple ramp the recorder and the UI use
 #include "modules/rf/rf_utils.h" // for initRfModule
 #include <ELECHOUSE_CC1101_SRC_DRV.h>
@@ -78,6 +79,8 @@ void rf_raw_emit(RawRecording &recorded, bool &returnToMenu) {
     // Larger stack prevents stack canary resets while drawing
     xTaskCreate(rf_raw_emit_draw, "RawEmitDraw", 4096, NULL, 1, &rf_raw_emit_draw_handle);
 
+    soundPlay(CUE_REC_START);
+    soundSuppressPush(); // a cue would be transmitted, not just heard
     for (size_t i = 0; i < recorded.codes.size(); ++i) {
         // Send the RMT code
         for (int j = 0; j < recorded.codeLengths[i]; j++) {
@@ -107,6 +110,8 @@ void rf_raw_emit(RawRecording &recorded, bool &returnToMenu) {
         rf_raw_emit_draw_handle = NULL;       // Reset the handle
     }
 
+    soundSuppressPop();
+    soundPlay(CUE_REC_STOP);
     deinitRfModule();
 
     if (escPressed) returnToMenu = true;

@@ -8,8 +8,10 @@
 #include "modules/rf/rf_jammer.h"
 #include "modules/rf/rf_listen.h"
 #include "modules/rf/rf_scan.h"
+#include "modules/rf/rf_field_meter.h"
 #include "modules/rf/rf_freq_analyzer.h"
 #include "modules/rf/rf_send.h"
+#include "modules/rf/rf_suite.h"
 #include "modules/rf/rf_utils.h"
 #include "modules/rf/rf_spectrum.h"
 #include "modules/rf/rf_wardriver.h"
@@ -17,17 +19,17 @@
 
 void RFMenu::optionsMenu() {
     options = {
+        // The four sub-GHz tools below live inside the RF Suite now (gradient
+        // chrome, one row of the menu) - Frequency Analyzer, Field Meter,
+        // Packet Monitor and Wardriver. The Wardriver's settings stay in
+        // RF > Config so a capture can be tuned without opening the suite.
+        {"RF Suite",        rf_suite                  },
         {"Scan/copy",       [=]() { RFScan(); }       },
 #if !defined(LITE_VERSION)
         {"Record RAW",      rf_raw_record             }, // Pablo-Ortiz-Lopez
         {"Custom SubGhz",   sendCustomRF              },
 #endif
         {"Spectrum",        rf_spectrum               },
-        {"Frequency Analyzer", rf_freq_analyzer       },
-        {"Packet Monitor",   [=]() { packetMonitor(PKT_SRC_SUBGHZ); }},
-#if !defined(LITE_VERSION)
-        {"Wardriver",        rfWardriverMenu            }, // capture, replay, identify
-#endif
 #if !defined(LITE_VERSION)
         {"RSSI Spectrum",   rf_CC1101_rssi            }, // @Pirata
         {"SquareWave Spec", rf_SquareWave             }, // @Pirata

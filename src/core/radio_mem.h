@@ -87,13 +87,20 @@ static inline bool radioHasMemForBle() {
         (unsigned)radioLargestDmaBlock()
     );
     
-    // Disconnect WiFi if active
+    // Disconnect AND deinitialise WiFi. wifiDisconnect() alone only drops the
+    // association and stops the driver; the esp_wifi driver itself stays
+    // initialised and keeps ~46 KB of internal DRAM, which is exactly what BLE
+    // then cannot get: on the board, leaving WiFi > Channel Analyzer and opening
+    // BLE Detector showed "RAM 24K/15K - restart" even though this guard is
+    // documented as releasing WiFi first. `WiFi.mode(WIFI_OFF)` is the Arduino
+    // path for stop + esp_wifi_deinit(), so its own bookkeeping stays correct and
+    // a later WiFi feature re-initialises cleanly (checked on the board: WiFi
+    // page -> BLE detector -> WiFi page again all work). It used to sit behind
+    // WIFI_DEINIT_ON_DISCONNECT, which no build defines, so it never ran.
     if (WiFi.getMode() != WIFI_MODE_NULL || wifiConnected) {
         wifiDisconnect();
         delay(200);
-        #ifdef WIFI_DEINIT_ON_DISCONNECT
         WiFi.mode(WIFI_OFF);
-        #endif
         delay(300);
     }
     

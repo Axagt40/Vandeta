@@ -139,6 +139,10 @@ void BLE_Sniffer() {
 
                 for (int i = 0; i < results.getCount(); i++) {
                     const NimBLEAdvertisedDevice *device = results.getDevice(i);
+                    // getDevice() is allowed to answer null (an entry the scan
+                    // discarded between the count and this read); dereferencing
+                    // it crashed the sniffer instead of skipping one row.
+                    if (device == nullptr) continue;
 
                     SnifferPacket packet;
                     packet.address = String(device->getAddress().toString().c_str());

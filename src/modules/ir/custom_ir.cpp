@@ -4,6 +4,7 @@
 #include "core/mykeyboard.h"
 #include "core/sd_functions.h"
 #include "core/settings.h"
+#include "core/sound_theme.h" // a cue during an IR burst changes its timing
 #include "core/type_convertion.h"
 #include "ir_utils.h"
 #include <IRutils.h>
@@ -288,6 +289,7 @@ void otherIRcodes() {
 // IR commands
 
 void sendIRCommand(IRCode *code, bool hideDefaultUI) {
+    soundSuppressPush(); // keep the speaker quiet for the whole burst
     setup_ir_pin(bruceConfigPins.irTx, OUTPUT);
     // https://developer.flipper.net/flipperzero/doxygen/infrared_file_format.html
     if (code->type.equalsIgnoreCase("raw")) sendRawCommand(code->frequency, code->data, hideDefaultUI);
@@ -315,6 +317,7 @@ void sendIRCommand(IRCode *code, bool hideDefaultUI) {
         strToDecodeType(code->protocol.c_str()) != decode_type_t::UNKNOWN
     )
         sendDecodedCommand(code->protocol, code->data, code->bits, hideDefaultUI);
+    soundSuppressPop();
 }
 
 void sendNECCommand(String address, String command, bool hideDefaultUI) {

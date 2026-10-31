@@ -4,7 +4,8 @@
 #include "mykeyboard.h"
 #include "settings.h" //for timeStr
 #include "utils.h"
-#include "core/ui_gradient.h" // splash pink->purple ramp for the UI chrome
+#include "core/sound_theme.h" // menu cues, sampled once per navigation event
+#include "core/ui_gradient.h"     // splash pink->purple ramp for the UI chrome
 #include <JPEGDecoder.h>
 #include <interface.h> //for charging ischarging to print charging indicator
 #include <memory>
@@ -766,6 +767,7 @@ int loopOptionsImpl(
         if (EscPress && PrevPress) EscPress = false;
 #endif
         if (menuType != MENU_TYPE_MAIN && check(EscPress)) {
+            soundPlay(CUE_BACK);
             index = -1;
             break;
         }
@@ -793,6 +795,7 @@ int loopOptionsImpl(
                 rotarySteps++;
                 redraw = true;
             }
+            soundPlay(CUE_NAV_TICK); // one tick per drained batch, not per detent
             vTaskDelay(4 / portTICK_PERIOD_MS);
             PrevPress = false;
             NextPress = false;
@@ -806,7 +809,10 @@ int loopOptionsImpl(
 #ifdef HAS_KEYBOARD
                 check(PrevPress);
                 int prevEnabled = findNextEnabled(index, -1);
-                if (prevEnabled >= 0) index = prevEnabled;
+                if (prevEnabled >= 0) {
+                    index = prevEnabled;
+                    soundPlay(CUE_NAV_TICK);
+                }
                 redraw = true;
 #else
                 long _tmp = millis();
@@ -837,7 +843,10 @@ int loopOptionsImpl(
                 } else {
                     check(PrevPress);
                     int prevEnabled = findNextEnabled(index, -1);
-                    if (prevEnabled >= 0) index = prevEnabled;
+                    if (prevEnabled >= 0) {
+                        index = prevEnabled;
+                        soundPlay(CUE_NAV_TICK);
+                    }
                     redraw = true;
                 }
 #endif
@@ -848,6 +857,7 @@ int loopOptionsImpl(
                 if (nextEnabled >= 0) {
                     if (!bruceConfig.devMode && nextEnabled <= index) devModeCounter++;
                     index = nextEnabled;
+                    soundPlay(CUE_NAV_TICK);
                 }
                 redraw = true;
             }
@@ -876,6 +886,7 @@ int loopOptionsImpl(
             }
             if (chosen >= options.size() || !options[chosen].enabled) continue;
             Serial.println("Selected: " + String(options[chosen].label));
+            soundPlay(CUE_SELECT);
             options[chosen].operation();
             break;
         }

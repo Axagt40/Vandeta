@@ -5,8 +5,11 @@
 #include "core/i2c_finder.h"
 #include "core/main_menu.h"
 #include "core/settings.h"
+#include "core/sound_theme.h"
 #include "core/utils.h"
 #include "core/wifi/wifi_common.h"
+#include "modules/others/audio.h"
+#include <WiFi.h>
 #ifdef HAS_RGB_LED
 #include "core/led_control.h"
 #endif
@@ -131,6 +134,26 @@ void ConfigMenu::ledMenu() {
 }
 #endif
 /*********************************************************************
+**  Function: voiceLangSample
+**  A short greeting per language of the voice table, in the same order, so
+**  choosing a voice speaks the choice instead of only relabelling a row.
+**********************************************************************/
+#if !defined(LITE_VERSION) && defined(HAS_NS4168_SPKR)
+static const char *voiceLangSample(int index) {
+    static const char *samples[VOICE_LANG_COUNT] = {
+        "Hei! Puhun suomea.",
+        "Hi! I speak English.",
+        "Hej! Jag talar svenska.",
+        "Tere! Ma räägin eesti keelt.",
+        "Hallo! Ich spreche Deutsch.",
+        "Привет! Я говорю по-русски.",
+    };
+    if (index < 0 || index >= VOICE_LANG_COUNT) index = 0;
+    return samples[index];
+}
+#endif
+
+/*********************************************************************
 **  Function: audioMenu
 **  Audio configuration submenu with auto-rebuild for toggles
 **********************************************************************/
@@ -149,7 +172,28 @@ void ConfigMenu::audioMenu() {
              }                                                                                                                                            },
 #if defined(HAS_NS4168_SPKR)
             {"Sound Volume",                                                [this]() { setSoundVolume(); }},
-#endif  // BUZZ_PIN || HAS_NS4168_SPKR
+            // The speaking voice, not just the beeps: which language it talks
+            // in, and whether it may use the natural online voice at all.
+            {String("Voice: ") + voiceLangName(bruceConfig.voiceLang),
+                                                             [this]() {
+                 int next = (bruceConfig.voiceLang + 1) % VOICE_LANG_COUNT;
+                 bruceConfig.setVoiceLang(next);
+                 // Say the new language's own name. Only when it can be heard
+                 // properly: with no Wi-Fi SAM would read it back in English.
+                 if (bruceConfig.voiceOnline && WiFi.status() == WL_CONNECTED) tts(voiceLangSample(next));
+             }},
+            {String("Voice Online: ") + (bruceConfig.voiceOnline ? "ON" : "OFF"),
+                                                             [this]() { bruceConfig.setVoiceOnline(!bruceConfig.voiceOnline); }},
+#endif  // HAS_NS4168_SPKR
+            // Sits under the volume, and carries no volume of its own: it picks
+            // which notes play, loudness stays the single row above.
+            {String("Sound Theme: ") + soundThemeName(bruceConfig.soundTheme),
+                                                             [this]() {
+                 int next = (bruceConfig.soundTheme + 1) % SOUND_THEME_COUNT;
+                 bruceConfig.setSoundTheme(next);
+                 // Preview the choice, except OFF which is meant to be silent.
+                 if (next != SOUND_THEME_OFF) soundPlay(CUE_SELECT);
+             }},
 #endif  //  HAS_NS4168_SPKR
 #endif  //  LITE_VERSION
             {"Back",                                                        []() {}                       },
@@ -184,6 +228,11 @@ void ConfigMenu::systemMenu() {
                  bruceConfig.wifiAtStartup = !bruceConfig.wifiAtStartup;
                  bruceConfig.saveFile();
              }                                                                                                           },
+            // Task 1.4: which channels the airspace page sweeps. A preset, not a
+            // list, so it can never describe an empty or illegal hop plan.
+            {String("WiFi Hop Plan: ") +
+                 (bruceConfig.wifiHopPlan == 1 ? "1,6,11" : (bruceConfig.wifiHopPlan == 2 ? "1-13" : "1-11")),
+             [this]() { bruceConfig.setWifiHopPlan((bruceConfig.wifiHopPlan + 1) % 3); }               },
             {"Startup App",                                                         [this]() { setStartupApp(); }        },
             {"Hide/Show Apps",                                                      [this]() { mainMenu.hideAppsMenu(); }},
             {"Clock",                                                               [this]() { setClock(); }             },

@@ -487,7 +487,13 @@ int bleScanDetailed(uint32_t durationMs, BleScanEntry *out, int maxOut) {
         for (int b = 0; b + 1 < p.len;) {
             uint8_t adLen = p.data[b];
             if (adLen == 0) break;
-            if (b + adLen >= BLE_CAP_MAX_PAYLOAD + 1) break;
+            // Bound against the length this packet actually carried, not only
+            // against the array: an advertiser that sends a truncated AD
+            // structure (adLen pointing past the end of its payload) used to
+            // pass a MAX_PAYLOAD check and copy bytes left over from the
+            // previous packet in the same slot, so the row showed a name that
+            // was never advertised.
+            if (b + 1 + adLen > p.len) break;
             uint8_t adType = p.data[b + 1];
             if ((adType == 0x08 || adType == 0x09) && adLen >= 2) {
                 int nameLen = adLen - 1;

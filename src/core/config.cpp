@@ -5,6 +5,25 @@
 #include "sd_functions.h"
 #include <algorithm>
 
+// The spoken-voice languages, in the order the settings row cycles them.
+static const struct {
+    const char *tag;
+    const char *name;
+} VOICE_LANGS[VOICE_LANG_COUNT] = {
+    {"fi", "Suomi"},   {"en", "English"}, {"sv", "Svenska"},
+    {"et", "Eesti"},   {"de", "Deutsch"}, {"ru", "Русский"},
+};
+
+const char *voiceLangTag(int index) {
+    if (index < 0 || index >= VOICE_LANG_COUNT) index = 0;
+    return VOICE_LANGS[index].tag;
+}
+
+const char *voiceLangName(int index) {
+    if (index < 0 || index >= VOICE_LANG_COUNT) index = 0;
+    return VOICE_LANGS[index].name;
+}
+
 JsonDocument BruceConfig::toJson() const {
     JsonDocument jsonDoc;
     JsonObject setting = jsonDoc.to<JsonObject>();
@@ -23,7 +42,11 @@ JsonDocument BruceConfig::toJson() const {
     setting["clock24hr"] = clock24hr;
     setting["soundEnabled"] = soundEnabled;
     setting["soundVolume"] = soundVolume;
+    setting["soundTheme"] = soundTheme;
+    setting["voiceLang"] = voiceLang;
+    setting["voiceOnline"] = voiceOnline;
     setting["wifiAtStartup"] = wifiAtStartup;
+    setting["wifiHopPlan"] = wifiHopPlan;
     setting["instantBoot"] = instantBoot;
     setting["keyboardLang"] = keyboardLang;
 
@@ -224,11 +247,33 @@ void BruceConfig::fromFile(bool checkFS) {
         count++;
         log_e("Fail");
     }
+    // A config written before the theme existed has no such key: keep those
+    // users on the old blips rather than changing how the device sounds
+    // without being asked. Fresh configs get VANDETA from the default.
+    if (!setting["soundTheme"].isNull()) {
+        soundTheme = setting["soundTheme"].as<int>();
+    } else {
+        soundTheme = 1; // CLASSIC
+    }
+    // A config written before the voice settings existed keeps the defaults:
+    // Finnish, online when there is Wi-Fi. `voiceLang` is an index, so it is
+    // validated rather than trusted (a hand-edited file could hold 999).
+    voiceLang = setting["voiceLang"].isNull() ? 0 : setting["voiceLang"].as<int>();
+    voiceOnline = setting["voiceOnline"].isNull() ? 1 : setting["voiceOnline"].as<int>();
+    validateVoiceLangValue();
+    if (voiceOnline != 0) voiceOnline = 1;
     if (!setting["wifiAtStartup"].isNull()) {
         wifiAtStartup = setting["wifiAtStartup"].as<int>();
     } else {
         count++;
         log_e("Fail");
+    }
+    // A config written before the plan existed keeps the 1-11 sweep, which is
+    // exactly what the page used to do.
+    if (!setting["wifiHopPlan"].isNull()) {
+        wifiHopPlan = setting["wifiHopPlan"].as<int>();
+    } else {
+        wifiHopPlan = 0;
     }
     if (!setting["instantBoot"].isNull()) {
         instantBoot = setting["instantBoot"].as<int>();
@@ -605,6 +650,7 @@ void BruceConfig::validateConfig() {
     validateTmzValue();
     validateSoundEnabledValue();
     validateSoundVolumeValue();
+    validateSoundThemeValue();
     validateWifiAtStartupValue();
 #ifdef HAS_RGB_LED
     validateLedBrightValue();
@@ -701,18 +747,58 @@ void BruceConfig::setSoundVolume(int value) {
     saveFile();
 }
 
+void BruceConfig::setSoundTheme(int value) {
+    soundTheme = value;
+    validateSoundThemeValue();
+    saveFile();
+}
+
+void BruceConfig::setVoiceLang(int value) {
+    voiceLang = value;
+    validateVoiceLangValue();
+    saveFile();
+}
+
+void BruceConfig::setVoiceOnline(int value) {
+    voiceOnline = value ? 1 : 0;
+    saveFile();
+}
+
+void BruceConfig::validateVoiceLangValue() {
+    if (voiceLang < 0 || voiceLang >= VOICE_LANG_COUNT) voiceLang = 0;
+}
+
 void BruceConfig::validateSoundEnabledValue() {
-    if (soundEnabled > 1) soundEnabled = 1;
+    if (soundEnabled != 0 && soundEnabled != 1) soundEnabled = soundEnabled ? 1 : 0;
 }
 
 void BruceConfig::validateSoundVolumeValue() {
+    // The settings page offers 10-100 %. A config from a card, a failed write
+    // or a hand-edited file could hold 0 (silence that looks like a bug) or
+    // 900 (a distorted generator), so clamp both ends here, not just the top.
+    if (soundVolume < 10) soundVolume = 10;
     if (soundVolume > 100) soundVolume = 100;
+}
+
+void BruceConfig::validateSoundThemeValue() {
+    // Unknown value -> CLASSIC, the behaviour that predates the key.
+    if (soundTheme < 0 || soundTheme >= 3) soundTheme = 1;
 }
 
 void BruceConfig::setWifiAtStartup(int value) {
     wifiAtStartup = value;
     validateWifiAtStartupValue();
     saveFile();
+}
+
+void BruceConfig::setWifiHopPlan(int value) {
+    wifiHopPlan = value;
+    validateWifiHopPlanValue();
+    saveFile();
+}
+
+void BruceConfig::validateWifiHopPlanValue() {
+    if (wifiHopPlan < 0 || wifiHopPlan > 2) wifiHopPlan = 0;
 }
 
 void BruceConfig::validateWifiAtStartupValue() {

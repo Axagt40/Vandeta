@@ -8,7 +8,7 @@
  *
  * They live with the SPI binding because it was the first user, and uart_js.cpp
  * includes this header for the same two functions. Both follow the mquickjs
- * rule from FREEBUFF/DISCOVERIES.md: the heap is compacting and the C stack is
+ * rule from the project notes: the heap is compacting and the C stack is
  * never scanned, so anything that allocates between building a JS value and
  * returning it has to be pinned with JS_PushGCRef(). */
 

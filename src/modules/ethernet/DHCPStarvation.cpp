@@ -133,6 +133,11 @@ void DHCPStarvation::change_mac_in_packet() {
 
 void DHCPStarvation::randomize_mac() {
     for (int i = 0; i < 6; i++) { mac[i] = random() % 256; }
+    // Unicast, locally administered. A random byte 0 has the multicast bit set
+    // half the time, and a frame with a multicast *source* is malformed:
+    // switches will not learn it and a DHCP server will not answer it. On the
+    // bench that was 1068 of 2166 DISCOVERs doing nothing at all.
+    mac[0] = (uint8_t)((mac[0] | 0x02) & 0xFE);
 }
 
 void DHCPStarvation::setup() {

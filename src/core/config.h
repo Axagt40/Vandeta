@@ -11,6 +11,13 @@
 
 enum EvilPortalPasswordMode { FULL_PASSWORD = 0, FIRST_LAST_CHAR = 1, HIDE_PASSWORD = 2, SAVE_LENGTH = 3 };
 
+// Spoken-voice languages. `tag` is the language code the speech endpoint wants,
+// `name` is what the settings row shows. Finnish is first because it is the
+// default: the device is meant to talk like a Finn, not like an American robot.
+constexpr int VOICE_LANG_COUNT = 6;
+const char *voiceLangTag(int index);
+const char *voiceLangName(int index);
+
 class BruceConfig : public BruceTheme {
 public:
     struct WiFiCredential {
@@ -44,9 +51,21 @@ public:
     bool clock24hr = true;
     int soundEnabled = 1;
     int soundVolume = 100;
+    // SoundCue set: 0 = VANDETA, 1 = CLASSIC (the old single blip), 2 = OFF.
+    // Loudness is soundVolume above and nothing else - this key picks notes.
+    int soundTheme = 0;
     int wifiAtStartup = 0;
+    // Channel-hopping plan (task 1.4): 0 = all of 1-11 (the old behaviour),
+    // 1 = the non-overlapping 1/6/11, 2 = all of 1-13. Stored as a preset rather
+    // than a channel list so it cannot describe an empty or illegal sweep.
+    int wifiHopPlan = 0;
     int instantBoot = 0;
     String keyboardLang = "QWERTY"; // "QWERTY" | "AZERTY" | "QWERTZ"
+    // Spoken voice: index into the language table above, and whether the natural
+    // online voice may be used. Offline there is only ESP8266SAM, which speaks
+    // English, so `voiceOnline = 0` is the "no radio, no network" choice.
+    int voiceLang = 0;
+    int voiceOnline = 1;
 
 #ifdef HAS_RGB_LED
     // Led
@@ -178,10 +197,18 @@ public:
     void setClock24Hr(bool value);
     void setSoundEnabled(int value);
     void setSoundVolume(int value);
+    void setSoundTheme(int value);
+    void setVoiceLang(int value);
+    void setVoiceOnline(int value);
+    void validateVoiceLangValue();
     void validateSoundEnabledValue();
     void validateSoundVolumeValue();
+    void validateSoundThemeValue();
     void setWifiAtStartup(int value);
     void validateWifiAtStartupValue();
+
+    void setWifiHopPlan(int value);
+    void validateWifiHopPlanValue();
 
 #ifdef HAS_RGB_LED
     // Led

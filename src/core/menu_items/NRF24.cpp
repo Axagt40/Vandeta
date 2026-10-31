@@ -3,6 +3,7 @@
 #include "core/packet_view.h"
 #include "core/utils.h"
 #include "modules/NRF24/nrf_capture.h"
+#include "modules/NRF24/nrf_census.h"
 #include "modules/NRF24/nrf_common.h"
 #include "modules/NRF24/nrf_jammer.h"
 #include "modules/NRF24/nrf_mousejack.h"
@@ -23,6 +24,8 @@ void NRF24Menu::optionsMenu() {
         #endif
         options.push_back({"NRF Jammer", nrf_jammer});
         options.push_back({"RGB Remote", nrfRawCaptureMenu});
+        // Task 2.2: address cycling census of the 2.4 GHz room.
+        options.push_back({"Census", nrf_census});
         options.push_back({"Packet Monitor", []() { packetMonitor(PKT_SRC_NRF24); }});
 
 #if defined(ARDUINO_M5STICK_C_PLUS) || defined(ARDUINO_M5STICK_C_PLUS2)

@@ -10,10 +10,19 @@
 #include "AudioGeneratorAAC.h"
 #include "AudioGeneratorFLAC.h"
 #include "AudioGeneratorMIDI.h"
+#include "AudioGeneratorMP3.h"
 #include "AudioGeneratorWAV.h"
 #include "AudioOutputI2SNoDAC.h"
 #include <ESP8266Audio.h>
 #include <ESP8266SAM.h>
+// The Vandeta voice fetches a spoken clip over HTTPS, so it needs the network
+// stack, and it caches that clip on whichever filesystem is mounted.
+#include "core/sd_functions.h"
+#include <HTTPClient.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <esp_heap_caps.h>
+#include <vector>
 
 void _setup_codec_speaker(bool enable) __attribute__((weak));
 void _setup_codec_speaker(bool enable) {}
@@ -21,6 +30,12 @@ void _setup_codec_speaker(bool enable) {}
 // Volume control constants
 static const float AUDIO_VOLUME_SCALE = 0.1f;
 static const float AUDIO_VOLUME_MAX = 100.0f;
+// The UI cues are single short notes that have to be heard over a room, and
+// the stock 0.1 scale made them ~-26 dBFS: measurable on the I2S line, inaudible
+// on the T-Embed's small speaker. The cue path scales its own level by this
+// instead (0.5 * the note's balance), so a cue is clearly louder than the old
+// blip while a square wave at the top of the volume list still does not clip.
+static const float AUDIO_CUE_SCALE = 0.5f;
 
 // Task configuration
 static const uint32_t AUDIO_TASK_STACK_SIZE = 16384; // 16KB - increased for complex MP3 files
@@ -601,6 +616,307 @@ bool playAudioRTTTLString(String song, PlaybackMode mode) {
     Serial.println("Start RTTTL (async)");
     return startAsyncPlayback(generator, source, audioout, "RTTTL");
 }
+// ===== VANDETA VOICE: a real speaker instead of an English robot =====
+//
+// ESP8266SAM has one voice and one language: English phonemes. Hand it Finnish
+// text and it spells the words out with American vowels - "Hei, mitä kuuluu"
+// comes back as a robot reading a phone book. So when the device has Wi-Fi we
+// ask a natural Finnish speaker for the sentence instead, keep the resulting
+// MP3 on the mounted filesystem so a repeated phrase costs no network at all,
+// and play it through the same I2S path every other sound uses. SAM stays as
+// the offline fallback: no Wi-Fi still means `say` makes a sound.
+
+static const size_t VOICE_CHUNK_CHARS = 170;              // endpoint limit is ~200 bytes of URL text
+static const uint32_t VOICE_MAX_CLIP_BYTES = 512 * 1024;  // one sentence, never a whole audiobook
+static const char *VOICE_CACHE_DIR = "/vandeta_voice";
+
+// Clips are big enough that internal RAM should not hold them; PSRAM first, and
+// a plain malloc only as the fallback for boards that have no PSRAM at all.
+static uint8_t *voiceAlloc(size_t bytes) {
+    uint8_t *p = (uint8_t *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : (uint8_t *)malloc(bytes);
+}
+
+static String voiceUrlEncode(const String &in) {
+    String out;
+    out.reserve(in.length() * 3);
+    for (size_t i = 0; i < in.length(); i++) {
+        uint8_t c = (uint8_t)in[i];
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            out += (char)c;
+        } else {
+            char esc[4];
+            snprintf(esc, sizeof(esc), "%%%02X", c);
+            out += esc;
+        }
+    }
+    return out;
+}
+
+// The endpoint refuses anything past ~200 bytes, and a byte is not a character
+// in Finnish. Split on sentence ends first, then punctuation, then spaces, so a
+// pause between clips lands where a speaker would breathe.
+static void voiceSplitText(const String &text, std::vector<String> &out) {
+    size_t start = 0;
+    while (start < text.length()) {
+        while (start < text.length() && (text[start] == ' ' || text[start] == '\n')) start++;
+        if (start >= text.length()) break;
+
+        size_t remaining = text.length() - start;
+        size_t take = remaining <= VOICE_CHUNK_CHARS ? remaining : VOICE_CHUNK_CHARS;
+
+        if (take < remaining) {
+            size_t floor = start + VOICE_CHUNK_CHARS / 3;
+            size_t cut = 0;
+            for (size_t i = start + take; i > floor && !cut; i--) {
+                char c = text[i];
+                if (c == '.' || c == '!' || c == '?' || c == '\n') cut = i + 1;
+            }
+            for (size_t i = start + take; i > floor && !cut; i--) {
+                char c = text[i];
+                if (c == ',' || c == ';' || c == ':') cut = i + 1;
+            }
+            for (size_t i = start + take; i > start && !cut; i--) {
+                if (text[i] == ' ') cut = i;
+            }
+            if (cut > start) take = cut - start;
+        }
+
+        String piece = text.substring(start, start + take);
+        piece.trim();
+        if (piece.length()) out.push_back(piece);
+        start += take;
+    }
+}
+
+// Name a clip after the language and the exact words: a phrase said twice is
+// read from storage the second time, and the same phrase in another language is
+// a different entry.
+static String voiceCachePath(const String &lang, const String &text) {
+    uint32_t h = 2166136261u; // FNV-1a
+    for (size_t i = 0; i < text.length(); i++) {
+        h ^= (uint8_t)text[i];
+        h *= 16777619u;
+    }
+    char name[64];
+    snprintf(
+        name,
+        sizeof(name),
+        "%s/%s_%08x_%u.mp3",
+        VOICE_CACHE_DIR,
+        lang.c_str(),
+        (unsigned)h,
+        (unsigned)text.length()
+    );
+    return String(name);
+}
+
+static bool voiceReadCache(const String &path, uint8_t **out, size_t *outLen) {
+    *out = nullptr;
+    *outLen = 0;
+    FS *fs = nullptr;
+    if (!getFsStorage(fs) || !fs->exists(path)) return false;
+
+    File f = fs->open(path, FILE_READ);
+    if (!f) return false;
+    size_t size = f.size();
+    if (size < 512 || size > VOICE_MAX_CLIP_BYTES) {
+        f.close();
+        return false;
+    }
+
+    uint8_t *buf = voiceAlloc(size);
+    if (!buf) {
+        f.close();
+        return false;
+    }
+    size_t got = f.read(buf, size);
+    f.close();
+    // A truncated file or an error page saved by an older build must not reach
+    // the decoder; every MP3 frame starts with 0xFF.
+    if (got != size || buf[0] != 0xFF) {
+        free(buf);
+        return false;
+    }
+
+    *out = buf;
+    *outLen = size;
+    return true;
+}
+
+static void voiceWriteCache(const String &path, const uint8_t *buf, size_t len) {
+    FS *fs = nullptr;
+    if (!getFsStorage(fs)) return;
+    if (fs->exists(path)) return; // never rewrite a clip that is already right
+    if (!fs->exists(VOICE_CACHE_DIR)) fs->mkdir(VOICE_CACHE_DIR);
+
+    File f = fs->open(path, FILE_WRITE);
+    if (!f) {
+        Serial.println("VOICE: cache write failed");
+        return;
+    }
+    f.write(buf, len);
+    f.close();
+}
+
+// One HTTPS GET, straight into a PSRAM buffer. The clip is not a secret, so the
+// certificate is not pinned: the device ships no CA store and a stale bundle
+// would break speech on every certificate rotation.
+static bool voiceFetchClip(const String &lang, const String &text, uint8_t **out, size_t *outLen) {
+    *out = nullptr;
+    *outLen = 0;
+    if (WiFi.status() != WL_CONNECTED) return false;
+
+    String url = "https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=" + lang +
+                 "&q=" + voiceUrlEncode(text);
+
+    WiFiClientSecure secure;
+    secure.setInsecure();
+    HTTPClient http;
+    http.setConnectTimeout(6000);
+    http.setTimeout(8000);
+    // The endpoint answers 403 to a request without a browser user agent.
+    http.setUserAgent(
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+    );
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+
+    if (!http.begin(secure, url)) {
+        Serial.println("VOICE: could not open the request");
+        return false;
+    }
+
+    int code = http.GET();
+    if (code != HTTP_CODE_OK) {
+        Serial.printf("VOICE: HTTP %d\n", code);
+        http.end();
+        return false;
+    }
+
+    WiFiClient *stream = http.getStreamPtr();
+    if (!stream) {
+        http.end();
+        return false;
+    }
+
+    uint8_t *buf = nullptr;
+    size_t cap = 0, len = 0;
+    uint32_t lastData = millis();
+    while (millis() - lastData < 6000) {
+        int avail = stream->available();
+        if (avail > 0) {
+            size_t want = (size_t)avail;
+            if (len + want > VOICE_MAX_CLIP_BYTES) want = VOICE_MAX_CLIP_BYTES - len;
+            if (want == 0) break;
+            if (len + want > cap) {
+                size_t newCap = cap ? cap : 8192;
+                while (newCap < len + want) newCap *= 2;
+                if (newCap > VOICE_MAX_CLIP_BYTES) newCap = VOICE_MAX_CLIP_BYTES;
+                uint8_t *grown = voiceAlloc(newCap);
+                if (!grown) break;
+                if (buf) {
+                    memcpy(grown, buf, len);
+                    free(buf);
+                }
+                buf = grown;
+                cap = newCap;
+            }
+            int got = stream->readBytes(buf + len, want);
+            if (got <= 0) break;
+            len += got;
+            lastData = millis(); // data is flowing: restart the idle timer
+        } else if (!http.connected()) {
+            break;
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(5));
+        }
+    }
+    http.end();
+
+    // An HTML error page is not speech; a real clip is a pile of MP3 frames.
+    if (len < 512 || buf[0] != 0xFF) {
+        if (buf) free(buf);
+        Serial.println("VOICE: response was not audio");
+        return false;
+    }
+
+    *out = buf;
+    *outLen = len;
+    return true;
+}
+
+// Blocking, like the SAM call it replaces: one clip, stop on any key.
+static bool voicePlayClip(uint8_t *buf, size_t len) {
+    AudioOutputI2S *out = createConfiguredAudioOutput();
+    if (!out) return false;
+    if (!out->begin()) {
+        delete out;
+        return false;
+    }
+
+    AudioFileSourcePROGMEM *src = new AudioFileSourcePROGMEM(buf, len);
+    AudioGeneratorMP3 *gen = new AudioGeneratorMP3();
+    bool ok = src && gen && gen->begin(src, out);
+
+    if (ok) {
+        while (gen->isRunning()) {
+            if (!gen->loop() || check(AnyKeyPress)) gen->stop();
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
+    }
+
+    if (gen) {
+        if (gen->isRunning()) gen->stop();
+        delete gen;
+    }
+    if (src) {
+        src->close();
+        delete src;
+    }
+    out->stop();
+    delete out;
+    return ok;
+}
+
+// Speak `text` in the configured voice. Returns false when nothing was spoken,
+// so the caller can still fall back to SAM.
+static bool ttsSpeakOnline(const String &text) {
+    std::vector<String> parts;
+    voiceSplitText(text, parts);
+    if (parts.empty()) return false;
+
+    const String lang = voiceLangTag(bruceConfig.voiceLang);
+    bool spoke = false;
+
+    for (size_t i = 0; i < parts.size(); i++) {
+        // A long text is several clips; this is the only place a press can stop
+        // it, since each clip plays to its end.
+        if (i > 0 && check(AnyKeyPress)) break;
+
+        String path = voiceCachePath(lang, parts[i]);
+        uint8_t *buf = nullptr;
+        size_t len = 0;
+
+        if (!voiceReadCache(path, &buf, &len)) {
+            if (!voiceFetchClip(lang, parts[i], &buf, &len)) {
+                if (buf) free(buf);
+                return spoke;
+            }
+            voiceWriteCache(path, buf, len);
+        }
+
+        _setup_codec_speaker(true);
+        bool ok = voicePlayClip(buf, len);
+        _setup_codec_speaker(false);
+
+        if (buf) free(buf);
+        if (!ok) break;
+        spoke = true;
+    }
+
+    return spoke;
+}
+
 bool tts(String text, PlaybackMode mode) {
     if (!bruceConfig.soundEnabled) return false;
 
@@ -615,6 +931,13 @@ bool tts(String text, PlaybackMode mode) {
 
     // Stop any current playback
     if (isAudioPlaying()) { stopAudioPlayback(); }
+
+    // Natural speech first: SAM only knows English phonemes, so every other
+    // language through it is spelling rather than speaking.
+    if (bruceConfig.voiceOnline) {
+        if (ttsSpeakOnline(text)) return true;
+        Serial.println("VOICE: online voice unavailable, falling back to SAM");
+    }
 
     _setup_codec_speaker(true);
 
@@ -654,7 +977,12 @@ bool isAudioFile(const String &filepath) {
            filepath.endsWith(".aac") || filepath.endsWith(".flac");
 }
 
-void playTone(unsigned int frequency, unsigned long duration, short waveType) {
+// allowKeyAbort is false for the sound-theme cue player: it runs on its own
+// task, and check(AnyKeyPress) there would consume the press the UI is waiting
+// for - a beep must never eat a button.
+static void playToneInternal(
+    unsigned int frequency, unsigned long duration, short waveType, float amplitude, bool allowKeyAbort
+) {
     if (!bruceConfig.soundEnabled) return;
 
     _setup_codec_speaker(true);
@@ -682,7 +1010,11 @@ void playTone(unsigned int frequency, unsigned long duration, short waveType) {
         return;
     }
 
-    float volumeScale = (bruceConfig.soundVolume / AUDIO_VOLUME_MAX) * AUDIO_VOLUME_SCALE;
+    // `amplitude` arrives already scaled (see playTone/playToneAtLevel): one
+    // place decides how loud a tone is, not two multiplying constants.
+    float volumeScale = amplitude;
+    if (volumeScale > 1.0f) volumeScale = 1.0f;
+    if (volumeScale < 0.0f) volumeScale = 0.0f;
 
     if (waveType == 0) {
         file->addAudioGenerators([volumeScale, hz](const float time) {
@@ -717,7 +1049,7 @@ void playTone(unsigned int frequency, unsigned long duration, short waveType) {
     }
 
     while (wav->isRunning()) {
-        if (!wav->loop() || check(AnyKeyPress)) { wav->stop(); }
+        if (!wav->loop() || (allowKeyAbort && check(AnyKeyPress))) { wav->stop(); }
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 
@@ -726,6 +1058,19 @@ void playTone(unsigned int frequency, unsigned long duration, short waveType) {
     delete out;
 
     _setup_codec_speaker(false);
+}
+
+void playTone(unsigned int frequency, unsigned long duration, short waveType) {
+    playToneInternal(
+        frequency, duration, waveType, (bruceConfig.soundVolume / AUDIO_VOLUME_MAX) * AUDIO_VOLUME_SCALE, true
+    );
+}
+
+void playToneAtLevel(unsigned int frequency, unsigned long duration, float level) {
+    if (!bruceConfig.soundEnabled) return;
+    if (level <= 0.0f) return;
+    if (level > 1.0f) level = 1.0f;
+    playToneInternal(frequency, duration, 0, level * AUDIO_CUE_SCALE, false);
 }
 
 #endif

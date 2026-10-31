@@ -11,6 +11,15 @@ QueueHandle_t cmdQueue = nullptr;
 QueueHandle_t rspQueue = nullptr;
 TaskHandle_t serialcmdsTaskHandle;
 
+// Set by a page that speaks its own protocol on the port (UsbEthBridge). The
+// task keeps running so Developer Options housekeeping still happens, but it
+// must not read the port: those bytes are frames, not a command line.
+static volatile bool consoleSuspended = false;
+
+void setSerialConsoleSuspended(bool suspended) { consoleSuspended = suspended; }
+
+bool serialConsoleSuspended() { return consoleSuspended; }
+
 struct CmdPacket {
     char text[512]; // command size
 };
@@ -37,6 +46,7 @@ bool parseSerialCommand(const String &command, bool waitForResponse) {
 }
 
 void handleSerialCommands(SerialCli &serialCli) {
+    if (consoleSuspended) { return; }
     CmdPacket packet;
     if (cmdQueue && rspQueue) {
         if (xQueueReceive(cmdQueue, &packet, 0) == pdTRUE) {
@@ -94,7 +104,12 @@ void _serialCmdsTaskLoop(void *pvParameters) {
     Serial.begin(115200);
     while (1) {
         handleSerialCommands(serialCli);
-        UsbDebug::loop(); // batch queue drain + hot reload polling + error stream
+        // While a page owns the port (USB Ethernet bridge), the housekeeping
+        // must not run either: its error stream and hot-reload lines would be
+        // written into the frame stream as text.
+        if (!consoleSuspended) {
+            UsbDebug::loop(); // batch queue drain + hot reload polling + error stream
+        }
         // 1 ms instead of 10: this is the floor on console latency (every typed
         // command, every binary frame and every streamed log line waited up to
         // 10 ms here). The work per pass is bounded, so the shorter tick costs

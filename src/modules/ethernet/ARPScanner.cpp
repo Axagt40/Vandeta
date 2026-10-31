@@ -22,14 +22,17 @@
 #include "modules/ethernet/ARPoisoner.h"
 #include "modules/ethernet/DHCPStarvation.h"
 #include "modules/ethernet/MACFlooding.h"
+#include "modules/ethernet/UsbEthBridge.h"
 #include <ETH.h>
 #endif
 #include <globals.h>
 #include <sstream>
-void run_arp_scanner() {
+void run_arp_scanner(esp_netif_t *iface) {
 #if !defined(LITE_VERSION)
-    // Prefer the Arduino ETH netif, fall back to legacy key-based lookup
-    esp_netif_t *esp_netinterface = ETH.netif();
+    // Use the caller's interface when it has one (USB Ethernet bridge), then
+    // the Arduino ETH netif, then the legacy key-based lookup.
+    esp_netif_t *esp_netinterface = iface;
+    if (esp_netinterface == nullptr) { esp_netinterface = ETH.netif(); }
     if (esp_netinterface == nullptr) { esp_netinterface = esp_netif_get_handle_from_ifkey("ETH_DEF"); }
     if (esp_netinterface == nullptr) {
         Serial.println("Failed to get netif handle");
@@ -138,12 +141,17 @@ void ARPScanner::setup() {
 
     if (esp_netif_get_ip_info(esp_net_interface, &ip_info) != ESP_OK) {
         Serial.println("Can't get IP informations");
+        // Every early exit has to give the core back: setup() locks it above,
+        // and NETIF_NO_IP below is the normal state right after the page opens
+        // (DHCP has not answered yet), so this path is easy to hit.
+        UNLOCK_TCPIP_CORE();
         return;
     }
 
     if (ip_info.ip.addr == 0 || ip_info.netmask.addr == 0) {
         Serial.println("Ethernet has no IP/netmask, aborting ARP scan");
         displayError("Ethernet not ready", true);
+        UNLOCK_TCPIP_CORE();
         return;
     }
 
@@ -159,6 +167,7 @@ void ARPScanner::setup() {
     if (net_iface == nullptr || net_iface->linkoutput == nullptr ||
         net_iface->hwaddr_len != MAC_ADDRESS_LENGTH) {
         Serial.println("Network interface not ready for ARP scan");
+        UNLOCK_TCPIP_CORE();
         return;
     }
 
@@ -215,7 +224,16 @@ void ARPScanner::setup() {
         target.u_addr.ip4.addr = gateway;
         ping_target(target); // Ping target to force ARP request
 
-        while (wait_ping) { delay(1); }
+        // The USB bridge delivers BACK as an injected keypress, and keys do not
+        // survive this wait (nothing polls them here). Its stop request does, so
+        // Ctrl-C on the PC still closes the page instead of stranding it.
+        while (wait_ping) {
+            if (UsbEthBridge::stopRequested()) {
+                hostslist_eth.clear();
+                return;
+            }
+            delay(1);
+        }
 
         struct eth_addr *eth_ret = NULL;
         const ip4_addr_t *ipaddr_ret = NULL;
@@ -231,6 +249,10 @@ void ARPScanner::setup() {
     }
 
 ScanHostMenu:
+    if (UsbEthBridge::stopRequested()) {
+        hostslist_eth.clear();
+        return;
+    }
     if (hostslist_eth.empty()) {
         tft.println("No hosts found");
         delay(2000);

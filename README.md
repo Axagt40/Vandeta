@@ -146,17 +146,20 @@ extra layer on top of them.
 * **Universal Remote** — the Flipper IR database's TV / AC / fans / audio /
   projectors / LEDs libraries (2,858 codes, shipped on the card under
   `/infrared/Universal/`), sweep-per-button with pause and cancel.
-* **IR Suite** — `Infrared > IR Suite`, the Vandeta IR Suite 1.0. It is built
+* **IR Suite** — `Infrared > IR Suite`, the Vandeta IR Suite 1.1. It is built
   into the firmware image, so the row works with no SD card and there is
-  nothing to copy. It brute-forces only the Power code of every TV candidate,
-  locks and slowly replays the last ten when the TV reacts, saves the
-  identified device as a `.ir` remote in `/BruceIR` (so IR > Custom IR lists it
-  with the recorded remotes), with every button the library holds, and runs
+  nothing to copy. One **Bruteforce remotes** row asks which kind of remote
+  first — the same six types the Universal Remote offers (TV, AC, Fans, Audio,
+  Projectors, LEDs) — and then offers three sweeps for that type: **brand**
+  (each per-model `.ir` of one make), **remote** (every candidate code in the
+  type's library) or **family** (one code per protocol+address family). It
+  locks and slowly replays the last ten codes when the device reacts, saves the
+  identified one as a `.ir` remote in `/BruceIR` (so IR > Custom IR lists it
+  with the recorded remotes) with every button the library holds, and runs
   BadUSB-style `.txt` payloads (`UP`, `DELAY 300`, `OK`) against that remote.
-  Also sweeps one brand, drives a saved remote as a keypad, and mirrors an
-  image/video to a DLNA or Cast TV. The same library is exposed to scripts
-  (`ir.universalList`, `universalSend`, `universalFamily`,
-  `ir.transmitButton`).
+  Also drives a saved remote as a keypad and mirrors an image/video to a DLNA
+  or Cast TV. The same library is exposed to scripts (`ir.universalList`,
+  `universalSend`, `universalFamily`, `ir.transmitButton`).
 * **Brand AC remotes** for twelve makes, sending a full state frame (power,
   mode, 16–30 °C, fan).
 * Hand-written encoders for RCA and NEC42, protocols the ESP32 IR library lacks.

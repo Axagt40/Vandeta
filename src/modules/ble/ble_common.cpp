@@ -98,11 +98,11 @@ void ble_info(const String &name, const String &address, const String &signal) {
     tft.drawCentreString("   Press " + String(BTN_ALIAS) + " to act", tftWidth / 2, tftHeight - 20, 1);
 
     delay(300);
-    while (!check(SelPress)) {
-        while (!check(SelPress)) { yield(); }
-        returnToMenu = true;
-        break;
-    }
+    // Wait for a key without burning a core: the old nested
+    // `while (!check(SelPress)) yield();` spun at 100 % just to wait for a
+    // button, and BACK could not leave the page at all - only SEL could.
+    while (!check(SelPress) && !check(EscPress)) { vTaskDelay(pdMS_TO_TICKS(20)); }
+    returnToMenu = true;
 }
 
 class AdvertisedDeviceCallbacks : public NimBLEScanCallbacks {};

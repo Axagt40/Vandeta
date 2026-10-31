@@ -2,6 +2,7 @@
 #include "protocols/rf_config.h"
 #include "protocols/rf_decoder.h"
 #include "rf_utils.h"
+#include "core/sound_theme.h" // no cue while a capture is running
 #include "core/ui_gradient.h" // the same pink -> purple ramp the UI draws its chrome with
 #include <ELECHOUSE_CC1101_SRC_DRV.h>
 static bool
@@ -263,6 +264,8 @@ void rf_raw_record_create(RawRecording &recorded, bool &returnToMenu) {
         }
         Serial.println("M5 GPIO RAW recorder initialized");
 
+        soundPlay(CUE_REC_START);
+        soundSuppressPush(); // a cue mid-capture would land in the recording
         while (!status.recordingFinished) {
             previousMillis = millis();
 
@@ -299,7 +302,9 @@ void rf_raw_record_create(RawRecording &recorded, bool &returnToMenu) {
             vTaskDelay(pdMS_TO_TICKS(10));
         }
 
+        soundSuppressPop();
         Serial.println("Recording stopped.");
+        soundPlay(CUE_REC_STOP);
         rx.end();
         deinitRfModule();
         return;
@@ -325,6 +330,8 @@ void rf_raw_record_create(RawRecording &recorded, bool &returnToMenu) {
     ESP_ERROR_CHECK(rmt_receive(rx_ch, item, sizeof(item), &receive_config));
     Serial.println("RMT Initialized");
 
+    soundPlay(CUE_REC_START);
+    soundSuppressPush();
     while (!status.recordingFinished) {
         previousMillis = millis();
         size_t rx_size = 0;
@@ -373,7 +380,9 @@ void rf_raw_record_create(RawRecording &recorded, bool &returnToMenu) {
         }
         rf_raw_record_draw(status);
     }
+    soundSuppressPop();
     Serial.println("Recording stopped.");
+    soundPlay(CUE_REC_STOP);
     rmt_disable(rx_ch);
     rmt_del_channel(rx_ch);
     vQueueDelete(receive_queue);
