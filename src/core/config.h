@@ -1,0 +1,293 @@
+#ifndef __BRUCE_CONFIG_H__
+#define __BRUCE_CONFIG_H__
+
+#include "theme.h"
+#include <Arduino.h>
+#include <ArduinoJson.h>
+#include <map>
+#include <precompiler_flags.h>
+#include <set>
+#include <vector>
+
+enum EvilPortalPasswordMode { FULL_PASSWORD = 0, FIRST_LAST_CHAR = 1, HIDE_PASSWORD = 2, SAVE_LENGTH = 3 };
+
+class BruceConfig : public BruceTheme {
+public:
+    struct WiFiCredential {
+        String ssid;
+        String pwd;
+    };
+    struct Credential {
+        String user;
+        String pwd;
+    };
+    struct QrCodeEntry {
+        String menuName;
+        String content;
+    };
+    struct EvilPortalEndpoints {
+        String getCredsEndpoint;
+        String setSsidEndpoint;
+        bool showEndpoints;
+        bool allowSetSsid;
+        bool allowGetCreds;
+    };
+
+    const char *filepath = "/bruce.conf";
+
+    //  Settings
+    int dimmerSet = 60;
+    int bright = 100;
+    bool automaticTimeUpdateViaNTP = true;
+    float tmz = 0;
+    bool dst = false;
+    bool clock24hr = true;
+    int soundEnabled = 1;
+    int soundVolume = 100;
+    // SoundCue set: 0 = VANDETA, 1 = CLASSIC (the old single blip), 2 = OFF.
+    // Loudness is soundVolume above and nothing else - this key picks notes.
+    int soundTheme = 0;
+    int wifiAtStartup = 0;
+    // Channel-hopping plan (task 1.4): 0 = all of 1-11 (the old behaviour),
+    // 1 = the non-overlapping 1/6/11, 2 = all of 1-13. Stored as a preset rather
+    // than a channel list so it cannot describe an empty or illegal sweep.
+    int wifiHopPlan = 0;
+    int instantBoot = 0;
+    String keyboardLang = "QWERTY"; // "QWERTY" | "AZERTY" | "QWERTZ"
+
+#ifdef HAS_RGB_LED
+    // Led
+    int ledBright = 50;
+    uint32_t ledColor = 0x960064;
+    int ledBlinkEnabled = 1;
+    int ledEffect = 0;
+    int ledEffectSpeed = 5;
+    int ledEffectDirection = 1;
+#endif
+
+    // Wifi
+    Credential webUI = {"admin", "bruce"};
+    std::vector<String> webUISessions = {}; // FIFO queue of session tokens
+    WiFiCredential wifiAp = {"BruceNet", "brucenet"};
+    std::map<String, String> wifi = {};
+    std::set<String> evilWifiNames = {};
+    String wifiMAC = ""; //@IncursioHack
+    bool TerminalLog = true;
+
+    // EvilPortal
+    EvilPortalEndpoints evilPortalEndpoints = {"/creds", "/ssid", true, true, true};
+    EvilPortalPasswordMode evilPortalPasswordMode = FULL_PASSWORD;
+    String evilPortalGatewayIp = "172.0.0.1";
+
+    void setWifiMAC(const String &mac) {
+        wifiMAC = mac;
+        saveFile(); // opcional, para salvar imediatamente
+    }
+
+    // RFID
+    std::set<String> mifareKeys = {};
+
+    // Misc
+    String startupApp = "";
+    String startupAppJSInterpreterFile = "";
+    String wigleBasicToken = "";
+    String wdgwarsApiKey = "your 64-char hex key from wdgwars.pl/profile";
+    // Legacy alias of usbDebug (the removed Config > Dev Mode page). Kept so
+    // old config files and scripts still parse; validateConfig() re-syncs it.
+    int devMode = 0;
+
+    // Developer Mode - ONE switch, persisted in bruce.conf, shown as a single
+    // toggle in Config > System Config > Developer Options.
+    int usbDebug = 0;        // the switch: developer console + speed profile
+    int usbDebugDevMode = 0; // alias of usbDebug (speed over stability profile)
+    int usbDebugBinary = 0;  // 0 = text CLI, 1 = framed binary protocol
+
+    // Battery (Config > Battery). Plain persisted ints: a bruce.conf written
+    // before these existed simply keeps the defaults below.
+    int batterySaver = 0; // 0 = off, 1 = lower the CPU clock and cap the backlight
+    int chargeLimit = 0;  // index: 0=100% 1=90% 2=80% 3=70%, applied to the charger
+
+    // UI gradient: paint primary-coloured UI furniture with the boot splash's
+    // pink -> purple ramp instead of one flat colour. Read by ui_gradient.h;
+    // toggle lives in Config > Display & UI > UI Color.
+    bool uiGradient = true;
+    int colorInverted = 1;
+    int badUSBBLEKeyboardLayout = 0;
+    uint16_t badUSBBLEKeyDelay = 10;
+    bool badUSBBLEShowOutput = true;
+
+    // BadUSB extended configuration (menu: Others > BadUSB & HID > HID Settings)
+    int badUSBBLEHidType = 0;                 // 0 keyboard, 1 keyboard+mouse, 2 mouse
+    uint16_t badUSBBLEVid = 0x303A;           // USB vendor id presented by BadUSB
+    uint16_t badUSBBLEPid = 0x4004;           // USB product id presented by BadUSB
+    String badUSBBLEManufacturer = "Bruce";   // USB manufacturer string
+    String badUSBBLEProduct = "Bruce BadUSB"; // USB product string
+    String badUSBBLESerial = "";              // USB serial string (empty = framework default)
+    uint16_t badUSBBLEStringDelay = 0;        // STRING delay in ms (0 = use Key Delay)
+    String badUSBBLEPayloadDir = "/BruceBadUSB";                  // payload storage folder
+    String badUSBBLEDefaultPayload = "";                          // payload run by one-touch actions
+    String badUSBBLECustomLayoutFile = "/BruceBadUSB/custom.lay"; // custom layout import/export path
+
+    // SubGHz Wardriver (RF > Wardriver). No GPS on this board, so a record is
+    // the signal itself: frequency, timestamp and the raw pulse train.
+    float rfWardriverFreq = 433.92f;   // frequency to listen on
+    uint16_t rfWardriverDedupeSec = 30; // ignore an identical signal this long (0 = off)
+    uint8_t rfWardriverMinPulses = 16;  // shorter bursts are noise, not a remote
+    bool rfWardriverHop = false;        // walk 433/315/868/915 instead of one band
+
+    // Same settings menu, second consumer: BadBLE (the BLE HID keyboard) reads
+    // the manufacturer / product / VID / PID above and, when this is on, the
+    // Apple compatibility patch (advertising flags + scan response + Just Works
+    // pairing, which is what iOS and macOS need before they will list it).
+    bool badUSBBLEApplePatch = false;
+
+    std::vector<String> disabledMenus = {};
+
+    std::vector<QrCodeEntry> qrCodes = {
+        {"Bruce AP",   "WIFI:T:WPA;S:BruceNet;P:brucenet;;"},
+        {"Bruce Wiki", "https://github.com/pr3y/Bruce/wiki"},
+        {"Bruce Site", "https://bruce.computer"            },
+        {"Rickroll",   "https://youtu.be/dQw4w9WgXcQ"      }
+    };
+
+    /////////////////////////////////////////////////////////////////////////////////////
+    // Constructor
+    /////////////////////////////////////////////////////////////////////////////////////
+    BruceConfig() {};
+    // ~BruceConfig();
+
+private:
+    bool _mifareKeysLoaded = false;
+
+public:
+
+    /////////////////////////////////////////////////////////////////////////////////////
+    // Operations
+    /////////////////////////////////////////////////////////////////////////////////////
+    void saveFile();
+    void fromFile(bool checkFS = true);
+    void factoryReset();
+    void validateConfig();
+    JsonDocument toJson() const;
+
+    // UI Color
+    void setUiColor(uint16_t primary, uint16_t *secondary = nullptr, uint16_t *background = nullptr);
+
+    // Settings
+    void setDimmer(int value);
+    void validateDimmerValue();
+    void setBright(uint8_t value);
+    void validateBrightValue();
+    void setAutomaticTimeUpdateViaNTP(bool value);
+    void setTmz(float value);
+    void validateTmzValue();
+    void setDST(bool value);
+    void setClock24Hr(bool value);
+    void setSoundEnabled(int value);
+    void setSoundVolume(int value);
+    void setSoundTheme(int value);
+    void validateSoundEnabledValue();
+    void validateSoundVolumeValue();
+    void validateSoundThemeValue();
+    void setWifiAtStartup(int value);
+    void validateWifiAtStartupValue();
+
+    void setWifiHopPlan(int value);
+    void validateWifiHopPlanValue();
+
+#ifdef HAS_RGB_LED
+    // Led
+    void setLedBright(int value);
+    void validateLedBrightValue();
+    void setLedColor(uint32_t value);
+    void validateLedColorValue();
+    void setLedBlinkEnabled(int value);
+    void validateLedBlinkEnabledValue();
+    void setLedEffect(int value);
+    void validateLedEffectValue();
+    void setLedEffectSpeed(int value);
+    void validateLedEffectSpeedValue();
+    void setLedEffectDirection(int value);
+    void validateLedEffectDirectionValue();
+#endif
+
+    // Wifi
+    void setWebUICreds(const String &usr, const String &pwd);
+    void setWifiApCreds(const String &ssid, const String &pwd);
+    void setTerminalLog(bool value);
+    void addWifiCredential(const String &ssid, const String &pwd);
+    void addQrCodeEntry(const String &menuName, const String &content);
+    void removeQrCodeEntry(const String &menuName);
+    String getWifiPassword(const String &ssid) const;
+    void addEvilWifiName(String value);
+    void removeEvilWifiName(String value);
+    void setEvilEndpointCreds(String value);
+    void setEvilEndpointSsid(String value);
+    void setEvilAllowEndpointDisplay(bool value);
+    void setEvilAllowGetCreds(bool value);
+    void setEvilAllowSetSsid(bool value);
+    void setEvilPasswordMode(EvilPortalPasswordMode value);
+    void setEvilGatewayIp(String value);
+    void validateEvilEndpointCreds();
+    void validateEvilEndpointSsid();
+    void validateEvilPasswordMode();
+    void validateEvilGatewayIp();
+
+    // RFID
+    void ensureMifareKeysLoaded();
+    void addMifareKey(String value);
+    void validateMifareKeysItems();
+
+    // Misc
+    void setStartupApp(String value);
+    void setStartupAppJSInterpreterFile(String value);
+    void setWigleBasicToken(String value);
+    void setWdgwarsApiKey(String value);
+    void setDevMode(int value);
+    void validateDevModeValue();
+
+    // Developer Options
+    void setUsbDebug(int value);
+    void validateUsbDebugValue();
+    void setUsbDebugDevMode(int value);
+    void validateUsbDebugDevModeValue();
+    void setUsbDebugBinary(int value);
+    void validateUsbDebugBinaryValue();
+    void setBatterySaver(int value);
+    void validateBatterySaverValue();
+    void setChargeLimit(int value);
+    void validateChargeLimitValue();
+    void setColorInverted(int value);
+    void validateColorInverted();
+    void setBadUSBBLEKeyboardLayout(int value);
+    void validateBadUSBBLEKeyboardLayout();
+    void setBadUSBBLEKeyDelay(uint16_t value);
+    void validateBadUSBBLEKeyDelay();
+    void setBadUSBBLEShowOutput(bool value);
+    void setBadUSBBLEHidType(int value);
+    void validateBadUSBBLEHidType();
+    void setBadUSBBLEVid(uint16_t value);
+    void setBadUSBBLEPid(uint16_t value);
+    void setBadUSBBLEManufacturer(const String &value);
+    void setBadUSBBLEProduct(const String &value);
+    void setBadUSBBLESerial(const String &value);
+    void setBadUSBBLEStringDelay(uint16_t value);
+    void validateBadUSBBLEStringDelay();
+    void setBadUSBBLEPayloadDir(const String &value);
+    void setBadUSBBLEDefaultPayload(const String &value);
+    void setBadUSBBLECustomLayoutFile(const String &value);
+    void setBadUSBBLEApplePatch(bool value);
+
+    void setWardriverFreq(float value);
+    void setWardriverDedupeSec(uint16_t value);
+    void setWardriverMinPulses(uint8_t value);
+    void setWardriverHop(bool value);
+    void addDisabledMenu(String value);
+    void removeDisabledMenu(String value);
+
+    void addWebUISession(const String &token);
+    void removeWebUISession(const String &token);
+    bool isValidWebUISession(const String &token);
+};
+
+#endif

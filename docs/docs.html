@@ -496,15 +496,18 @@ esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 115200 \
       <div class="section-head">
         <h2>Source</h2>
         <p>
-          The firmware source is not published. What is published is the result:
-          the images, their checksums, the SD pack and this documentation.
+          The firmware source is published in the
+          <a href="https://github.com/Axagt40/Vandeta">GitHub repository</a>
+          under AGPL-3.0, the same licence as upstream Bruce.
         </p>
       </div>
 
       <p>
-        Every release is a single merged image, so a flash can always be checked
-        against the SHA-256 published with it. Vandeta is AGPL-3.0 software built
-        on Bruce, and the source is available to anyone who receives the binary.
+        Everything the image is built from is in the repository:
+        <code>src/</code>, <code>boards/</code>, <code>lib/</code>,
+        <code>sd_files/</code> and <code>platformio.ini</code>, built with
+        PlatformIO. Every release is also a single merged image, so a flash can
+        always be checked against the SHA-256 published with it.
       </p>
 
       <div class="callout">

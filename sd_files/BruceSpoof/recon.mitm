@@ -1,0 +1,16 @@
+# Vandeta MITM payload - watch the network, redirect nobody.
+#
+# No page, no redirect and no DNS rule: every request keeps going to its real
+# server through the forwarding bridge, while the run feed lists the domains as
+# they are visited ("dns query ...", "GET host (no rule)"). Use it to map what a
+# network is doing, or to prove the attack path before arming a real payload.
+#
+#   WiFi > Wifi Atks > MITM Attack > Payload > recon.mitm > Start
+
+# Keep the victims online: without the bridge their traffic dies at the board,
+# and a dead network is not a network you can watch.
+forward auto
+
+# What the board landed on, then who actually answered ARP.
+info
+probe all

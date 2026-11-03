@@ -1,0 +1,21 @@
+# open_cast - put the TV on the input that carries the Cast/mirroring dongle
+# and select it in the source list.
+#
+# This is the old open_mirror sequence, kept separate because DLNA now uses
+# open_mirror.txt to select digital TV instead. Run it before Cast media; the
+# DLNA "Push media" path does not use it.
+#
+# INPUT opens the source list, 1 selects the first source (digital TV), then
+# INPUT re-opens the list and UP moves to the mirroring entry above it.
+
+DELAY 500
+INPUT
+DELAY 2000
+1
+DELAY 2000
+INPUT
+DELAY 2500
+UP
+DELAY 1200
+OK
+DELAY 500

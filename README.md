@@ -300,8 +300,10 @@ extra layer on top of them.
 <details>
 <summary><b>Build and release</b></summary>
 
-* The source is not published. This repository carries the releases, the
-  browser flasher and the documentation; the code stays private.
+* The source is published in this repository, under **AGPL-3.0** — the same
+  licence as upstream Bruce. Everything the image is built from is here:
+  `src/`, `boards/`, `lib/`, the card files in `sd_files/` and
+  `platformio.ini` (build steps below).
 * Every released image is one merged file &mdash; bootloader + partition table
   + app &mdash; written at `0x0` and checked against its published SHA-256.
 * The universal IR libraries ship in the 1.3 SD pack and on the card under

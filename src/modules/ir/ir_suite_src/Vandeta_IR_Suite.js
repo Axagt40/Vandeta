@@ -1,0 +1,1941 @@
+// Vandeta IR Suite 1.1 - the IR half of the BadUSB idea (formerly Bad_IR.js).
+//
+// Two jobs in one script:
+//
+//   1. Brute force a remote. This is no longer a TV tool: IR > Universal Remote
+//      sweeps six libraries (TV, AC, Fans, Audio, Projectors, LEDs) and the
+//      suite sweeps the same six, so any remote the universal libraries know
+//      can be identified. Pick the type, then the way to sweep it:
+//        brand  - every per-model .ir file of one brand, pressing its Power
+//        remote - every candidate code of that type's library, one at a time
+//        family - one code per remote family (protocol + address), which is
+//                 what a saved remote is rebuilt from - the fast one
+//      A sweep sends one code, watches for SEL for 100 ms, and keeps the last
+//      ten codes. When the device reacts the last few are replayed slowly and
+//      the user picks the exact one; the identified code is saved as a remote
+//      file with every button the library holds for that device.
+//
+//   2. Run an IR Suite payload: a .txt file with one remote button per line, the
+//      way BadUSB payloads work. DELAY pauses, everything else is a button
+//      (UP, DOWN, OK, VOL_UP, ...) sent through the selected remote.
+//
+// A saved remote is a normal .ir file in /BruceIR - the same Flipper IR signals
+// format the firmware records, with the same header - so IR > Custom IR shows it
+// next to the recorded remotes and every button works there too. Payloads live
+// in /BruceIR/payloads.
+//
+// The screen is drawn by hand (no dialog menus) so the title and the remote
+// selector button stay on top on every screen.
+
+var W = display.width();
+var H = display.height();
+var C_BG = display.color(0, 0, 0);
+// Vandeta gradient: rgb(255,20,147) -> rgb(128,0,255). These are the endpoint
+// colours of the boot-splash crown, i.e. the same ramp core/ui_gradient.cpp
+// paints the firmware's frame, status-bar rule and menu highlight with, so the
+// suite and the stock pages around it read as one design. C_INK is the text
+// colour for anything drawn on the band (the firmware does the same: black text
+// on the gradient highlight).
+var C_V1 = display.color(255, 20, 147);
+var C_V2 = display.color(128, 0, 255);
+var C_INK = display.color(0, 0, 0);
+var C_TEXT = display.color(255, 255, 255);
+var C_DIM = display.color(150, 150, 150);
+
+// The suite's own identity, shown in the title bar of every screen. Bump
+// APP_VERSION when the script changes in a way users should be able to see.
+var APP_NAME = "VANDETA IR";
+var APP_VERSION = "1.1";
+
+// Layout, from the panel size. The T-Embed is 320x170, so the old menu (30 px
+// rows starting at y=72 plus a footer) ran off the bottom and had to be redrawn
+// every 25 ms; both are fixed here - the menu is drawn only when the selection
+// moves, and the status screens repaint just the two lines that change.
+var TITLE_H = 26;
+var BTN_Y = 32;
+var BTN_H = 22;
+var MENU_TOP = 56;
+// 16 px, not 20: the menu kept growing (family sweep, saved-remote pad) and
+// seven 20 px rows ran the last one past the bottom of the T-Embed's 170 px
+// panel. 56 + 7*16 = 168, which fits with the text baseline at +4.
+var ROW_H = 16;
+
+var REMOTE_DIR = "/BruceIR"; // same folder the IR menu browses
+var PAYLOAD_DIR = "/BruceIR/payloads";
+var CONFIG_FILE = "/BruceIR/irsuite.conf";
+// Pre-1.0 installs kept the selection here; it is read once if the new file is
+// missing, so renaming the suite never loses the chosen remote.
+var LEGACY_CONFIG_FILE = "/BruceIR/badir.conf";
+var UNIVERSAL_DIR = "/infrared/Universal";
+// One merged remote per remote family (protocol + address), produced by the
+// family builder. This is where the arrows, OK and the Input/Source button come
+// from: tv.ir only holds Power/Vol/Ch/Mute, so a remote rebuilt from tv.ir alone
+// can never press them.
+var FAMILY_DIR = "/infrared/families";
+
+// The remote types, in the order IR > Universal Remote lists them: one library
+// file per type, the same six files that page sweeps. `brands` is the folder a
+// per-model sweep walks; the SD pack ships TVs/ and ACs/ today, so a type
+// without one says so instead of inventing a list.
+var CATS = [
+    { label: "TV",         file: "tv.ir",         brands: "/infrared/TVs" },
+    { label: "AC",         file: "ac.ir",         brands: "/infrared/ACs" },
+    { label: "Fans",       file: "fans.ir",       brands: "/infrared/Fans" },
+    { label: "Audio",      file: "audio.ir",      brands: "/infrared/Audio" },
+    { label: "Projectors", file: "projectors.ir", brands: "/infrared/Projectors" },
+    { label: "LEDs",       file: "leds.ir",       brands: "/infrared/LEDs" }
+];
+
+// Pacing. A sweep should feel fast; the narrowing replay must be slow enough
+// that a TV with a 1 s cooldown still reacts inside its own window.
+//
+// Every sweep samples SEL/any key every 10 ms inside the gap instead of polling
+// once after the send: one poll per code lost every tap that happened while the
+// IR frame was going out, which is why SEL had to be held. A normal tap anywhere
+// inside the gap counts.
+//
+// 500 ms per code made the 295-candidate sweep ~2.5 minutes, so every sweep now
+// sends at the on-device universal remote's own cadence: IR > Universal Remote
+// waits 100 ms between candidates (SWEEP_GAP_MS in ir_universal.cpp). Matching
+// it keeps the IR Suite in step with the firmware instead of inventing a slower pace.
+//
+// A 100 ms window is short for a human, so the last LOCK_CODES codes before the
+// tap are kept and replayed. The narrowing replay stays slow at NARROW_GAP_MS so
+// a TV with a 1 s cooldown still confirms the final pick.
+var SWEEP_GAP_MS = 100;
+var LOCK_CODES = 10;
+var NARROW_GAP_MS = 1200;
+// A replay pass is slow on purpose. It used to fire the next candidate the
+// instant the previous window closed, which read as one continuous burst; a
+// short pause first makes each code a separate, countable event.
+var NARROW_PAUSE_MS = 500;
+var PAYLOAD_GAP_MS = 120;
+
+// Encoder skip. A 295-code sweep takes half a minute, and the useful code is
+// often number 150. Rolling the wheel now moves the candidate pointer instead
+// of waiting: nothing is transmitted while it is moving, and the sweep resumes
+// from the new position the moment it stops. The first detent moves one code;
+// a fast spin accelerates (up to 8 codes per detent, 25 per poll) so a hundred
+// codes are a couple of seconds away, while a slow roll still lands exactly
+// where it was aimed. Rolling back is the same gesture, and SEL still locks the
+// code that is on screen.
+var ROLL_MAX_STEP = 25;
+var ROLL_IDLE_MS = 400;
+var rollPending = 0;
+var rollLastAt = 0;
+var rollDir = 0;
+var rollMult = 1;
+
+// Payload button names -> the names Flipper remotes use.
+var ALIAS = {
+    UP: "Up", DOWN: "Down", LEFT: "Left", RIGHT: "Right",
+    OK: "Ok", SELECT: "Ok", ENTER: "Ok", CENTER: "Ok",
+    BACK: "Back", RETURN: "Back", HOME: "Home",
+    MENU: "Menu", EXIT: "Exit", INFO: "Info", GUIDE: "Guide",
+    POWER: "Power", PWR: "Power",
+    VOL_UP: "Vol_up", VOLUP: "Vol_up", VOL_PLUS: "Vol_up", "VOL+": "Vol_up",
+    VOL_DN: "Vol_dn", VOL_DOWN: "Vol_dn", VOLDOWN: "Vol_dn", VOL_MINUS: "Vol_dn", "VOL-": "Vol_dn",
+    MUTE: "Mute",
+    CH_UP: "Ch_next", CHUP: "Ch_next", CH_PLUS: "Ch_next", "CH+": "Ch_next",
+    CH_DN: "Ch_prev", CH_DOWN: "Ch_prev", CHDOWN: "Ch_prev", CH_MINUS: "Ch_prev", "CH-": "Ch_prev",
+    PLAY: "Play", PAUSE: "Pause", STOP: "Stop", NEXT: "Next", PREV: "Prev",
+    REWIND: "Rewind", REW: "Rewind", FORWARD: "Fast_forward", FF: "Fast_forward",
+    REC: "Rec", RECORD: "Rec",
+    // Source/inputs: family remotes use "Input" (merged from Source/Inputs/etc),
+    // per-model files use either - the sender falls back to _2/_3 variants.
+    SOURCE: "Input", SOURCES: "Input", INPUT: "Input", INPUTS: "Input",
+    ARROW_UP: "Up", ARROW_DOWN: "Down", ARROW_LEFT: "Left", ARROW_RIGHT: "Right",
+    CENTER: "Ok", CENTRE: "Ok", CONFIRM: "Ok",
+    SUBTITLE: "Subtitle", AUDIO: "Audio", TEXT: "Text", SLEEP: "Sleep",
+    ASPECT: "Aspect", LAST: "Last", LIST: "List", SMART: "Smart",
+    RED: "Red", GREEN: "Green", YELLOW: "Yellow", BLUE: "Blue",
+    0: "0", 1: "1", 2: "2", 3: "3", 4: "4",
+    5: "5", 6: "6", 7: "7", 8: "8", 9: "9"
+};
+
+var selectedRemote = "";
+var sel = 0;
+
+// A path that does not exist yet resolves to LittleFS in this interpreter (SD
+// is only picked when SD.exists() is already true), which would put remotes and
+// payloads where the IR menu never looks. Every path is therefore named with its
+// filesystem, and the filesystem is picked where the file really lives: the card
+// first, then LittleFS. That way the script runs from either place, and a library
+// copied into flash is still found when the card is slow, missing or removed.
+var HAVE_SD = false;
+try {
+    HAVE_SD = storage.exists({ fs: "sd", path: "/" });
+} catch (e) {
+    HAVE_SD = false;
+}
+
+function onFs(fs, path) {
+    return { fs: fs, path: path };
+}
+
+function existsOn(fs, path) {
+    try {
+        return storage.exists(onFs(fs, path));
+    } catch (e) {
+        return false;
+    }
+}
+
+// Both copies of the libraries can exist: the SD pack and the copy in LittleFS.
+// Flash wins now. The per-brand libraries are installed into LittleFS on the
+// board, and a sweep opens one .ir file per candidate - a slow card turns that
+// into seconds per signal, which is exactly the bruteforce speed limit this
+// ordering fixes. A board with nothing in flash still falls back to the card, so
+// an old SD pack keeps working.
+var PREFER_FLASH = true;
+
+// Where a path lives: flash, then the card, then the card as the place to
+// create a new file.
+function card(path) {
+    // A sweep's staged copy wins for exactly the file it staged.
+    if (stagedOK && path == stagedLogical) return onFs("littlefs", STAGE_FILE);
+    if (PREFER_FLASH) {
+        if (existsOn("littlefs", path)) return onFs("littlefs", path);
+        if (HAVE_SD && existsOn("sd", path)) return onFs("sd", path);
+        return writable(path);
+    }
+    if (HAVE_SD) {
+        if (existsOn("sd", path)) return onFs("sd", path);
+        if (existsOn("littlefs", path)) return onFs("littlefs", path);
+        return onFs("sd", path);
+    }
+    return onFs("littlefs", path);
+}
+
+// Where to write: the card when there is one, flash only on a board without it.
+function writable(path) {
+    return onFs(HAVE_SD ? "sd" : "littlefs", path);
+}
+
+// ---------------------------------------------------------------------------
+// bruteforce staging: one library in flash at a time, only while it is swept
+// ---------------------------------------------------------------------------
+// The libraries belong on the card. What made a sweep crawl is that a type
+// sweep re-opens its whole library file for every candidate, and on a slow card
+// that is seconds per signal. So a sweep copies ONLY the file it is about to
+// walk into one staging file in flash and reads it from there; nothing else is
+// kept in flash, and the stage is emptied when the sweep ends (and on the next
+// suite start, in case a run was cut off).
+//
+// Only the candidate libraries are staged. A per-brand sweep presses each .ir
+// file once, so reading it from the card costs the same as staging it first.
+var STAGE_FILE = "/irsuite-stage.ir"; // LittleFS, replaced before every sweep
+var stagedLogical = "";               // the library path currently staged there
+var stagedOK = false;
+
+function stageClear() {
+    if (stagedOK || existsOn("littlefs", STAGE_FILE)) {
+        try {
+            storage.remove(onFs("littlefs", STAGE_FILE));
+        } catch (e) { }
+    }
+    stagedLogical = "";
+    stagedOK = false;
+}
+
+// Copy `logical` (a card path) into the stage and make card() resolve to it.
+// Returns false when there is nothing to gain (no card), nothing to read, or no
+// room in flash - the sweep then simply reads from the card as before.
+function stageLibrary(logical) {
+    if (stagedOK && stagedLogical == logical && existsOn("littlefs", STAGE_FILE)) return true;
+    stageClear();
+    if (!HAVE_SD || !existsOn("sd", logical)) return false;
+    var raw = storage.read(onFs("sd", logical));
+    if (raw === undefined || raw === null || raw.length == 0) return false;
+    if (!storage.write(onFs("littlefs", STAGE_FILE), raw, "write")) return false;
+    stagedLogical = logical;
+    stagedOK = true;
+    return true;
+}
+
+// Pre-staged copies from the older layout kept every library in flash. They are
+// no longer used, and they are the reason a full IR pack ate the internal
+// filesystem, so drop them once (the marker stops the walk on later starts).
+function dropFlashLibraryCopies() {
+    if (!HAVE_SD || existsOn("littlefs", "/irsuite-flash-pruned")) return;
+    var files = [];
+    for (var c = 0; c < CATS.length; c++) files.push(UNIVERSAL_DIR + "/" + CATS[c].file);
+    var removed = 0;
+    for (var i = 0; i < files.length; i++) {
+        if (!existsOn("littlefs", files[i])) continue;
+        if (existsOn("sd", files[i])) {
+            try {
+                if (storage.remove(onFs("littlefs", files[i]))) removed++;
+            } catch (e) { }
+        }
+    }
+    if (existsOn("littlefs", STAGE_FILE)) stageClear();
+    storage.write(onFs("littlefs", "/irsuite-flash-pruned"), "1", "write");
+    if (removed) { /* one-time cleanup, nothing to show */ }
+}
+
+// ---------------------------------------------------------------------------
+// small helpers
+// ---------------------------------------------------------------------------
+function basename(path) {
+    var i = path.lastIndexOf("/");
+    return i >= 0 ? path.slice(i + 1) : path;
+}
+
+// The one gradient surface the whole suite is built from: a full-brightness
+// left-to-right Vandeta band, drawn in GD_STEP px columns of one colour each -
+// the same banding, the same endpoints and the same colour arithmetic as
+// core/ui_gradient.cpp, so a JS page and the C++ BLE Suite (which calls
+// uiGradientFillRect) are pixel for pixel the same. A per-pixel
+// display.drawFillRectGradient() would be smoother but would not match the
+// firmware's own chrome.
+var GD_STEP = 5;
+var GD = [];
+
+// C integer division, truncating toward zero - what ui_gradient.cpp uses.
+// Math.round() instead moves 26 of the 64 bands by one colour step, which is
+// exactly the drift the shared look is meant to avoid.
+function idiv(a, b) {
+    var q = Math.floor(Math.abs(a) / Math.abs(b));
+    return (a < 0) == (b < 0) ? q : -q;
+}
+
+function buildGrad() {
+    for (var i = 0; i * GD_STEP < W; i++) {
+        var t = Math.floor((i * GD_STEP) * 255 / (W - 1));
+        if (t > 255) t = 255;
+        var r = 255 + idiv((128 - 255) * t, 255);
+        var g = 20 + idiv((0 - 20) * t, 255);
+        var b = 147 + idiv((255 - 147) * t, 255);
+        GD.push(display.color(r, g, b));
+    }
+}
+
+function gradBand(x, y, w, h) {
+    // Built on first use: GD_STEP/GD are assigned further down this file, and a
+    // call at load time would run before those lines (var hoists, assignments do
+    // not).
+    if (GD.length == 0) buildGrad();
+    for (var dx = 0; dx < w; dx += GD_STEP) {
+        var col = GD[Math.floor((x + dx) / GD_STEP)];
+        if (col === undefined) col = GD[GD.length - 1];
+        var step = w - dx < GD_STEP ? w - dx : GD_STEP;
+        display.drawFillRect(x + dx, y, step, h, col);
+    }
+}
+
+function text(str, x, y, col, size) {
+    display.setTextColor(col === undefined ? C_TEXT : col);
+    display.setTextSize(size === undefined ? 1 : size);
+    display.drawString(str, x, y);
+}
+
+function centered(str, y, col, size) {
+    display.setTextColor(col === undefined ? C_TEXT : col);
+    display.setTextSize(size === undefined ? 1 : size);
+    display.setTextAlign("center", "top");
+    display.drawString(str, W / 2, y);
+    display.setTextAlign("left", "top");
+}
+
+// One-shot key events: after a blocking native call the flags can still hold
+// presses that were meant for the previous screen. Throw them away.
+function drain() {
+    var guard = 0;
+    while (guard < 50) {
+        // getAnyPress() is its own flag (AnyKeyPress); it does not clear the
+        // per-key flags. A stale EscPress left by a closed dialog makes the
+        // next native menu open and close immediately after its scan.
+        var any = keyboard.getAnyPress();
+        var esc = keyboard.getEscPress();
+        var sel = keyboard.getSelPress();
+        var prev = keyboard.getPrevPress();
+        var next = keyboard.getNextPress();
+        if (!any && !esc && !sel && !prev && !next) break;
+        delay(10);
+        guard++;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// encoder skip helpers
+// ---------------------------------------------------------------------------
+// The firmware's menus drain the rotary counter themselves; the JS side reads
+// the same counter through keyboard.getRotarySteps(). A build without the
+// binding (LITE or an older image) throws, and sweeps keep working on buttons.
+function takeRoll() {
+    try {
+        return keyboard.getRotarySteps();
+    } catch (e) {
+        return 0;
+    }
+}
+
+// Net move for one drain, as a delta on the candidate index. The firmware
+// counts positive as "previous" (what its own menus scroll up to, PrevPress),
+// so a positive batch walks the candidate list up and a negative one down.
+function rollMove(steps) {
+    var dir = steps > 0 ? -1 : 1;
+    var t = now();
+    if (dir != rollDir || t - rollLastAt > ROLL_IDLE_MS) rollMult = 1;
+    else if (rollMult < 8) rollMult++;
+    rollLastAt = t;
+    rollDir = dir;
+    var n = Math.abs(steps) * rollMult;
+    if (n > ROLL_MAX_STEP) n = ROLL_MAX_STEP;
+    return dir * n;
+}
+
+function clampPos(pos, total) {
+    if (pos < 0) return 0;
+    if (pos >= total) return total - 1;
+    return pos;
+}
+
+// A sweep's pointer moved; show where without sending anything. Returns the new
+// position. Used by both sweep kinds so they read the same on screen.
+function showRoll(title, pos, total, label) {
+    statusScreen(title, label, (pos + 1) + " / " + total,
+                 "wheel: skip   SEL: device reacted   ESC: stop");
+    return pos;
+}
+
+// Poll a delay in slices so ESC works inside long waits.
+function waitOrEsc(ms) {
+    var t0 = now();
+    while (now() - t0 < ms) {
+        if (keyboard.getEscPress()) return false;
+        delay(20);
+    }
+    return true;
+}
+
+// A wheel detent is published twice by the board: once in RotaryNetSteps and
+// once as AnyKeyPress (plus PrevPress/NextPress), because the board's
+// InputHandler() raises AnyKeyPress whenever the encoder position moves. Those
+// latched flags are the detent's own noise, and reading them is what a window
+// check must not do - otherwise a turned wheel looks exactly like a device
+// answering. Reading each flag with its getter consumes it, and the rotary bulk
+// is drained first so check() has nothing left to take out of it.
+function clearKeyNoise() {
+    keyboard.getAnyPress();
+    keyboard.getPrevPress();
+    keyboard.getNextPress();
+    // SEL latched during a roll would otherwise confirm whichever candidate the
+    // wheel happens to land on, which is the wrong code by definition: the turn
+    // already said "not this one".
+    keyboard.getSelPress();
+}
+
+// Wait up to `ms` for the user to confirm that the TV reacted.
+//   1 = confirmed (SEL, or any key that is not the wheel), 0 = nothing, -1 = ESC
+//   2 = the wheel moved: skip, never a lock.
+// SEL is sampled every 10 ms instead of once after the send, so a tap that
+// lands while the IR frame is still going out is not lost any more.
+function awaitReaction(ms) {
+    var t0 = now();
+    while (now() - t0 < ms) {
+        if (keyboard.getEscPress()) return -1; // ESC first: any-key would swallow it
+        // The wheel is read BEFORE the key flags. A detent sets AnyKeyPress too,
+        // so checking keys first made every turn look like a confirmation: the
+        // sweep jumped into the 10-code replay and the next turn locked one of
+        // those, saving a remote nobody picked.
+        var steps = takeRoll();
+        if (steps != 0) {
+            rollPending = steps;
+            clearKeyNoise();
+            return 2;
+        }
+        if (keyboard.getSelPress()) return 1;
+        if (keyboard.getAnyPress()) return 1;
+        delay(10);
+    }
+    return 0;
+}
+
+// Path of the merged family remote for one identified protocol + address. The
+// name has to match the family builder's naming exactly.
+function familyPath(protocol, address) {
+    var tag = protocol + "_" + address.replace(/ /g, "-");
+    tag = tag.replace(/[^A-Za-z0-9_.-]/g, "_");
+    return FAMILY_DIR + "/FAM_" + tag + ".ir";
+}
+
+// One read of a remote file: how many buttons it has and which of the three
+// buttons a TV payload always needs are missing from it. The library is not
+// uniform - a Sharp file can be volume and digits only - so the dialogs say
+// what is missing instead of letting a payload silently do nothing.
+function remoteInfo(path) {
+    var info = { count: 0, missing: [] };
+    if (!storage.exists(card(path))) return info;
+    var raw = storage.read(card(path));
+    if (raw === undefined || raw === null) return info;
+    var parts = raw.split("\nname: ");
+    info.count = parts.length > 1 ? parts.length - 1 : 0;
+    for (var i = 1; i < parts.length; i++) {
+        var name = parts[i].split("\n")[0];
+        if (name == "Up" || name == "Ok") info[name] = true;
+        // A recorded remote keeps the button name from the original remote; a
+        // Sony calls it SOURCES, most others say Source/Input/Inputs. All of
+        // them can open the source list, so any one of them counts.
+        if (SOURCE_NAMES.indexOf(name) >= 0) info.Input = true;
+    }
+    if (!info.Up) info.missing.push("Up");
+    if (!info.Ok) info.missing.push("OK");
+    if (!info.Input) info.missing.push("Input");
+    return info;
+}
+
+function capabilityText(path) {
+    var info = remoteInfo(path);
+    if (info.missing.length == 0) return "Nav / OK / Input ok";
+    return "missing: " + info.missing.join(", ");
+}
+
+function ensureDirs() {
+    if (!storage.exists(card(REMOTE_DIR))) storage.mkdir(card(REMOTE_DIR));
+    if (!storage.exists(card(PAYLOAD_DIR))) {
+        storage.mkdir(card(PAYLOAD_DIR));
+        storage.write(writable(PAYLOAD_DIR + "/demo.txt"),
+            "# Vandeta IR Suite payload - one command per line.\n" +
+            "# DELAY <ms> pauses, everything else is a remote button.\n" +
+            "DELAY 200\n" +
+            "HOME\n" +
+            "DELAY 400\n" +
+            "DOWN\n" +
+            "DOWN\n" +
+            "OK\n",
+            "write");
+    }
+}
+
+function loadSelection() {
+    var confPath = CONFIG_FILE;
+    if (!storage.exists(card(confPath)) && storage.exists(card(LEGACY_CONFIG_FILE))) {
+        confPath = LEGACY_CONFIG_FILE; // migrate on the next saveSelection()
+    }
+    if (!storage.exists(card(confPath))) return;
+    var conf = storage.read(card(confPath));
+    var lines = conf.split("\n");
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].replace(/\r/g, "");
+        if (line.slice(0, 7) == "remote=") {
+            var p = line.slice(7);
+            if (storage.exists(p)) selectedRemote = p;
+        }
+    }
+}
+
+function saveSelection() {
+    storage.write(writable(CONFIG_FILE), "remote=" + selectedRemote + "\n", "write");
+}
+
+// ---------------------------------------------------------------------------
+// chrome: title bar + the remote button that sits on top of every screen
+// ---------------------------------------------------------------------------
+function drawTitle(sub) {
+    gradBand(0, 0, W, TITLE_H);
+    display.setTextAlign("left", "top");
+    text(APP_NAME, 8, 5, C_INK, 2);
+    display.setTextAlign("right", "top");
+    text(sub ? sub : "SEL / ESC", W - 8, 9, C_INK, 1);
+    display.setTextAlign("left", "top");
+}
+
+function drawRemoteButton() {
+    var label = selectedRemote == "" ? "Remote: <pick one>" : "Remote: " + basename(selectedRemote);
+    if (label.length > 26) label = label.slice(0, 23) + "...";
+    gradBand(6, BTN_Y, W - 12, BTN_H);
+    text(label, 12, BTN_Y + 7, C_INK, 1);
+}
+
+// Status screens: the frame is drawn when the title changes, then only the two
+// live lines are repainted - a full-screen fill per candidate is what made the
+// sweep (and the payload runner) flicker.
+var statusTitle = "";
+var statusLine1 = null;
+var statusLine2 = null;
+var statusHint = null;
+
+function statusScreen(title, l1, l2, l3) {
+    if (title !== statusTitle) {
+        display.fill(C_BG);
+        drawTitle(title);
+        statusTitle = title;
+        statusLine1 = null;
+        statusLine2 = null;
+        statusHint = null;
+    }
+    if (l1 !== statusLine1 || l2 !== statusLine2) {
+        var top = TITLE_H + 14;
+        display.drawFillRect(0, top, W, 44, C_BG);
+        if (l1) centered(l1, top + 4, C_TEXT, 1);
+        if (l2) centered(l2, top + 22, C_DIM, 1);
+        statusLine1 = l1;
+        statusLine2 = l2;
+    }
+    if (l3 !== statusHint) {
+        display.drawFillRect(0, H - 26, W, 16, C_BG);
+        if (l3) centered(l3, H - 24, C_DIM, 1);
+        statusHint = l3;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// main menu
+// ---------------------------------------------------------------------------
+var MENU = [
+    // row 0 is the remote button, drawn separately
+    // One brute-force row: the type is chosen on the next screen, so the
+    // menu no longer carries a TV-only sweep or a TV-only brand sweep.
+    { label: "Bruteforce remotes", run: function () { categoryPicker(); } },
+    { label: "Use saved remote", run: function () { remotePad(); } },
+    { label: "Run IR Suite payload", run: function () { payloadPicker(); } },
+    { label: "Mirror image to TV", run: function () { mirrorMenu(); } },
+    { label: "Exit", run: function () { done = true; } }
+];
+
+var done = false;
+
+function drawMenu() {
+    statusTitle = ""; // the next status screen must repaint its frame
+    display.fill(C_BG);
+    drawTitle("SUITE " + APP_VERSION);
+    drawRemoteButton();
+
+    for (var i = 0; i < MENU.length; i++) {
+        var y = MENU_TOP + i * ROW_H;
+        var rowSel = (sel == i + 1);
+        if (rowSel) gradBand(4, y - 2, W - 8, ROW_H);
+        text((rowSel ? "> " : "  ") + MENU[i].label, 6, y + 4, rowSel ? C_INK : C_DIM, 1);
+    }
+}
+
+function pickRemote() {
+    var p = dialog.pickFile(REMOTE_DIR, "ir");
+    if (p == "") return;
+    selectedRemote = p;
+    saveSelection();
+}
+
+function mainMenu() {
+    var lastSel = -1; // -1 forces the first paint and a repaint after every action
+    while (!done) {
+        if (sel !== lastSel) {
+            drawMenu();
+            lastSel = sel;
+        }
+        if (keyboard.getPrevPress()) {
+            sel = (sel + MENU.length) % (MENU.length + 1);
+        } else if (keyboard.getNextPress()) {
+            sel = (sel + 1) % (MENU.length + 1);
+        } else if (keyboard.getSelPress()) {
+            if (sel == 0) pickRemote();
+            else MENU[sel - 1].run();
+            drain();
+            lastSel = -1; // whatever the action drew, go back to the menu
+        } else if (keyboard.getEscPress()) {
+            break;
+        }
+        delay(25);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// saving a remote: one writer for every sweep
+// ---------------------------------------------------------------------------
+function recordText(f) {
+    var type = (f[1] || "").toLowerCase();
+    if (type == "") type = "parsed";
+    var s = "name: " + f[0] + "\n";
+    s += "type: " + type + "\n";
+    if (type == "raw") {
+        s += "frequency: " + f[7] + "\n";
+        if (f[5]) s += "data: " + f[5] + "\n";
+    } else {
+        if (f[2]) s += "protocol: " + f[2] + "\n";
+        if (f[3]) s += "address: " + f[3] + "\n";
+        if (f[4]) s += "command: " + f[4] + "\n";
+        if (f[5]) s += "data: " + f[5] + "\n";
+    }
+    return s + "#\n";
+}
+
+// A saved remote must look like the firmware's own recorder wrote it, or IR >
+// Custom IR treats it differently from a recorded one. The library files can
+// still carry Flipper's original "IR signals file" header, so the first line is
+// rewritten to Bruce's before any copy is written.
+function normaliseIr(raw) {
+    if (!raw || raw.slice(0, 25) != "Filetype: IR signals file") return raw;
+    var nl = raw.indexOf("\n");
+    if (nl < 0) return raw;
+    return "Filetype: Bruce IR File" + raw.slice(nl);
+}
+
+// Copy a library .ir into /BruceIR. Read + write rather than storage.copy: the
+// destination does not exist yet, and a plain path that does not exist resolves
+// to LittleFS instead of the card.
+function copyRemote(src, dest) {
+    var raw = normaliseIr(storage.read(src));
+    if (!raw || !raw.length) return false;
+    return storage.write(writable(dest), raw, "write");
+}
+
+// Every sweep ends here: remember the file as the selected remote and say what
+// was saved. Only a TV remote is expected to carry arrows/OK/Input - an LED or
+// AC remote legitimately has none, so the capability line would be noise there.
+function finishSave(path, catLabel) {
+    selectedRemote = path;
+    saveSelection();
+    var info = basename(path) + "\n" + remoteInfo(path).count + " buttons";
+    if (catLabel == "TV") info += "\n" + capabilityText(path);
+    dialog.info("Remote saved", info);
+}
+
+// ---------------------------------------------------------------------------
+// remote types - the six libraries IR > Universal Remote sweeps
+// ---------------------------------------------------------------------------
+function libPath(cat) {
+    return UNIVERSAL_DIR + "/" + cat.file;
+}
+
+function libReady(cat) {
+    return storage.exists(card(libPath(cat)));
+}
+
+// The button a sweep presses first. Every remote family has a Power action -
+// except the two libraries that spell it differently: leds.ir has
+// Power_on/Power_off, and ac.ir has no Power at all (one AC frame carries
+// power+mode+temp+fan, so "Off" is the action that is visibly different). The
+// last resort is the library's most repeated button, so a future library still
+// gets a sweep instead of nothing.
+var TRIGGER_ORDER = ["Power", "Power_on", "On", "Off", "Play", "Ok"];
+var triggerCache = {};
+
+function libButtons(cat) {
+    var out = [];
+    if (!libReady(cat)) return out;
+    var lines = ir.universalButtons(card(libPath(cat)));
+    for (var i = 0; i < lines.length; i++) {
+        var p = lines[i].split("|");
+        out.push({ name: p[0], count: parseInt(p[1]) });
+    }
+    return out;
+}
+
+function triggerOf(cat) {
+    if (triggerCache[cat.label] !== undefined) return triggerCache[cat.label];
+    var list = libButtons(cat);
+    var pick = "";
+    for (var k = 0; k < TRIGGER_ORDER.length && pick == ""; k++) {
+        for (var i = 0; i < list.length; i++) {
+            if (list[i].name == TRIGGER_ORDER[k]) {
+                pick = list[i].name;
+                break;
+            }
+        }
+    }
+    if (pick == "") {
+        var best = 0;
+        for (var j = 0; j < list.length; j++) {
+            if (list[j].count > best) {
+                best = list[j].count;
+                pick = list[j].name;
+            }
+        }
+    }
+    triggerCache[cat.label] = pick;
+    return pick;
+}
+
+function triggerCount(cat, trigger) {
+    var list = libButtons(cat);
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].name == trigger) return list[i].count;
+    }
+    return 0;
+}
+
+// The first candidate of every remote family (protocol + address) in a library.
+// One code is enough to recognise the device in front of you, and the family
+// pair is what the saved remote is rebuilt from - so a family sweep needs one
+// send per device instead of one per library code (tv.ir: 33 sends, not 295).
+function familyIndexes(cat, trigger, total) {
+    var out = [];
+    var seen = {};
+    for (var i = 0; i < total; i++) {
+        var code = ir.universalCode(card(libPath(cat)), trigger, i);
+        if (code == "") continue;
+        var f = code.split("|");
+        if (f.length < 4 || f[2] == "") continue; // a raw dump has no protocol to group by
+        var key = f[2] + "|" + f[3];
+        if (seen[key]) continue;
+        seen[key] = 1;
+        out.push(i);
+    }
+    return out;
+}
+
+function familyLabel(cat, trigger, index) {
+    var f = ir.universalCode(card(libPath(cat)), trigger, index).split("|");
+    var s = (f[2] || "?") + " " + (f[3] || "").replace(/ /g, "");
+    return s.length > 26 ? s.slice(0, 26) : s;
+}
+
+// File names derive from protocol + address, the same fields familyPath() names
+// the merged files with. An empty field must not leave a bare "_" behind.
+function safeTag(a, b) {
+    var tag = (a + "_" + b).replace(/\s+/g, "");
+    tag = tag.replace(/[^A-Za-z0-9_.-]/g, "_");
+    if (tag == "_" || tag == "") tag = "code";
+    return tag;
+}
+
+// A scrollable list in the suite's own chrome: gradient title bar, gradient
+// selection band, dim rows, "n / total" footer. The remote type and the sweep
+// inside a type are picked with this, so the suite never drops into the stock
+// dialog chrome between its own screens. Returns the index, -1 on ESC.
+function pickRow(title, labels, footer) {
+    if (labels.length == 0) return -1;
+    var rows = Math.floor((H - (MENU_TOP - 4) - 20) / ROW_H);
+    if (rows < 3) rows = 3;
+    var idx = 0;
+    var top = 0;
+    var lastIdx = -1;
+    statusTitle = ""; // the next status screen must repaint its whole frame
+    drain();
+    while (true) {
+        if (idx < top) top = idx;
+        if (idx >= top + rows) top = idx - rows + 1;
+        if (idx !== lastIdx) {
+            display.fill(C_BG);
+            drawTitle(title);
+            for (var r = 0; r < rows; r++) {
+                var i = top + r;
+                if (i >= labels.length) break;
+                var y = MENU_TOP - 4 + r * ROW_H;
+                var on = (i == idx);
+                if (on) gradBand(4, y - 2, W - 8, ROW_H);
+                text((on ? "> " : "  ") + labels[i], 6, y + 3, on ? C_INK : C_DIM, 1);
+            }
+            centered((idx + 1) + " / " + labels.length, H - 16, C_DIM, 1);
+            if (footer) centered(footer, H - 30, C_DIM, 1);
+            lastIdx = idx;
+        }
+        if (keyboard.getPrevPress()) {
+            idx = (idx + labels.length - 1) % labels.length;
+        } else if (keyboard.getNextPress()) {
+            idx = (idx + 1) % labels.length;
+        } else if (keyboard.getSelPress()) {
+            drain(); // the press that closes the list must not reach the sweep
+            return idx;
+        } else if (keyboard.getEscPress()) {
+            drain();
+            return -1;
+        }
+        delay(25);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// bruteforce remotes: type -> brand / remote / family
+// ---------------------------------------------------------------------------
+function categoryPicker() {
+    var labels = [];
+    var have = 0;
+    for (var i = 0; i < CATS.length; i++) {
+        var ready = libReady(CATS[i]);
+        if (ready) have++;
+        labels.push(CATS[i].label + (ready ? "" : "   (no library)"));
+    }
+    if (have == 0) {
+        dialog.info("No universal library", "Copy sd_files/infrared/Universal\nto the card, then retry.");
+        return;
+    }
+    var pick = pickRow("REMOTE TYPE", labels, "SEL: choose   ESC: back");
+    if (pick < 0) return;
+    var cat = CATS[pick];
+    if (!libReady(cat)) {
+        dialog.error(cat.label + " library missing", libPath(cat));
+        return;
+    }
+    categoryMenu(cat);
+}
+
+function categoryMenu(cat) {
+    var trigger = triggerOf(cat);
+    if (trigger == "") {
+        dialog.error("Nothing to sweep", cat.label + " has no usable button.");
+        return;
+    }
+    var labels = [
+        "Bruteforce " + cat.label + " brand",
+        "Bruteforce " + cat.label + " remote",
+        "Bruteforce " + cat.label + " family"
+    ];
+    var pick = pickRow("BRUTEFORCE " + cat.label, labels, trigger + " codes   SEL: choose");
+    if (pick < 0) return;
+    if (pick == 0) brandPicker(cat);
+    else if (pick == 1) librarySweep(cat, trigger, false);
+    else familySweep(cat, trigger);
+}
+
+// ---------------------------------------------------------------------------
+// library sweeps: the candidates of one type's universal library
+// ---------------------------------------------------------------------------
+var lastSent = []; // positions in the current sweep's target list
+
+function remember(pos) {
+    lastSent.push(pos);
+    if (lastSent.length > LOCK_CODES) lastSent.shift();
+}
+
+// Sweep one library: every candidate of its trigger button, or - with
+// familyMode - one candidate per remote family.
+function librarySweep(cat, trigger, familyMode) {
+    // The SELECT that opened this row can still be queued as a key event. The
+    // reaction window reads "any key", so a stale press would be taken as the
+    // device answering on code 1 and drop straight into the narrowing replay.
+    drain();
+    // Any rotation still in the counter belongs to the menu that just closed.
+    rollPending = 0;
+    rollDir = 0;
+    rollMult = 1;
+    takeRoll();
+
+    // Read the candidates from flash for the length of this sweep (see
+    // stageLibrary): the library file is opened once per candidate, and the
+    // card is too slow for that. Falls back to the card when there is no room.
+    stageLibrary(libPath(cat));
+
+    var total = triggerCount(cat, trigger);
+    if (!total) {
+        stageClear();
+        dialog.error("No " + trigger + " codes", libPath(cat));
+        return;
+    }
+    var codes = [];
+    if (familyMode) {
+        // Grouping is a pass over every candidate (tv.ir: 295 codes, measured
+        // ~6.6 s on the board), so say what is happening instead of leaving the
+        // menu on screen with no feedback for the first seconds of the sweep.
+        statusScreen(cat.label + " family", "grouping " + total + " codes", "please wait", "");
+        codes = familyIndexes(cat, trigger, total);
+        // One family in a library with many codes means the library groups
+        // nothing: ac.ir carries power+mode+temp+fan in every frame, so all 31
+        // of its "Off" codes are one protocol + address. Sending that single
+        // family code would say nothing about the device, so sweep the codes.
+        if (codes.length <= 1 && total > 4) familyMode = false;
+    }
+    if (!familyMode) {
+        codes = [];
+        for (var i = 0; i < total; i++) codes.push(i);
+    }
+    if (codes.length == 0) {
+        dialog.error("Nothing to sweep", libPath(cat));
+        return;
+    }
+
+    var title = cat.label + (familyMode ? " family" : " brute");
+    var labelAt = function (pos) {
+        return familyMode ? familyLabel(cat, trigger, codes[pos]) : trigger;
+    };
+    lastSent = [];
+    var k = 0;
+    while (k < codes.length) {
+        if (keyboard.getEscPress()) return;
+
+        // Apply a wheel move before transmitting: the position it lands on is
+        // sent immediately, and every code it rolled over is never emitted.
+        var moved = rollPending;
+        rollPending = 0;
+        if (moved == 0) moved = takeRoll();
+        if (moved != 0) {
+            k = clampPos(k + rollMove(moved), codes.length);
+            showRoll(title, k, codes.length, labelAt(k));
+            continue;
+        }
+
+        statusScreen(title, labelAt(k), (k + 1) + " / " + codes.length,
+                     "SEL: device reacted   ESC: stop   wheel: skip");
+        if (!ir.universalSend(card(libPath(cat)), trigger, codes[k])) {
+            // a protocol this firmware cannot encode - skip, do not stall the sweep
+            remember(k);
+            delay(20);
+            k++;
+            continue;
+        }
+        remember(k);
+
+        var r = awaitReaction(SWEEP_GAP_MS);
+        if (r < 0) return;
+        if (r == 2) continue; // wheel moved: the next pass jumps, nothing sent
+        if (r > 0) {
+            var hit = narrowLibrary(cat, trigger, codes);
+            if (hit >= 0) {
+                saveLibraryCode(cat, trigger, codes[hit]);
+                stageClear(); // the sweep is over: free the flash copy
+                return;
+            }
+            drain();
+        }
+        k++;
+    }
+    stageClear();
+    dialog.info("Sweep finished", "No " + cat.label + " confirmed.\nTry the " +
+                (familyMode ? "remote" : "family") + " sweep.");
+}
+
+// Replay the locked candidates slowly, one per window; SEL = this one.
+function narrowLibrary(cat, trigger, codes) {
+    drain();
+    while (true) {
+        for (var i = 0; i < lastSent.length; i++) {
+            var slot = lastSent[i];
+            statusScreen("Narrowing", familyLabel(cat, trigger, codes[slot]),
+                         "Replay " + (i + 1) + " / " + lastSent.length, "SEL: this one   ESC: back");
+            if (!waitOrEsc(NARROW_PAUSE_MS)) return -1;
+            ir.universalSend(card(libPath(cat)), trigger, codes[slot]);
+            var r = awaitReaction(NARROW_GAP_MS);
+            // Only a real key picks a code. A wheel turn during the replay is
+            // not a lock: the window is reopened on the same candidate.
+            while (r == 2) r = awaitReaction(NARROW_GAP_MS);
+            if (r > 0) return slot;
+            if (r < 0) return -1;
+        }
+    }
+}
+
+// The merged family file with the locked record as the trigger button. Records
+// are copied verbatim (the family keeps `bits`/`value`, which the old builder
+// dropped), only the family's own spelling of the trigger is replaced.
+function familyWithTrigger(famPath, trigger, identified) {
+    var raw = storage.read(card(famPath));
+    if (raw === undefined || raw === null || raw.length == 0) return "";
+    raw = normaliseIr(raw.replace(/\r/g, ""));
+    var blocks = raw.split("\n#\n");
+    var body = identified;
+    var count = 1;
+    for (var i = 1; i < blocks.length; i++) {
+        var b = blocks[i];
+        if (b.slice(0, 5) != "name:") continue;
+        var nl = b.indexOf("\n");
+        var name = (nl >= 0 ? b.slice(5, nl) : b.slice(5)).trim();
+        if (name == trigger) continue; // the locked code replaces this button
+        body += b + "\n#\n";
+        count++;
+    }
+    return "Filetype: Bruce IR File\nVersion: 1\n#\n" +
+           "# Built by axagt40 (Vandeta IR Suite " + APP_VERSION + ")\n" +
+           "# " + count + " buttons from " + basename(famPath) + "\n" +
+           "# " + trigger + " is the code locked during the sweep\n" + body;
+}
+
+// Turn the identified candidate into a usable remote.
+//   1. A merged family file for that protocol + address is the complete button
+//      set (the card ships them for the TV library) - copy it.
+//   2. Otherwise rebuild it from every button this library holds for the same
+//      protocol + address: Power/Vol/Ch for a TV, brightness/power for LEDs,
+//      the mode and fan codes for an AC.
+function saveLibraryCode(cat, trigger, index) {
+    var code = ir.universalCode(card(libPath(cat)), trigger, index);
+    if (code == "") {
+        dialog.error("Code not readable", "index " + index);
+        return;
+    }
+    var f = code.split("|");
+    var tag = safeTag(f[2], f[3]);
+
+    if (f[2] != "") {
+        var fam = familyPath(f[2], f[3]);
+        if (storage.exists(card(fam))) {
+            var dest = REMOTE_DIR + "/IRSuite_" + cat.label + "_" + tag + ".ir";
+            // The merged family file is a vote across every model sharing this
+            // protocol + address, so its Power is the most common Power of the
+            // family - not necessarily the code this device answered. Copying
+            // it unchanged is why a JVC TV could be switched on by the sweep
+            // and then ignore the Power button of the saved remote. Put the
+            // locked record in as the trigger; the family's own spelling stays
+            // as <trigger>_2 so nothing is lost.
+            var merged = familyWithTrigger(fam, trigger, recordText(f));
+            if (merged != "" && storage.write(writable(dest), merged, "write")) {
+                finishSave(dest, cat.label);
+                return;
+            }
+            // unreadable or not writable - fall through to the library rebuild
+        }
+    }
+
+    var family = f[2] == "" ? [] : ir.universalFamily(card(libPath(cat)), f[2], f[3]);
+
+    // Exactly the file the firmware's own recorder writes (IR > Custom IR reads
+    // it, the recorder can overwrite it): same header, same "#" separators.
+    var out = "Filetype: Bruce IR File\nVersion: 1\n#\n";
+    out += "# Built by axagt40 (Vandeta IR Suite " + APP_VERSION + ") from " + libPath(cat) + "\n";
+    out += "# " + (f[2] || "raw") + " address " + (f[3] || "-") + "\n";
+
+    var seen = {};
+    var buttons = 0;
+    for (var i = 0; i < family.length && buttons < 48; i++) {
+        var g = family[i].split("|");
+        if (seen[g[0]]) continue;
+        seen[g[0]] = 1;
+        out += recordText(g);
+        buttons++;
+    }
+    if (buttons == 0) {
+        out += recordText(f);
+        buttons = 1;
+    }
+
+    var path = REMOTE_DIR + "/IRSuite_" + cat.label + "_" + tag + ".ir";
+    if (!storage.write(writable(path), out, "write")) {
+        dialog.error("Could not save", path);
+        return;
+    }
+    finishSave(path, cat.label);
+}
+
+// ---------------------------------------------------------------------------
+// file sweeps: the per-brand model library and the merged family library
+// ---------------------------------------------------------------------------
+// These walk .ir files instead of library codes. Every file already IS a remote,
+// so one Power-style button per file is all a sweep needs.
+function shortName(path, max) {
+    var s = basename(path);
+    return s.length > max ? s.slice(0, max) : s;
+}
+
+// Which button of a model file to press. The type's trigger is preferred, then
+// any action that shows on screen, then the file's own first button - a
+// set-top-box dump has Power, a fan file may only have Speed_up.
+function fileTrigger(path, cat) {
+    var names = padNames(path);
+    if (names.length == 0) return "";
+    var want = triggerOf(cat);
+    if (want != "" && names.indexOf(want) >= 0) return want;
+    for (var k = 0; k < TRIGGER_ORDER.length; k++) {
+        if (names.indexOf(TRIGGER_ORDER[k]) >= 0) return TRIGGER_ORDER[k];
+    }
+    return names[0];
+}
+
+// Merged family files keep disagreements as NAME_2 / NAME_3. A TV family can
+// easily have the working Power under variant 2 (JVC A0: Power 5F, Power_2 1C),
+// so pressing only "Power" in a family sweep misses the set. Each variant is
+// swept as its own candidate, and the one that answers is renamed back to the
+// plain trigger when the remote is saved.
+function triggerVariants(path, base) {
+    var out = [];
+    if (base == "") return out;
+    var names = padNames(path);
+    if (names.length == 0) return out;
+    out.push(base);
+    for (var v = 2; v <= 3; v++) {
+        if (names.indexOf(base + "_" + v) >= 0) out.push(base + "_" + v);
+    }
+    return out;
+}
+
+// Save a swept file so that the variant which actually answered becomes the
+// plain trigger button; the file's own spelling of that button is kept as
+// <trigger>_2. Everything else is copied byte for byte.
+function saveSweptFile(path, trigger, base, dest) {
+    if (trigger == base) return copyRemote(card(path), dest);
+    var raw = storage.read(card(path));
+    if (raw === undefined || raw === null || raw.length == 0) return false;
+    raw = normaliseIr(raw.replace(/\r/g, ""));
+    var blocks = raw.split("\n#\n");
+    var out = "Filetype: Bruce IR File\nVersion: 1\n#\n";
+    var renamed = 0;
+    for (var i = 1; i < blocks.length; i++) {
+        var b = blocks[i];
+        if (b.slice(0, 5) != "name:") continue;
+        var nl = b.indexOf("\n");
+        var name = (nl >= 0 ? b.slice(5, nl) : b.slice(5)).trim();
+        if (name == trigger) {
+            b = b.replace(/^name: [^\n]*/, "name: " + base);
+            renamed++;
+        } else if (name == base) {
+            b = b.replace(/^name: [^\n]*/, "name: " + base + "_2");
+        }
+        out += b + "\n#\n";
+    }
+    if (!renamed) return copyRemote(card(path), dest);
+    return storage.write(writable(dest), out, "write");
+}
+
+function sweepFiles(files, triggers, title, catLabel, brand, bases) {
+    drain(); // see librarySweep(): the opening SELECT must not count as a hit
+    rollPending = 0;
+    rollDir = 0;
+    rollMult = 1;
+    takeRoll();
+    lastSent = [];
+    var skipped = 0;
+    var labelAt = function (pos) { return shortName(files[pos], 26); };
+    var k = 0;
+    while (k < files.length) {
+        if (keyboard.getEscPress()) return;
+
+        var moved = rollPending;
+        rollPending = 0;
+        if (moved == 0) moved = takeRoll();
+        if (moved != 0) {
+            k = clampPos(k + rollMove(moved), files.length);
+            showRoll(title, k, files.length, labelAt(k));
+            continue;
+        }
+
+        statusScreen(title, labelAt(k), (k + 1) + " / " + files.length,
+                     "SEL: device reacted   ESC: stop   wheel: skip" +
+                         (skipped ? "  (" + skipped + " skipped)" : ""));
+        if (!ir.transmitButton(card(files[k]), triggers[k])) skipped++;
+        remember(k);
+
+        var r = awaitReaction(SWEEP_GAP_MS);
+        if (r < 0) return;
+        if (r == 2) continue; // wheel moved: jump on the next pass, send nothing
+        if (r > 0) {
+            var hit = narrowFiles(files, triggers);
+            if (hit >= 0) {
+                var tag = brand ? brand + "_" + basename(files[hit]) : basename(files[hit]);
+                tag = tag.replace(/\s+/g, "_").replace(/[^A-Za-z0-9_.-]/g, "_");
+                var dest = REMOTE_DIR + "/IRSuite_" + catLabel + "_" + tag;
+                var base = bases ? bases[hit] : triggers[hit];
+                if (saveSweptFile(files[hit], triggers[hit], base, dest)) finishSave(dest, catLabel);
+                else dialog.error("Could not save", dest);
+                return;
+            }
+            drain();
+        }
+        k++;
+    }
+    dialog.info("Sweep finished", "No " + catLabel + " remote confirmed.");
+}
+
+// Replay the last few files slowly until one is confirmed.
+function narrowFiles(files, triggers) {
+    drain();
+    while (true) {
+        for (var i = 0; i < lastSent.length; i++) {
+            var k = lastSent[i];
+            statusScreen("Narrowing", shortName(files[k], 26),
+                         "Replay " + (i + 1) + " / " + lastSent.length, "SEL: this one   ESC: back");
+            if (!waitOrEsc(NARROW_PAUSE_MS)) return -1;
+            ir.transmitButton(card(files[k]), triggers[k]);
+            var r = awaitReaction(NARROW_GAP_MS);
+            while (r == 2) r = awaitReaction(NARROW_GAP_MS); // wheel never locks
+            if (r > 0) return k;
+            if (r < 0) return -1;
+        }
+    }
+}
+
+// Per-model libraries are folder-per-brand. TVs/ and ACs/ ship with the SD pack;
+// a type without a folder still sweeps its universal library.
+function brandRootOf(cat) {
+    var tries = [cat.brands, "/infrared/" + cat.label, "/infrared/" + cat.label + "s"];
+    for (var i = 0; i < tries.length; i++) {
+        if (storage.exists(card(tries[i]))) return tries[i];
+    }
+    return "";
+}
+
+function listDirs(dir) {
+    var out = [];
+    var entries;
+    try {
+        entries = storage.readdir(card(dir), { withFileTypes: true });
+    } catch (e) {
+        return out;
+    }
+    for (var i = 0; i < entries.length; i++) {
+        if (entries[i].isDirectory) out.push(entries[i].name);
+    }
+    return out;
+}
+
+function brandPicker(cat) {
+    var root = brandRootOf(cat);
+    if (root == "") {
+        dialog.info("No brand library", "No per-brand " + cat.label + " folder.\nUse the remote or family sweep.");
+        return;
+    }
+    var brands = listDirs(root);
+    if (brands.length == 0) {
+        dialog.info("No brands on card", root);
+        return;
+    }
+    var pick = pickRow("BRAND", brands, cat.label + "   SEL: choose   ESC: back");
+    if (pick < 0) return;
+    brandSweep(cat, root + "/" + brands[pick], brands[pick]);
+}
+
+function brandSweep(cat, dir, brand) {
+    var entries;
+    try {
+        entries = storage.readdir(card(dir), { withFileTypes: true });
+    } catch (e) {
+        dialog.info("Nothing to try", dir);
+        return;
+    }
+    var files = [];
+    var triggers = [];
+    var bases = [];
+    for (var i = 0; i < entries.length; i++) {
+        if (entries[i].isDirectory) continue;
+        if (entries[i].name.slice(-3).toLowerCase() != ".ir") continue;
+        var path = dir + "/" + entries[i].name;
+        var trigger = fileTrigger(path, cat);
+        if (trigger == "") continue;
+        var variants = triggerVariants(path, trigger);
+        for (var v = 0; v < variants.length; v++) {
+            files.push(path);
+            triggers.push(variants[v]);
+            bases.push(trigger);
+        }
+    }
+    if (files.length == 0) {
+        dialog.info("Nothing to try", dir);
+        return;
+    }
+    // The title bar is 320 px wide: a long brand name would run into the suite
+    // name, so the brand is trimmed there and stays complete on the footer.
+    sweepFiles(files, triggers, brand.length > 16 ? brand.slice(0, 16) : brand, cat.label, brand, bases);
+}
+
+function familyFiles() {
+    var files = [];
+    var entries;
+    try {
+        entries = storage.readdir(card(FAMILY_DIR), { withFileTypes: true });
+    } catch (e) {
+        return files;
+    }
+    for (var i = 0; i < entries.length; i++) {
+        if (entries[i].isDirectory) continue;
+        if (entries[i].name.slice(-3).toLowerCase() == ".ir") files.push(FAMILY_DIR + "/" + entries[i].name);
+    }
+    return files;
+}
+
+// The merged family remotes are built from the per-model TV library
+// (tools/build_ir_families.py), which holds devices tv.ir does not. When they are
+// on the card a TV family sweep uses them - the file it identifies is the
+// complete button set, so there is nothing left to rebuild. Every other type
+// derives its families from its own library instead.
+function familySweep(cat, trigger) {
+    if (cat.label == "TV") {
+        var files = familyFiles();
+        if (files.length) {
+            var triggers = [];
+            var bases = [];
+            var expanded = [];
+            for (var i = 0; i < files.length; i++) {
+                var t = fileTrigger(files[i], cat);
+                if (t == "") t = "Power";
+                var variants = triggerVariants(files[i], t);
+                if (variants.length == 0) variants = [t];
+                for (var v = 0; v < variants.length; v++) {
+                    expanded.push(files[i]);
+                    triggers.push(variants[v]);
+                    bases.push(t);
+                }
+            }
+            sweepFiles(expanded, triggers, "TV family", cat.label, "", bases);
+            return;
+        }
+    }
+    librarySweep(cat, trigger, true);
+}
+
+// ---------------------------------------------------------------------------
+// saved-remote pad: browse /BruceIR and press its buttons one by one
+// ---------------------------------------------------------------------------
+// A sweep saves a remote; this is how you actually use it without a payload:
+// the file's own button names in a scroll list, SEL sends the highlighted one.
+// The names come from the file, so it works for merged family remotes (180
+// buttons), per-model remotes and anything recorded by the firmware's IR menu.
+function savedRemotes() {
+    var entries;
+    try {
+        entries = storage.readdir(card(REMOTE_DIR), { withFileTypes: true });
+    } catch (e) {
+        return [];
+    }
+    var files = [];
+    for (var i = 0; i < entries.length; i++) {
+        if (!entries[i].isDirectory && entries[i].name.slice(-3).toLowerCase() == ".ir") {
+            files.push(REMOTE_DIR + "/" + entries[i].name);
+        }
+    }
+    return files;
+}
+
+function remotePadPicker() {
+    var files = savedRemotes();
+    if (files.length == 0) {
+        dialog.info("No saved remotes", "Sweep a TV first, or copy\n.ir files into " + REMOTE_DIR);
+        return;
+    }
+    var names = [];
+    for (var i = 0; i < files.length; i++) names.push(basename(files[i]));
+    var pick = dialog.choice(names);
+    if (pick == "") return;
+    for (var k = 0; k < files.length; k++) {
+        if (basename(files[k]) == pick) {
+            selectedRemote = files[k];
+            saveSelection();
+            buttonPad(files[k]);
+            return;
+        }
+    }
+}
+
+function padNames(path) {
+    var raw = storage.read(card(path));
+    var names = [];
+    if (!raw || !raw.length) return names;
+    var parts = raw.split("\nname: ");
+    for (var i = 1; i < parts.length; i++) {
+        var name = parts[i].split("\n")[0];
+        if (name.length) names.push(name);
+    }
+    return names;
+}
+
+// The default entry: open the pad straight on the remote the config remembers.
+function remotePad() {
+    if (selectedRemote == "" || !storage.exists(card(selectedRemote))) {
+        remotePadPicker();
+        return;
+    }
+    var names = padNames(selectedRemote);
+    if (names.length == 0) {
+        remotePadPicker();
+        return;
+    }
+    buttonPad(selectedRemote);
+}
+
+function buttonPad(path) {
+    var names = padNames(path);
+    if (names.length == 0) {
+        dialog.info("Empty remote", basename(path));
+        return;
+    }
+
+    var rows = Math.floor((H - (MENU_TOP - 4) - 16) / ROW_H);
+    if (rows < 3) rows = 3;
+    var selIdx = 0;
+    var top = 0;
+    var flash = "";
+    var lastFlash = "";
+    var lastSel = -1;
+
+    drain();
+    while (true) {
+        if (selIdx < top) top = selIdx;
+        if (selIdx >= top + rows) top = selIdx - rows + 1;
+
+        if (selIdx !== lastSel) {
+            display.fill(C_BG);
+            drawTitle(basename(path).slice(0, 24));
+            for (var r = 0; r < rows; r++) {
+                var idx = top + r;
+                if (idx >= names.length) break;
+                var y = MENU_TOP - 4 + r * ROW_H;
+                var on = (idx == selIdx);
+                if (on) gradBand(4, y - 2, W - 8, ROW_H);
+                text((on ? "> " : "  ") + names[idx], 6, y + 3, on ? C_INK : C_DIM, 1);
+            }
+            centered((selIdx + 1) + " / " + names.length, H - 16, C_DIM, 1);
+            lastSel = selIdx;
+            lastFlash = flash;
+        }
+        if (flash !== lastFlash) {
+            centered(flash, H - 30, C_TEXT, 1);
+            lastFlash = flash;
+        }
+
+        if (keyboard.getPrevPress()) {
+            selIdx = (selIdx + names.length - 1) % names.length;
+            flash = "";
+        } else if (keyboard.getNextPress()) {
+            selIdx = (selIdx + 1) % names.length;
+            flash = "";
+        } else if (keyboard.getSelPress()) {
+            if (sendButton(names[selIdx])) flash = "sent " + names[selIdx];
+            else flash = names[selIdx] + " failed";
+            lastSel = -1; // repaint so the flash lands on a clean footer
+        } else if (keyboard.getEscPress()) {
+            break;
+        }
+        delay(25);
+    }
+    drain();
+}
+
+// ---------------------------------------------------------------------------
+// IR Suite payload runner
+// ---------------------------------------------------------------------------
+function payloadPicker() {
+    if (selectedRemote == "") {
+        dialog.warning("No remote", "Pick a remote file first.");
+        return;
+    }
+    var path = dialog.pickFile(PAYLOAD_DIR, "txt");
+    if (path == "") return;
+    runPayload(path);
+}
+
+function parsePayload(raw) {
+    var cmds = [];
+    var lines = raw.split("\n");
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].replace(/\r/g, "").trim();
+        if (line == "" || line.charAt(0) == "#" || line.slice(0, 2) == "//") continue;
+
+        var parts = line.split(/\s+/);
+        var head = parts[0].toUpperCase();
+        if (head == "REM" || head == "COMMENT") continue;
+        if (head == "DELAY") {
+            var ms = parseInt(parts[1]);
+            if (isNaN(ms) || ms < 0) ms = 100;
+            cmds.push({ delay: ms });
+            continue;
+        }
+        var name = ALIAS[head];
+        if (name === undefined) name = parts[0]; // allow native names (Vol_up)
+        cmds.push({ name: name, raw: parts[0] });
+    }
+    return cmds;
+}
+
+// Send one button, falling back to the NAME_2 / NAME_3 alternates a merged
+// family remote keeps when two models of the same family disagree on the code.
+// Names a source button can have in a recorded remote. The family remotes use
+// "Input"; a remote recorded from the TV itself keeps whatever the original
+// button was called (the test Sony says SOURCES).
+var SOURCE_NAMES = ["Input", "Inputs", "Source", "Sources", "SOURCES"];
+
+function sendButton(name) {
+    if (name == "Input") {
+        for (var s = 0; s < SOURCE_NAMES.length; s++) {
+            if (ir.transmitButton(card(selectedRemote), SOURCE_NAMES[s])) return true;
+        }
+    }
+    if (ir.transmitButton(card(selectedRemote), name)) return true;
+    for (var v = 2; v <= 3; v++) {
+        if (ir.transmitButton(card(selectedRemote), name + "_" + v)) return true;
+    }
+    return false;
+}
+
+function runPayload(path) {
+    var cmds = parsePayload(storage.read(card(path)));
+    if (cmds.length == 0) {
+        dialog.info("Empty payload", basename(path));
+        return;
+    }
+
+    var skipped = [];
+    for (var i = 0; i < cmds.length; i++) {
+        if (keyboard.getEscPress()) break;
+        var c = cmds[i];
+        var label = c.delay !== undefined ? "DELAY " + c.delay : c.raw;
+        statusScreen("payload", label, (i + 1) + " / " + cmds.length,
+                     "ESC: stop  (skipped: " + skipped.length + ")");
+
+        if (c.delay !== undefined) {
+            if (!waitOrEsc(c.delay)) break;
+            continue;
+        }
+        // name the button that is missing - "3 command(s) skipped" made the user
+        // guess which step of the sequence the remote could not press
+        if (!sendButton(c.name)) skipped.push(c.raw);
+        if (!waitOrEsc(PAYLOAD_GAP_MS)) break;
+    }
+    display.fill(C_BG);
+    drawTitle("payload");
+    centered("Done", 90, C_TEXT, 2);
+    if (skipped.length) {
+        centered("not in this remote:", 116, C_DIM, 1);
+        centered(skipped.join(" "), 132, C_DIM, 1);
+    }
+    centered("press any key", H - 40, C_DIM, 1);
+    drain();
+    while (!keyboard.getAnyPress()) delay(30);
+}
+
+// ---------------------------------------------------------------------------
+// Mirror: put one picture on a TV that has no idea it is being used
+// ---------------------------------------------------------------------------
+// Two protocols, one button. Both need the same two things: the TV must be on a
+// network the T-Embed can reach, and the picture must be fetchable over HTTP by
+// the TV. wifi.serveFile() is that server; the T-Embed serves the file itself,
+// so nothing outside this device and the TV is involved.
+//
+//   DLNA        SSDP finds "MediaRenderer" devices, then one SOAP
+//               SetAVTransportURI call hands the renderer the URL.
+//   Chromecast  mDNS finds _googlecast._tcp, then CASTV2 (TLS + protobuf) loads
+//               the same URL into the Default Media Receiver.
+//
+// A TV whose own network password is unknown cannot be reached at all, so
+// "Put TV on my AP" starts an open AP here and the TV is made to join it.
+
+var MIRROR_DIR = "/BruceIR/images";
+var MIRROR_PORT = 8765;
+var mirrorApActive = false;
+
+function mirrorReady() {
+    try {
+        return typeof wifi !== "undefined" && typeof wifi.ssdp === "function";
+    } catch (e) {
+        return false;
+    }
+}
+
+function mirrorMenu() {
+    if (!mirrorReady()) {
+        dialog.error("Firmware too old", "Mirror needs the wifi.ssdp /\nserveFile / castImage bindings.");
+        return;
+    }
+    var pick = dialog.choice([
+        "Push media (DLNA)",
+        "Cast media (Chromecast)",
+        "Put TV on my AP",
+        "Stop media server"
+    ]);
+    if (pick == "Push media (DLNA)") mirrorDlna(false);
+    else if (pick == "Cast media (Chromecast)") mirrorCast(false);
+    else if (pick == "Put TV on my AP") mirrorAp();
+    else if (pick == "Stop media server") {
+        wifi.serveStop();
+        dialog.info("Server stopped", "Released port " + MIRROR_PORT);
+    }
+}
+
+function mirrorPickImage() {
+    if (!storage.exists(card(MIRROR_DIR))) storage.mkdir(card(MIRROR_DIR));
+    // Video first: the Sony renderers that refuse a still JPEG play an MP4
+    // happily, and a short clip is the reliable way to make the picture show.
+    var p = dialog.pickFile(MIRROR_DIR, "mp4");
+    if (p == "") p = dialog.pickFile(MIRROR_DIR, "jpg");
+    if (p == "") p = dialog.pickFile(MIRROR_DIR, "png");
+    if (p == "") p = dialog.pickFile("/", "mp4");
+    if (p == "") p = dialog.pickFile("/", "jpg");
+    if (p == "") dialog.info("No media selected", "Pick an MP4, JPG or PNG.");
+    return p;
+}
+
+function mirrorStartServer() {
+    var img = mirrorPickImage();
+    if (img == "") return null;
+    var url = "";
+    try {
+        url = wifi.serveFile(img, MIRROR_PORT);
+    } catch (e) {
+        url = "";
+    }
+    if (!url || url == "") {
+        dialog.error("Media server failed", "No network, or the file\nis not readable.");
+        return null;
+    }
+    var lower = img.toLowerCase();
+    var mime = "image/jpeg";
+    if (lower.slice(-4) == ".mp4") mime = "video/mp4";
+    else if (lower.slice(-4) == ".png") mime = "image/png";
+    return { path: img, url: url, mime: mime };
+}
+
+function mirrorEnsureNetwork(allowAp) {
+    var connected = false;
+    try {
+        connected = wifi.connected();
+    } catch (e1) {
+        connected = false;
+    }
+    if (connected) return true;
+    if (allowAp && mirrorApActive) return true;
+    // After a dialog closes, the one-shot key flags can still hold the press
+    // that closed it. The Wi-Fi list then sees ESC and exits immediately after
+    // the scan, before it is drawn. Throw those presses away first.
+    drain();
+    var ok = false;
+    try {
+        ok = wifi.connectDialog();
+    } catch (e2) {
+        ok = false;
+    }
+    try {
+        connected = wifi.connected();
+    } catch (e3) {
+        connected = false;
+    }
+    if (connected) return true;
+    if (!ok) {
+        dialog.error("No Wi-Fi", "Connect the T-Embed to a network\nand try again.");
+        return false;
+    }
+    return true;
+}
+
+// Wake the TV and run the input/source sequence, if the user wants it.
+// One press here, everything after it is automatic.
+function mirrorWakeTv() {
+    if (selectedRemote == "") return;
+    statusScreen("TV prep", "SEL: wake + open input", "ESC: skip (TV already on)");
+    var r = awaitReaction(6000);
+    if (r <= 0 || r == 2) return; // a wheel turn is not "go"
+    sendButton("Power");
+    if (!waitOrEsc(1200)) return;
+    // Cast needs the dongle's input; DLNA uses open_mirror.txt (digital TV).
+    var payload = PAYLOAD_DIR + "/open_cast.txt";
+    if (!storage.exists(card(payload))) return;
+    var cmds = parsePayload(storage.read(card(payload)));
+    for (var i = 0; i < cmds.length; i++) {
+        if (keyboard.getEscPress()) return;
+        if (cmds[i].delay !== undefined) {
+            if (!waitOrEsc(cmds[i].delay)) return;
+        } else {
+            sendButton(cmds[i].name);
+            delay(PAYLOAD_GAP_MS);
+        }
+    }
+}
+
+function xmlEscape(s) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function dlnaSoap(control, action, inner) {
+    var body = '<?xml version="1.0" encoding="utf-8"?>' +
+        '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">' +
+        '<s:Body><u:' + action + ' xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">' +
+        inner + '</u:' + action + '></s:Body></s:Envelope>';
+    try {
+        var res = wifi.httpFetch(control, {
+            method: "POST",
+            body: body,
+            headers: [
+                "Content-Type", 'text/xml; charset="utf-8"',
+                "SOAPACTION", '"urn:schemas-upnp-org:service:AVTransport:1#' + action + '"'
+            ]
+        });
+        return res && res.status >= 200 && res.status < 300;
+    } catch (e) {
+        return false;
+    }
+}
+
+function dlnaPush(control, url, mime) {
+    mime = mime || "image/jpeg";
+    var video = mime.indexOf("video/") == 0;
+    var didl = '<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" ' +
+        'xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">' +
+        '<item id="0" parentID="-1" restricted="1"><dc:title>' + (video ? "video" : "image") + '</dc:title>' +
+        '<upnp:class>' + (video ? "object.item.videoItem" : "object.item.imageItem.photo") + '</upnp:class>' +
+        '<res protocolInfo="http-get:*:' + mime + ':*">' + xmlEscape(url) + '</res>' +
+        '</item></DIDL-Lite>';
+    var args = '<InstanceID>0</InstanceID>' +
+        '<CurrentURI>' + xmlEscape(url) + '</CurrentURI>' +
+        '<CurrentURIMetaData>' + xmlEscape(didl) + '</CurrentURIMetaData>';
+    // An earlier failed push can leave the renderer in TRANSITIONING; the Sony
+    // then answers SetAVTransportURI with 705 "Transport locked". Stop is
+    // harmless when nothing is loaded and clears that state.
+    dlnaSoap(control, "Stop", '<InstanceID>0</InstanceID>');
+    delay(500);
+    var okUri = dlnaSoap(control, "SetAVTransportURI", args);
+    // Play alone means nothing: a renderer that refused the item still answers
+    // Play with 200 (the Sony KD-49XG7077 returns 500 to SetAVTransportURI and
+    // 200 to Play), so requiring only Play reported a failed push as "Sent".
+    if (!okUri) return false;
+    dlnaSoap(control, "Play", '<InstanceID>0</InstanceID><Speed>1</Speed>');
+    return true;
+}
+
+function mirrorChoose(names, entries) {
+    if (entries.length == 1) return 0;
+    var pick = dialog.choice(names);
+    if (pick == "") return -1;
+    for (var i = 0; i < names.length; i++) if (names[i] == pick) return i;
+    return -1;
+}
+
+function mirrorDlna(allowAp) {
+    if (!mirrorEnsureNetwork(allowAp)) return;
+    // The press that chose this menu item can still be set; without this the
+    // file picker opens and immediately selects (or cancels) without a screen.
+    drain();
+    var prep = mirrorStartServer();
+    if (prep == null) return;
+
+    // The Sony will not play a DLNA item while Screen mirroring is active.
+    // HOME leaves any mirror/player screen, then INPUT > 1 selects the digital
+    // TV channel list. This is the sequence verified on the set.
+    if (selectedRemote != "") {
+        statusScreen("DLNA", "Switching to normal TV", "HOME > INPUT > 1", "");
+        sendButton("HOME");
+        delay(3000);
+        sendButton("Input");
+        delay(2000);
+        sendButton("1");
+        delay(2000);
+    }
+
+    statusScreen("DLNA", "Searching for TVs...", "SSDP, 3 s", "ESC: cancel");
+    var found = wifi.ssdp(3000);
+    if (!found || found.length == 0) {
+        wifi.serveStop();
+        dialog.info("No DLNA renderer", "Nothing answered. Try Cast, or\nput the TV on my AP.");
+        return;
+    }
+
+    var names = [];
+    var entries = [];
+    for (var i = 0; i < found.length; i++) {
+        var f = found[i].split("|");
+        if (f.length < 3) continue;
+        names.push(f[1] + "  (" + f[0] + ")");
+        entries.push(f);
+    }
+    var pickIdx = mirrorChoose(names, entries);
+    if (pickIdx < 0) {
+        wifi.serveStop();
+        return;
+    }
+
+    // No source/input sequence here: DLNA is switched to by the renderer
+    // itself, and opening the TV's mirror input first only makes the set leave
+    // Screen mirroring when the push arrives.
+    statusScreen("DLNA", "Sending to " + entries[pickIdx][1].slice(0, 20), prep.url.slice(0, 30), "please wait");
+    var ok = dlnaPush(entries[pickIdx][2], prep.url, prep.mime);
+    // Play returns before the renderer has fetched the file. Stopping the
+    // server here made the Sony open its player and report "file not found".
+    if (ok) {
+        statusScreen("DLNA", "Playing on TV", basename(prep.path), "server held 20 s - ESC stops");
+        waitOrEsc(20000);
+    }
+    wifi.serveStop();
+    if (ok) dialog.info("Sent", basename(prep.path) + "\n-> " + entries[pickIdx][1]);
+    else dialog.error("Push failed", "The renderer refused it.\nSome sets only play video.");
+}
+
+function mirrorCast(allowAp) {
+    if (!mirrorEnsureNetwork(allowAp)) return;
+    drain();
+    var prep = mirrorStartServer();
+    if (prep == null) return;
+
+    statusScreen("Cast", "Looking for Chromecasts", "mDNS, 3 s", "ESC: cancel");
+    var found = wifi.mdnsCast(3000);
+    var names = [];
+    var entries = [];
+    if (found) {
+        for (var i = 0; i < found.length; i++) {
+            var f = found[i].split("|");
+            if (f.length < 3) continue;
+            names.push(f[2] + "  (" + f[0] + ")");
+            entries.push(f);
+        }
+    }
+    if (entries.length == 0) {
+        var ip = keyboard.keyboard("192.168.1.100", 15, "Chromecast IP");
+        if (!ip || ip == "") {
+            wifi.serveStop();
+            return;
+        }
+        entries.push([ip, "8009", "manual"]);
+        names.push(ip + "  (manual)");
+    }
+    var pickIdx = mirrorChoose(names, entries);
+    if (pickIdx < 0) {
+        wifi.serveStop();
+        return;
+    }
+
+    mirrorWakeTv();
+
+    statusScreen("Cast", "Loading media", prep.url.slice(0, 30), "CASTV2, please wait");
+    var res = wifi.castImage(entries[pickIdx][0], prep.url, prep.mime);
+    if (res == "ok") {
+        statusScreen("Cast", "Casting", basename(prep.path), "server held 20 s - ESC stops");
+        waitOrEsc(20000);
+    }
+    wifi.serveStop();
+    if (res == "ok") dialog.info("Casting", basename(prep.path) + "\n-> " + entries[pickIdx][0]);
+    else dialog.error("Cast failed", res);
+}
+
+// A TV on a network whose password we do not have is unreachable over Wi-Fi.
+// The only way in is to give it a network of ours: an OPEN AP, because a
+// password would have to be typed on the TV's own on-screen keyboard, and IR
+// cannot type that reliably.
+function mirrorAp() {
+    try {
+        if (typeof wifi.apStart !== "function") {
+            dialog.error("Firmware too old", "wifi.apStart missing");
+            return;
+        }
+    } catch (e) {
+        return;
+    }
+
+    var ssid = keyboard.keyboard("BruceTV", 24, "AP name for the TV");
+    if (!ssid || ssid == "") return;
+    var ip = wifi.apStart(ssid, "", 6);
+    if (!ip || ip == "") {
+        dialog.error("AP failed", "Wi-Fi radio busy?");
+        return;
+    }
+    mirrorApActive = true;
+
+    display.fill(C_BG);
+    drawTitle("AP mode");
+    centered("Join the TV to:", 56, C_DIM, 1);
+    centered(ssid, 76, C_TEXT, 2);
+    centered("open network - no password", 104, C_DIM, 1);
+    centered(ip, 120, C_DIM, 1);
+    centered("SEL: push image   ESC: stop AP", H - 24, C_DIM, 1);
+
+    var r = awaitReaction(120000);
+    if (r <= 0 || r == 2) { // a wheel turn is not "push the image"
+        wifi.apStop();
+        mirrorApActive = false;
+        dialog.info("AP stopped", ssid);
+        return;
+    }
+
+    var pick = dialog.choice(["Push image (DLNA)", "Cast image (Chromecast)"]);
+    if (pick == "Push image (DLNA)") mirrorDlna(true);
+    else if (pick == "Cast image (Chromecast)") mirrorCast(true);
+
+    wifi.apStop();
+    mirrorApActive = false;
+}
+
+// ---------------------------------------------------------------------------
+// start
+// ---------------------------------------------------------------------------
+ensureDirs();
+loadSelection();
+// One-time cleanup of the old "whole library pack in flash" layout, then make
+// sure no stage file from an interrupted sweep is left behind.
+dropFlashLibraryCopies();
+stageClear();
+
+// A missing remote library is not fatal: the menu still works and the type
+// picker marks the types whose library the card does not have.
+var libsFound = 0;
+for (var c = 0; c < CATS.length; c++) {
+    if (libReady(CATS[c])) libsFound++;
+}
+if (libsFound == 0) {
+    dialog.info("Universal libraries missing", UNIVERSAL_DIR + "/");
+}
+
+mainMenu();
+
+display.fill(C_BG);

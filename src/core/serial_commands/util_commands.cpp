@@ -1,0 +1,601 @@
+#include "util_commands.h"
+#include "core/configPins.h" // getMacAddress()
+#include "core/display.h" // activeMenuOptions()
+#include "core/main_menu.h"
+#include "core/sd_functions.h"
+#include "core/settings.h" // chargeLimitPercent()
+#include "core/utils.h" // to return optionsJSON
+#include "core/wifi/webInterface.h"
+#include "core/wifi/wifi_common.h" //to return MAC addr
+#include "core/bus_HAL.h"
+#include "modules/badusb_ble/ducky_typer.h"
+#include <globals.h>
+#include <interface.h> // getBattery/isCharging/getChargeLimitVoltage
+
+// Upper bound on how long a `nav` command waits for the UI to consume the
+// previous press of the same key before deciding this screen ignores that key
+// and clearing the stale event (see navCallback).
+static const unsigned long NAV_KEY_WAIT_MS = 300;
+
+uint32_t uptimeCallback(cmd *c) {
+    // https://github.com/espressif/arduino-esp32/blob/66c9c0b1a6a36b85d27cdac0fb52098368de1a09/libraries/WebServer/examples/AdvancedWebServer/AdvancedWebServer.ino#L64
+
+    int sec = millis() / 1000;
+    int hr = sec / 3600;
+    int min = (sec / 60) % 60;
+    sec = sec % 60;
+    char temp[400];
+    snprintf(temp, 400, "Uptime: %02d:%02d:%02d", hr, min, sec);
+    serialDevice->println(temp);
+    return true;
+}
+
+uint32_t dateCallback(cmd *c) {
+    if (!clock_set) {
+        serialDevice->println("Clock not set");
+        return false;
+    }
+
+    serialDevice->print("Current time: ");
+#if !defined(HAS_RTC)
+    serialDevice->println(rtc.getDateTime());
+    // serialDevice->println(rtc.getTime("%A, %B %d %Y %H:%M:%S"));
+#else
+    _rtc.begin();
+    _rtc.GetTime(&_time);
+    _rtc.GetDate(&_date);
+    char stimeStr[100] = {0};
+    snprintf(
+        stimeStr,
+        sizeof(stimeStr),
+        "%02d %02d %04d %02d:%02d:%02d",
+        _date.Month,
+        _date.Date,
+        _date.Year,
+        _time.Hours,
+        _time.Minutes,
+        _time.Seconds
+    );
+    serialDevice->println(stimeStr);
+#endif
+
+    return true;
+}
+
+uint32_t i2cCallback(cmd *c) {
+    // scan for connected i2c modules
+    // `i2c scan` is the documented form; the command used to take no arguments
+    // at all, so the help text and the parser disagreed.
+    // derived from https://learn.adafruit.com/scanning-i2c-addresses/arduino
+    TwoWire *Wire = acquireI2CBus();
+    byte error, address;
+    int nDevices;
+    serialDevice->println("Scanning...");
+    nDevices = 0;
+    for (address = 1; address < 127; address++) {
+        // The i2c_scanner uses the return value of
+        // the Write.endTransmisstion to see if
+        // a device did acknowledge to the address.
+        Wire->beginTransmission(address);
+        error = Wire->endTransmission();
+        if (error == 0) {
+            // println, not print: with two devices on the bus the old code
+            // glued the lines together ("...0x55I2C device found at 0x6B").
+            serialDevice->print("I2C device found at address 0x");
+            if (address < 16) serialDevice->print("0");
+            serialDevice->println(address, HEX);
+            nDevices++;
+        } else if (error == 4) {
+            serialDevice->print("Unknown error at address 0x");
+            if (address < 16) serialDevice->print("0");
+            serialDevice->println(address, HEX);
+        }
+    }
+    releaseI2CBus();
+
+    if (nDevices == 0) {
+        serialDevice->println("No I2C devices found");
+        return false;
+    }
+
+    return true;
+}
+
+uint32_t freeCallback(cmd *c) {
+    serialDevice->print("Total heap: ");
+    serialDevice->println(ESP.getHeapSize());
+    serialDevice->print("Free heap: ");
+    serialDevice->println(ESP.getFreeHeap());
+
+    if (psramFound()) {
+        serialDevice->print("Total PSRAM: ");
+        serialDevice->println(ESP.getPsramSize());
+        serialDevice->print("Free PSRAM: ");
+        serialDevice->println(ESP.getFreePsram());
+    }
+
+    return true;
+}
+
+uint32_t infoCallback(cmd *c) {
+    serialDevice->println(BRUCE_VERSION);
+    serialDevice->println(GIT_COMMIT_HASH);
+    serialDevice->print("SDK: ");
+    serialDevice->println(ESP.getSdkVersion());
+    // The factory MAC is readable with the radio off; WiFi.macAddress() is all
+    // zeros then, which is exactly when a support log needs the real address.
+    serialDevice->println("MAC addr: " + getMacAddress());
+    // https://github.com/espressif/arduino-esp32/blob/master/libraries/ESP32/examples/ChipID/GetChipID/GetChipID.ino
+    // serialDevice->printf("Chip is %s (revision v%d)\n", ESP.getChipModel(), ESP.getChipRevision());
+    // serialDevice->printf("Detected flash size: %d\n", ESP.getFlashChipSize());
+    // serialDevice->printf("This chip has %d cores\n", ESP.getChipCores());
+    // serialDevice->printf("CPU Freq is %d\n", ESP.getCpuFreqMHz());
+    // Features: WiFi, BLE, Embedded Flash 8MB (GD)
+    // Crystal is 40MHz
+    // MAC: AA:BB:CC:DD:EE:FF
+
+    if (wifiConnected) {
+        serialDevice->println("Wifi: connected");
+        serialDevice->println("Ip: " + wifiIP); // read global var
+    } else {
+        serialDevice->println("Wifi: not connected");
+    }
+
+    serialDevice->println("Device: " + String(DEVICE_NAME));
+
+    return true;
+}
+
+// `help <command>`: one command's usage, so a serial terminal (or an AI) can ask
+// for exactly what it needs instead of scrolling the full list.
+static bool printCommandHelp(const String &topicRaw) {
+    String t = topicRaw;
+    t.trim();
+    t.toLowerCase();
+    if (t == "move" || t == "press" || t == "file" || t == "log" || t == "js" || t == "livepatch" ||
+        t == "liveboot" || t == "ui") {
+        if (t == "move") {
+            serialDevice->println("move <direction>            - move the highlight; prints the new screen");
+            serialDevice->println("  directions: up down left right prev next nextpage prevpage");
+            serialDevice->println("  example: move down");
+        } else if (t == "press") {
+            serialDevice->println("press <key>                 - press a key; prints the new screen");
+            serialDevice->println("  keys: ok select enter back esc up down left right");
+            serialDevice->println("  example: press ok");
+        } else if (t == "file") {
+            serialDevice->println("file read <filename>        - print a file");
+            serialDevice->println("file write <filename> <data>- write data to a file (spaces allowed)");
+            serialDevice->println("file list [dir]             - list a directory (defaults to cwd)");
+            serialDevice->println("file delete <filename>      - delete a file");
+            serialDevice->println("file stat <filename>        - show size");
+            serialDevice->println("  example: file write /BruceJS/hello.js print('hi')");
+        } else if (t == "log") {
+            serialDevice->println("log show                    - dump the error ring buffer");
+            serialDevice->println("log clear                   - empty the error ring buffer");
+            serialDevice->println("log on|off                  - stream new errors live");
+        } else if (t == "js") {
+            serialDevice->println("js run <script>             - run a JavaScript file");
+            serialDevice->println("js stop                     - stop the running script");
+            serialDevice->println("js run_from_buffer <size>   - run code streamed from the host");
+        } else if (t == "livepatch") {
+            serialDevice->println("livepatch apply <module> <code> - write + reload a JS module now");
+            serialDevice->println("livepatch reload <module>   - re-run a stored module");
+            serialDevice->println("livepatch list              - list stored modules");
+            serialDevice->println("livepatch status            - report state");
+        } else if (t == "liveboot") {
+            serialDevice->println("liveboot enable <script.js> - run a script at boot");
+            serialDevice->println("liveboot disable            - stop running a script at boot");
+            serialDevice->println("liveboot status             - report state");
+        } else if (t == "ui") {
+            serialDevice->println("ui [up|down|select|back]    - live UI navigation + screen readback");
+            serialDevice->println("ui select <n> / ui watch on|off");
+        }
+        return true;
+    }
+    return false;
+}
+
+uint32_t helpCallback(cmd *c) {
+    Command cmd(c);
+    String topic = cmd.getArgument(0).getValue();
+    topic.trim();
+    if (topic.length() > 0) {
+        if (printCommandHelp(topic)) return true;
+        serialDevice->println("help: no detailed help for '" + topic + "' - showing the command list");
+    }
+    serialDevice->println(BRUCE_VERSION);
+    serialDevice->print("These shell commands are defined internally.\n");
+
+    serialDevice->println("\nWiFi Commands:");
+    serialDevice->println("  wifi off (Disconnects Wifi)");
+    serialDevice->println(
+        "  wifi on  (Connects to a known Wifi network. if there's no known network, starts in AP Mode)"
+    );
+    serialDevice->println("  wifi add \"SSID\" \"Password\" (adds a network to the list)");
+    serialDevice->println("  arp - Starts Scan Hosts ARP Scanner");
+    serialDevice->println("  listen   - Starts listening TCP default port");
+    serialDevice->println("  sniffer - Starts Raw Sniffer");
+    serialDevice->println("\nWebUI Commands:");
+    serialDevice->println("  webui      - WebUI Webserver start");
+    serialDevice->println("\nIR Commands:");
+    serialDevice->println("  ir rx <timeout>      - Read an IR signal and print the dump on serialDevice->");
+    serialDevice->println(
+        "  ir rx raw <timeout>  - Read an IR signal in RAW mode and print the dump on serialDevice->"
+    );
+    serialDevice->println("  ir tx <protocol> <address> <decoded_value>  - Send a custom decoded IR signal.");
+    serialDevice->println(
+        "  ir tx_from_file <ir file path> [hide default UI true/false] - Send an IR signal saved in "
+        "storage. Optionally hide the default UI."
+    );
+
+    serialDevice->println("\nRF Commands:");
+    serialDevice->println(
+        "  subghz rx <timeout>       - Read an RF signal and print the dump on serialDevice-> (alias: rf rx)"
+    );
+    serialDevice->println(
+        "  subghz rx raw <timeout>   - Read an RF signal in RAW mode and print the dump on serialDevice-> "
+        "(alias: "
+        "rf rx raw)"
+    );
+    serialDevice->println(
+        "  subghz tx <decoded_value> <frequency> <te> <count>  - Send a custom decoded RF signal. (alias: rf "
+        "tx)"
+    );
+    serialDevice->println(
+        "  subghz tx_from_file <sub file path> [hide default UI true/false] - Send an RF signal "
+        "saved in storage. Optionally hide the default UI."
+    );
+
+    serialDevice->println("\nAudio Commands:");
+    serialDevice->println("  music_player <audio file path>  - Play an audio file.");
+    serialDevice->println("  tone <frequency> <duration>  - Play a single squarewave audio tone.");
+    serialDevice->println("  say <text>   - Text-To-Speech (speaker required).");
+
+    serialDevice->println("\nUI Commands:");
+    serialDevice->println("  led <r/g/b> <0-255>    - Change the UI main color.");
+    serialDevice->println("  clock                 - Show the clock UI.");
+
+    serialDevice->println("\nPower Management:");
+    serialDevice->println("  power <off/reboot/sleep>  - General power management.");
+
+    serialDevice->println("\nGPIO Commands:");
+    serialDevice->println("  gpio mode <pin number> <0/1>  - Set GPIO pins mode (0=input, 1=output).");
+    serialDevice->println("  gpio set <pin number> <0/1>   - Direct GPIO pins control (0=off, 1=on).");
+
+    serialDevice->println("\nI2C and Storage:");
+    serialDevice->println("  i2c scan                - Scan for modules connected to the I2C bus.");
+    serialDevice->println(
+        "  storage <list/remove/mkdir/rename/read/write/copy/md5/crc32> <file path>  - Common file "
+        "management commands."
+    );
+    serialDevice->println("  ls - Same as storage list");
+
+    serialDevice->println("\nDeveloper Options (enable in Config > System Config, or 'usbdebug on'):");
+    serialDevice->println("  usbdebug on|off|status  - The one Developer Mode switch (console + speed profile).");
+    serialDevice->println("  usbdebug dev on|off     - Alias for the same switch, kept for old scripts.");
+    serialDevice->println("  usbdebug proto text|binary - Switch the serial protocol for this session.");
+    serialDevice->println("  cd <path> / pwd         - Move the working directory; other file commands follow it.");
+    serialDevice->println("  queue <command>         - Queue a command; 'batch on|run|status|clear' drains it.");
+    serialDevice->println("  history [n]             - Command history; recall with !! or !<n>.");
+    serialDevice->println("  complete <prefix>       - Autocomplete a command name.");
+    serialDevice->println("  hotreload on|off|add <path.js>|remove <path>|list - Reload a JS file when it changes.");
+    serialDevice->println("  liveupdate config|assets|script:<path>|status - Apply changes without a reflash.");
+    serialDevice->println("  errors [clear] / log on|off - Error ring buffer, optional live streaming.");
+    serialDevice->println("  proc / sys              - Task list and detailed system information.");
+    serialDevice->println("  mem                     - Heap/DMA/PSRAM report; tells you if a radio can still init.");
+    serialDevice->println("  ui [up|down|select|back] - Live UI navigation + screen readback (no reboot).");
+    serialDevice->println("  move up|down|left|right - Simple UI movement; prints the new screen.");
+    serialDevice->println("  press ok|back|up|down   - Simple key press; prints the new screen.");
+    serialDevice->println("  file read|write|list|delete|stat <name> [data] - Simple file operations.");
+    serialDevice->println("  js run <script> / js stop - Run or stop a JavaScript script.");
+    serialDevice->println("  log show|clear          - Dump or empty the error ring buffer.");
+    serialDevice->println("  livepatch apply|reload|list|status - Change the JS layer live, no reflash.");
+    serialDevice->println("  liveboot enable|disable|status - Run a script automatically at boot.");
+    serialDevice->println("  help <command>          - Usage for one command (e.g. help file).");
+
+    serialDevice->println("\nSettings:");
+    serialDevice->println("  settings                - View all the current settings.");
+    serialDevice->println("  settings <name>         - View a single setting value.");
+    serialDevice->println("  settings <name> <new value>  - Alter a single setting value.");
+    serialDevice->println("  factory_reset           - Reset to default configuration.");
+
+    return true;
+}
+
+void optionsList() {
+    // Report the menu on screen, which may be built from a local vector that
+    // shadows the global `options` (loopOptions publishes it to activeOptions).
+    std::vector<Option> &opts = activeMenuOptions();
+    int i = 0;
+    Serial.println("\nActual Menu: " + menuOptionLabel);
+    Serial.println("Options available: ");
+    for (auto opt : opts) {
+        String txt = (opt.hovered ? ">" : " ") + String(i) + " - " + opt.label;
+        Serial.println(txt);
+        i++;
+    }
+}
+
+uint32_t navCallback(cmd *c) {
+    Command cmd(c);
+    volatile bool *var = &NextPress;
+    Argument arg = cmd.getArgument("command");
+    Argument arg2 = cmd.getArgument("duration");
+    String _dur = arg2.getValue();
+    _dur.trim();
+    int dur = 1;
+
+    if (_dur.length() > 0) {
+        dur = arg2.getValue().toInt();
+        if (dur < 0) dur = 1; // heavy fingers on the remote interface
+    }
+    String nav = arg.getValue();
+    nav.trim();
+
+    // Here send press response only to USB serial to avoid problems with BLE app
+    if (nav == "next") {
+        Serial.println("Next Pressed");
+        var = &NextPress;
+    } else if (nav == "prev") {
+        Serial.println("Prev Pressed");
+        var = &PrevPress;
+    } else if (nav == "esc") {
+        Serial.println("Esc Pressed");
+        var = &EscPress;
+    } else if (nav == "up") {
+        Serial.println("Up Pressed");
+        var = &UpPress;
+    } else if (nav == "down") {
+        Serial.println("Down Pressed");
+        var = &DownPress;
+    } else if (nav == "select" || nav == "sel") {
+        Serial.println("Select Pressed");
+        var = &SelPress;
+    } else if (nav == "nextpage") {
+        Serial.println("Next Page Pressed");
+        var = &NextPagePress;
+    } else if (nav == "prevpage") {
+        Serial.println("Prev Page Pressed");
+        var = &PrevPagePress;
+    } else {
+        serialDevice->println(
+            "Unknown command, use: \n\"nav Next\" or \n\"nav Prev\" or \n\"nav Esc\" or \n\"nav Select\" or "
+            "\n\"nav Up\" or \n\"nav Down\" or \n\"nav NextPage\" or \n\"nav PrevPage\""
+        );
+        return false;
+    }
+    // wakeUpScreen(); // Do not wakeup screen if it is dimmed and using Remote control
+    // A press is only delivered while the key flag is clear: the UI clears it as
+    // soon as it consumes the press. A second press that arrived while the menu
+    // was still redrawing found the flag set and was dropped without a word, so
+    // a quick double press moved the cursor once - and the following press then
+    // looked like it moved twice, from that stale screen. Wait for the flag
+    // (bounded) instead of throwing the press away.
+    const unsigned long navWaitStart = millis();
+    while (*var && millis() - navWaitStart < NAV_KEY_WAIT_MS) { vTaskDelay(5 / portTICK_PERIOD_MS); }
+    // Still set: no one consumed it, i.e. this screen does not read this key.
+    // Leaving it set would swallow every later press of the same key, so drop
+    // the stale event and deliver ours.
+    if (*var) *var = false;
+
+    unsigned long tmp = millis();
+    while (millis() <= tmp + dur) {
+        if (*var == false) {
+            AnyKeyPress = true;
+            SerialCmdPress = true;
+            *var = true;
+            if (!LongPress) break;
+        }
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+    }
+    tmp = millis() - tmp;
+    Serial.printf("and Released after %lums", tmp);
+    optionsList();
+
+    return true;
+}
+
+uint32_t optionsCallback(cmd *c) {
+    Command cmd(c);
+    Argument arg = cmd.getArgument("run");
+    // int opt = arg.getValue().startsWith("-") ? -1 : arg.getValue().toInt();
+    int opt = arg.getValue().toInt();
+
+    std::vector<Option> &opts = activeMenuOptions();
+    if (opt >= 0 && opt < opts.size()) {
+        // wakeUpScreen(); // Do not wakeup screen if it is dimmed and using Remote control
+        forceMenuOption = opt;
+        serialDevice->printf("Selected option %d: %s\n", forceMenuOption, opts[forceMenuOption].label.c_str());
+        vTaskDelay(30 / portTICK_PERIOD_MS);
+        optionsList();
+    } else if (opts.size() > 0) {
+        optionsList();
+    } else serialDevice->println("No options Available");
+    return true;
+}
+uint32_t optionsJsonCallback(cmd *c) {
+    String response = getOptionsJSON(); // core/utils.h
+    serialDevice->println(response);
+    return true;
+}
+
+uint32_t displayCallback(cmd *c) {
+    Command cmd(c);
+    Argument arg = cmd.getArgument("option");
+    String opt = arg.getValue();
+    if (opt == "start") {
+        serialDevice->println("Display: Started async serial");
+        tft.startAsyncSerial();
+        tft.getTftInfo();
+    } else if (opt == "stop") {
+        serialDevice->println("Display: Stopped async serial");
+        tft.stopAsyncSerial();
+    } else if (opt == "status") {
+        if (tft.getLogging()) serialDevice->println("Display: Logging tft is ACTIVATED");
+        else serialDevice->println("Display: Logging tft is DEACTIVATED");
+    } else if (opt == "dump") {
+        // Heap, not stack: the ring is MAX_LOG_ENTRIES * MAX_LOG_SIZE (8 KB) and
+        // getBinLog() writes a header plus every entry into the buffer, which
+        // overflows the serial task's stack and panics the chip (observed: Guru
+        // Meditation a few bytes into the dump).
+        size_t cap = (size_t)MAX_LOG_ENTRIES * MAX_LOG_SIZE;
+        uint8_t *binData = (uint8_t *)(psramFound() ? ps_malloc(cap) : malloc(cap));
+        if (binData == nullptr) {
+            serialDevice->println("Display: dump buffer allocation failed");
+            return false;
+        }
+        size_t binSize = 0;
+        tft.getBinLog(binData, binSize);
+
+        serialDevice->println("Binary Dump:");
+        for (size_t i = 0; i < binSize; i++) {
+            if (i % 16 == 0) serialDevice->println();
+            // if (i % 16 == 0) serialDevice->printf("\n%04X: ", i);
+            serialDevice->printf("%02X ", binData[i]);
+        }
+        serialDevice->println("\n[End of Dump]");
+        free(binData);
+    } else if (opt == "ring") {
+        // Record what the screen draws in the text ring WITHOUT streaming
+        // frames: the async path pushes a frame for every draw, which wedges
+        // the USB CDC when a menu is repainted at the same time, so a scripted
+        // menu walk cannot be observed with `display start`. With the ring on
+        // (64 deduplicated entries) `display dump` returns the same text.
+        String state = cmd.getArgument("state").getValue();
+        state.trim();
+        bool on = !(state == "off" || state == "0" || state == "false");
+        tft.setLogging(on);
+        serialDevice->println(String("Display: text ring ") + (on ? "ON" : "OFF"));
+    } else if (opt == "info") {
+        serialDevice->println(TFT_WIDTH + String("x") + TFT_HEIGHT + String("x") + ROTATION);
+    } else {
+        serialDevice->println(
+            "Display command accept:\n"
+            "display start : Start Logging\n"
+            "display stop  : Stop Logging\n"
+            "display status: Get Logging state\n"
+            "display dump  : Dumps binary log\n"
+            "display ring on|off : Record drawn text without streaming frames\n"
+            "display info  : Get display info"
+        );
+        return false;
+    }
+    return true;
+}
+
+uint32_t loaderCallback(cmd *c) {
+    Command cmd(c);
+    String arg = cmd.getArgument("cmd").getValue();
+    String appname = cmd.getArgument("appname").getValue();
+
+    std::vector<MenuItemInterface *> _menuItems = mainMenu.getItems();
+    int _totalItems = _menuItems.size();
+
+    if (arg == "list") {
+        for (int i = 0; i < _totalItems; i++) { serialDevice->println(_menuItems[i]->getName()); }
+        serialDevice->println("BadUSB");
+        serialDevice->println("WebUI");
+        serialDevice->println("LittleFS");
+        return true;
+
+    } else if (arg == "open") {
+        if (!appname.isEmpty()) {
+            // look for a matching name
+            for (int i = 0; i < _totalItems; i++) {
+                if (appname.equalsIgnoreCase(_menuItems[i]->getName())) {
+                    // open the associated app
+                    _menuItems[i]->optionsMenu();
+                    return true;
+                }
+            }
+// additional shortcuts
+#if !defined(LITE_VERSION)
+            if (appname.equalsIgnoreCase("badusb")) {
+                ducky_setup(hid_usb, false);
+                return true;
+            } else
+#endif
+                if (appname.equalsIgnoreCase("webui")) {
+                loopOptionsWebUi();
+                return true;
+            } else if (appname.equalsIgnoreCase("littlefs")) {
+                loopSD(LittleFS);
+                return true;
+            }
+            // else no matching app name found
+            serialDevice->println("app not found: " + appname);
+            return false;
+        }
+
+    } else {
+        serialDevice->println(
+            "Loader command accept:\n"
+            "loader list : Lists available applications\n"
+            "loader open appname  : Runs the entered application.\n"
+        );
+        return false;
+    }
+
+    // TODO: close: Closes the running application.
+    // TODO: info: Displays the loader’s state.
+    return false;
+}
+
+/*********************************************************************
+**  Function: batteryCallback
+**  `battery` - one-line report of the Battery settings and what the board
+**  really has: saver state, CPU clock, backlight, the persisted charge limit
+**  and the charger's own charge-target voltage, plus charge state.
+**********************************************************************/
+uint32_t batteryCallback(cmd *c) {
+    Command cmd(c);
+    int mv = getChargeLimitVoltage();
+    int configured = bruceConfig.bright;
+    int effective = effectiveScreenBrightness();
+    serialDevice->println("Battery saver : " + String(bruceConfig.batterySaver ? "ON" : "OFF"));
+    serialDevice->println("CPU clock     : " + String(getCpuFrequencyMhz()) + " MHz");
+    if (effective != configured) {
+        serialDevice->println(
+            "Backlight     : " + String(effective) + "% (saver cap, configured " + String(configured) + "%)"
+        );
+    } else {
+        serialDevice->println("Backlight     : " + String(effective) + "%");
+    }
+    serialDevice->println("Charge limit  : " + String(chargeLimitPercent()) + "%");
+    if (mv > 0) {
+        serialDevice->println("Charge target : " + String(mv) + " mV");
+    } else {
+        serialDevice->println("Charge target : unavailable (no readable charger)");
+    }
+    serialDevice->println(
+        "Battery       : " + String(getBattery()) + "%" + (isCharging() ? " (charging)" : "")
+    );
+    return true;
+}
+
+void createUtilCommands(SimpleCLI *cli) {
+    cli->addCommand("uptime", uptimeCallback);
+    cli->addCommand("battery", batteryCallback);
+    cli->addCommand("date", dateCallback);
+    Command i2cCmd = cli->addCommand("i2c", i2cCallback);
+    i2cCmd.addPosArg("op", "scan");
+    cli->addCommand("free", freeCallback);
+    cli->addCommand("info,!,device_info", infoCallback);
+    Command help = cli->addCommand("help,?,halp", helpCallback);
+    help.addPosArg("topic", "");
+    cli->addCommand("optionsJSON", optionsJsonCallback);
+    Command display = cli->addCommand("display", displayCallback);
+    display.addPosArg("option", "dump");
+    display.addPosArg("state", "");
+
+    Command navigation = cli->addCommand("nav,navigate,navigation", navCallback);
+    navigation.addPosArg("command");
+    navigation.addPosArg("duration", "1");
+
+    Command opt = cli->addCommand("options,option", optionsCallback);
+    opt.addPosArg("run", "-1");
+
+    Command loader = cli->addCommand("loader", loaderCallback);
+    loader.addPosArg("cmd");
+    loader.addPosArg("appname", "none"); // optional
+}

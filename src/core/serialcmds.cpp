@@ -1,0 +1,143 @@
+#include "serialcmds.h"
+#include "core/display.h" // setConsoleContext()
+#include "core/usb_debug/usbdebug.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
+#include "utils.h"
+#include <globals.h>
+
+QueueHandle_t cmdQueue = nullptr;
+QueueHandle_t rspQueue = nullptr;
+TaskHandle_t serialcmdsTaskHandle;
+
+// Set by a page that speaks its own protocol on the port (UsbEthBridge). The
+// task keeps running so Developer Options housekeeping still happens, but it
+// must not read the port: those bytes are frames, not a command line.
+static volatile bool consoleSuspended = false;
+
+void setSerialConsoleSuspended(bool suspended) { consoleSuspended = suspended; }
+
+bool serialConsoleSuspended() { return consoleSuspended; }
+
+struct CmdPacket {
+    char text[512]; // command size
+};
+bool parseSerialCommand(const String &command, bool waitForResponse) {
+    if (!cmdQueue || !rspQueue) {
+        Serial.println("Command or response queue not initialized");
+        return false;
+    }
+    CmdPacket packet;
+    memset(&packet, 0, sizeof(packet));
+    strncpy(packet.text, command.c_str(), sizeof(packet.text) - 1);
+
+    // Enqueue the command packet for processing
+    if (xQueueSend(cmdQueue, &packet, 0) != pdTRUE) {
+        Serial.println("Failed to send command to queue");
+        return false;
+    }
+    if (!waitForResponse) { return true; }
+    // Wait for the response
+    bool result;
+    if (xQueueReceive(rspQueue, &result, pdMS_TO_TICKS(20))) { return result; }
+    Serial.println("Failed to receive command response");
+    return false;
+}
+
+void handleSerialCommands(SerialCli &serialCli) {
+    if (consoleSuspended) { return; }
+    CmdPacket packet;
+    if (cmdQueue && rspQueue) {
+        if (xQueueReceive(cmdQueue, &packet, 0) == pdTRUE) {
+            setConsoleContext(true);
+            bool result = serialCli.parse(String(packet.text));
+            setConsoleContext(false);
+            xQueueSend(rspQueue, &result, 0);
+            Serial.println("COMMAND: " + String(packet.text));
+            Serial.printf("[CLI] Result: %s\n", result ? "TRUE" : "FALSE");
+        }
+    }
+    // Developer Options in binary protocol mode owns the port for this pass, so
+    // the text CLI must not read it (that would split the framed stream).
+    if (UsbDebug::pollSerial()) return;
+
+    // Developer Options also replaces the blocking readStringUntil() with its
+    // line editor: commands run as soon as Enter arrives (no stream timeout) and
+    // Up/Down recall earlier commands. Without Developer Options the stock read
+    // path is untouched, so simple hosts behave exactly as before.
+    String cmd_str;
+    if (UsbDebug::enabled()) {
+        if (!UsbDebug::pollText(cmd_str)) return;
+    } else {
+        if (!serialDevice->available()) return;
+        cmd_str = serialDevice->readStringUntil('\n');
+    }
+
+    // Debug layer: history (!, !!, !n) and the history ring. Inert unless the
+    // Developer Options setting is on.
+    if (UsbDebug::enabled()) {
+        String typed = cmd_str;
+        typed.trim();
+        if (typed.length() > 0) {
+            String expanded = UsbDebug::expandHistory(typed);
+            if (expanded != typed) cmd_str = expanded;
+            UsbDebug::remember(typed);
+        }
+    }
+
+    Serial.println("COMMAND: " + cmd_str);
+    setConsoleContext(true);
+    serialCli.parse(cmd_str);
+    setConsoleContext(false);
+    serialDevice->print("# "); // prompt
+
+    // forced menu redrawn if the command is not "nav" or "option"
+    // it allows navigation commands to be executed without returning to the menu, while other commands will
+    // return to the menu after execution.
+    String cmd_trimmed = cmd_str;
+    cmd_trimmed.trim();
+    if (!cmd_trimmed.startsWith("nav") && !cmd_trimmed.startsWith("option")) { backToMenu(); }
+}
+
+void _serialCmdsTaskLoop(void *pvParameters) {
+    Serial.begin(115200);
+    while (1) {
+        handleSerialCommands(serialCli);
+        // While a page owns the port (USB Ethernet bridge), the housekeeping
+        // must not run either: its error stream and hot-reload lines would be
+        // written into the frame stream as text.
+        if (!consoleSuspended) {
+            UsbDebug::loop(); // batch queue drain + hot reload polling + error stream
+        }
+        // 1 ms instead of 10: this is the floor on console latency (every typed
+        // command, every binary frame and every streamed log line waited up to
+        // 10 ms here). The work per pass is bounded, so the shorter tick costs
+        // the rest of the firmware nothing measurable.
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
+void startSerialCommandsHandlerTask(bool initQueues) {
+    if (initQueues) {
+        cmdQueue = xQueueCreate(2, sizeof(CmdPacket));
+        rspQueue = xQueueCreate(2, sizeof(bool));
+    }
+
+    xTaskCreatePinnedToCore(
+        _serialCmdsTaskLoop,         // Function to implement the task
+        "serialcmds",                // Name of the task (any string)
+        SERIAL_CMDS_TASK_STACK_SIZE, // Stack size in bytes
+        NULL, // This is a pointer to the parameter that will be passed to the new task. We are not using it
+              // here and therefore it is set to NULL.
+        2,    // Priority of the task
+        &serialcmdsTaskHandle, // Task handle (optional, can be NULL).
+#if SOC_CPU_CORES_NUM > 1
+        1 // Core where the task should run. By default, all your Arduino code runs on Core 1 and the Wi-Fi
+          // and RF functions
+#else
+        0 // Core where the task should run. ESP32-C5 has only one core
+#endif
+    ); // (these are usually hidden from the Arduino environment) use the Core 0.
+    if (!serialcmdsTaskHandle) { Serial.println("Failed to create Serial Commands Handler task"); }
+}

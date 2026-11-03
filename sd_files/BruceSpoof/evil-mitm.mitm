@@ -1,0 +1,46 @@
+# Vandeta MITM payload - evil-mitm: take one device offline, without deauth.
+#
+#   MITM Attack > Payload > evil-mitm.mitm > Target > the test phone > Start
+#
+#   ... or from the console, which is how the tests drive it:
+#       mitm payload /BruceSpoof/evil-mitm.mitm
+#       mitm target 192.168.1.50
+#       mitm run 60 /BruceSpoof/evil-mitm.mitm
+#
+# WHAT IT DOES
+#   The ARP poison already puts this board between the target and its gateway.
+#   `forward off` then makes sure nothing is bridged back, and the DNS rule
+#   answers every lookup with 0.0.0.0 so each name fails instantly instead of
+#   waiting for a timeout. To the phone this looks exactly like a network with
+#   no internet: "Connected, no internet", pages fail in a second, no captive
+#   portal appears.
+#
+# WHY IT EXISTS
+#   A deauth burst is the usual way to knock a device off, and it is what the
+#   ucmitm twin relies on. It stops working on modern clients: 802.11w (PMF) is
+#   mandatory on WPA3 and enabled by default on current iOS, so those deauth
+#   frames are dropped as unprotected management frames - an iPhone 13 stays
+#   associated while an old Android drops at once. This payload never touches
+#   802.11 management frames. It needs one thing instead: the network password,
+#   because the board has to be an associated client for the poison to be
+#   encrypted and accepted. With that it behaves the same on WPA2, WPA2/WPA3
+#   mixed and WPA3-SAE alike, and the client has no way to tell.
+#
+# TARGET IS NOT SET HERE ON PURPOSE
+#   A payload without a `target` line poisons every host the scan found. That is
+#   never what a test wants on a live network, so pick the one device first
+#   (menu: Target, or `mitm target <ip>`); `mitm status` shows the mode.
+#
+# TO RESTORE
+#   `mitm stop` (or BACK / stopping the run) re-ARP every pair, so the target is
+#   back online in under a second. If a run is killed hard, waiting for the ARP
+#   cache to expire restores it too.
+#
+# WANT A PAGE INSTEAD OF A BLACKOUT? Replace the last two lines with:
+#   forward on
+#   page * html/no-internet.html
+# which keeps the target online but answers every plaintext request with the
+# notice page - useful to prove on the phone's screen that the engine is the
+# thing in the middle.
+forward off
+dns * 0.0.0.0

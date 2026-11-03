@@ -1,0 +1,24 @@
+# Vandeta ucmitm payload - see what the network is doing, without a password.
+#
+# Two phases, both readable on the run screen and over USB:
+#
+#   1. `sniff 12`: the clients of the picked AP (802.11 headers are in the clear
+#      even on WPA2) and the SSIDs their probe requests are looking for;
+#   2. the twin: a neutral notice page, so every client that lands on it reveals
+#      the domains it visits - the twin is its DNS server, so the names are read
+#      at the source.
+#
+# `deauth off`: a recon run watches, it does not push anybody off their network.
+# Turn it on only when the twin must actually be adopted by clients. If the
+# twin cannot start at all, the run still watches the air and reports the
+# stations and the SSIDs they are seeking.
+#
+#   MITM Attack > ucmitm: on > Network > pick the AP > Payload > recon.ucmitm
+
+# A twin SSID of its own: a recon run must never look like the real network, so
+# no client roams onto it by accident while it is being watched.
+twin Vandeta-Rec
+deauth off
+sniff 12
+page * html/network-notice.html
+dns * this
