@@ -1,0 +1,18 @@
+# open_mirror - prepare the Sony for the DLNA push.
+#
+# The sequence that works on the KD-49XG7077 is:
+#   HOME      leave any Screen mirroring / stuck player screen
+#   INPUT     open the source list
+#   1         select the first source, the digital TV channel list
+#
+# The historical name is kept, but this no longer selects the Screen mirroring
+# entry: the set refuses a DLNA item while that input is active. The
+# "Push media (DLNA)" action sends the same HOME > INPUT > 1 preparation itself.
+
+DELAY 500
+HOME
+DELAY 3000
+INPUT
+DELAY 2000
+1
+DELAY 2000

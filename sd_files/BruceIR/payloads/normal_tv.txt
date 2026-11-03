@@ -1,0 +1,14 @@
+# normal_tv - leave Screen mirroring/player and select the digital TV tuner
+# (the channel list), the normal picture the Sony's DLNA renderer plays from.
+#
+# HOME clears any mirror/player screen, INPUT opens the source list, and 1
+# selects the TV/first source (digital channels), not HDMI1. It works from
+# Screen mirroring or any HDMI input. The mirroring entry is not wanted here.
+
+DELAY 500
+HOME
+DELAY 3000
+INPUT
+DELAY 2000
+1
+DELAY 2000

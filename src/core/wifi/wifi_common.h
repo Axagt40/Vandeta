@@ -1,0 +1,165 @@
+#include "core/display.h"
+#include <NTPClient.h>
+#include <WiFi.h>
+
+#ifndef __WIFI_COMMON_H__
+#define __WIFI_COMMON_H__
+// TODO wrap in a class
+
+// public
+/**
+ * @brief disconnects and turns off wifi module
+ */
+void wifiDisconnect();
+
+/**
+ * @brief Opens a menu to connect to a wifi
+ * @param mode connection mode(AP, STA, AP_STA)
+ * @note This is the primary entry point for establishing connections
+ * @note returns false if wifi is already connected
+ */
+bool wifiConnectMenu(wifi_mode_t = WIFI_MODE_STA);
+
+/**
+ * @brief Scans the networks and tries to connect to a known network
+ * @param mode connection mode(void)
+ * @note This is the primary entry point for establishing connections in the Headless environment
+ * @note returns true if connected successfully
+ */
+bool wifiConnecttoKnownNet(void);
+
+/**
+ * @brief returns MAC adress
+ */
+String checkMAC();
+
+/**
+ * @brief Transmits a raw 802.11 frame while respecting TX-buffer backpressure.
+ *
+ * esp_wifi_80211_tx() returns ESP_ERR_NO_MEM when the static TX buffers are
+ * temporarily full. Callers that ignore the return value (beacon spam, deauth
+ * flood, karma, pwngrid) silently drop frames when the injection loop runs faster
+ * than the driver, especially under -flto with CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM
+ * reduced. Here we retry briefly, yielding 1 tick for the driver to drain: injection
+ * becomes self-regulated and independent of LTO and buffer count.
+ *
+ * @return ESP_OK if the frame was accepted; otherwise the last error.
+ */
+esp_err_t wifiRawTx(wifi_interface_t ifx, const void *frame, int len, uint8_t retries = 8);
+
+/**
+ * @brief tries to connect to min(found_networks, maxSearch) networks
+ * using stored passwords
+ * @TODO fix: rn it skips open networks due to password == "" check
+ */
+void wifiConnectTask(void *pvParameters);
+
+/**
+ * @brief Makes room for Wi-Fi before a bring-up.
+ *
+ * Returns true when a contiguous DMA block is available. When it is not, this
+ * releases the things that normally hold it (the BLE host, the built-in Web UI
+ * and any stale promiscuous capture) and retries before giving up. Callers that
+ * would otherwise crash inside esp_wifi_init should refuse cleanly when this
+ * returns false.
+ */
+bool wifiEnsureRadioMem();
+
+/**
+ * @brief Scans for Wi-Fi networks with a bounded per-channel dwell.
+ *
+ * Every page that lists networks goes through this instead of calling
+ * `WiFi.scanNetworks()` directly, because the Arduino default (min 100 ms /
+ * max 300 ms per channel) spends up to 3.9 s on a 2.4 GHz sweep. This uses
+ * 60/150 ms, which keeps the APs the default finds and roughly halves the wait.
+ * The result stays in the library's scan list, so the usual `WiFi.SSID(i)` /
+ * `WiFi.RSSI(i)` / `WiFi.scanDelete()` calls follow as before.
+ *
+ * @param showHidden include networks that do not broadcast an SSID
+ * @return number of networks found (0 on failure)
+ */
+int wifiScanNets(bool showHidden = false);
+
+// ---------------------------------------------------------------------------
+// Streaming scan (one channel per poll) - what the Connect-to-WiFi page uses
+// ---------------------------------------------------------------------------
+// The library's own scan only publishes its results when the whole sweep is
+// done, so a page built on it stays blank for the full ~2.4 s. This engine
+// scans ONE channel per poll instead and hands the caller the networks of that
+// channel immediately, which is what lets the scan page show the first network
+// after ~150-300 ms and grow from there.
+
+struct WifiScanAp {
+    char ssid[33];
+    uint8_t bssid[6];
+    int8_t rssi;
+    uint8_t ch;
+    uint8_t enc; // wifi_auth_mode_t
+};
+
+/**
+ * @brief Begins a streaming scan, allocating the result table on first use
+ * @return false when neither PSRAM nor internal RAM could serve the table
+ */
+bool wifiScanStreamStart(bool showHidden = false);
+
+/**
+ * @brief Scans the next channel and returns after it (blocks ~150-300 ms)
+ * @return total number of networks collected so far
+ */
+int wifiScanStreamPoll();
+
+/** @brief true once every channel of the visit order has been scanned */
+bool wifiScanStreamDone();
+
+/** @brief Number of channels already visited (for the progress line) */
+int wifiScanStreamVisited();
+
+/** @brief Total number of channels this engine will visit */
+int wifiScanStreamChannelCount();
+
+/** @brief Stops scanning and releases the library's scan list (keeps results) */
+void wifiScanStreamStop();
+
+/** @brief Networks collected so far, in the order they were found */
+int wifiScanStreamCount();
+const WifiScanAp *wifiScanStreamAp(int index);
+
+/**
+ * @brief Sorts the collected networks strongest first.
+ *
+ * The live view paints rows in discovery order (append-only, no flicker); the
+ * picker is built afterwards and shows them the way the old menu did, best
+ * signal first.
+ */
+void wifiScanStreamSortByRssi();
+
+/**
+ * @brief Ensures esp_netif and the default event loop are initialized (idempotent)
+ */
+void ensureWifiPlatform();
+
+// private
+/**
+ * @brief Connects to wifiNetwork
+ *
+ * @param channel AP channel from the scan, 0 when unknown
+ * @param bssid   AP BSSID from the scan, nullptr when unknown
+ *
+ * A channel + BSSID that came from a scan makes the driver associate directly
+ * instead of sweeping all 13 channels to find the SSID first, which is most of
+ * the "connecting" wait. Both hints are dropped on a retry so a network that
+ * moved to another channel is still found.
+ */
+bool _wifiConnect(const String &ssid, int encryption, uint8_t channel = 0, const uint8_t *bssid = nullptr);
+bool _connectToWifiNetwork(const String &ssid, const String &pwd, uint8_t channel = 0, const uint8_t *bssid = nullptr);
+
+/**
+ * @brief sets up wifi in AP mode
+ * @note wifi.mode should be set before calling the method
+ */
+bool _setupAP();
+
+void updateTimezoneTask(void *pvParameters);
+
+#endif
