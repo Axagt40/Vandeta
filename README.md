@@ -2,6 +2,10 @@
 
 **The only firmware you need for the LilyGo T-Embed CC1101.**
 
+<p align="center">
+  <img src="docs/img/crown-banner.png" alt="Vandeta" width="420">
+</p>
+
 [![Release](https://img.shields.io/github/v/release/Axagt40/Vandeta?label=release&color=blue)](https://github.com/Axagt40/Vandeta/releases/latest)
 [![Board](https://img.shields.io/badge/board-LilyGo%20T--Embed%20CC1101-orange)](https://lilygo.cc/products/t-embed-cc1101)
 [![Base](https://img.shields.io/badge/base-Bruce%201.16.1-blueviolet)](https://github.com/BruceDevices/firmware)

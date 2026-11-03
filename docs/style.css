@@ -208,27 +208,6 @@ hr {
   color: var(--text);
 }
 
-/* The crown, filled with the same pink -> purple ramp as the logo and the
-   firmware's own chrome. One element, no image: the PNG is only a mask. */
-.crown-banner {
-  height: clamp(110px, 20vw, 210px);
-  max-width: var(--wrap);
-  margin: clamp(0.5rem, 3vw, 2rem) auto 0;
-  padding: 0 1.25rem;
-  background: linear-gradient(135deg, #ff2f87 10%, #b14cff 55%, #8b5cf6 100%);
-  -webkit-mask: url("img/crown.png") center / contain no-repeat;
-  mask: url("img/crown.png") center / contain no-repeat;
-  filter: drop-shadow(0 10px 44px rgba(255, 47, 135, 0.28));
-  opacity: 0.95;
-  pointer-events: none;
-}
-
-@media (max-width: 720px) {
-  .crown-banner {
-    height: clamp(88px, 26vw, 140px);
-  }
-}
-
 .brand-mark {
   width: 25px;
   height: 21px;
