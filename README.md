@@ -32,12 +32,16 @@ analyzer, the wardriver, the capture layer and the nRF24 tap repeat.
 **Pre-release** to select it. The source for every build is published in this
 repository, per release, from 1.4 onward.
 
-| [SCREENSHOT: main menu] | [SCREENSHOT: frequency analyzer sweep] | [SCREENSHOT: wardriver] | [SCREENSHOT: packet monitor] |
-|:--:|:--:|:--:|:--:|
-| Main menu | Frequency Analyzer | Wardriver | Packet Monitor |
+Every screen below was captured from the board over USB, at 320 x 170.
 
-[SCREENSHOT: console ui output]
-[SCREENSHOT: IR Suite]
+| <img src="site/img/readme-main-menu.png" alt="Vandeta main menu on the T-Embed CC1101 Plus" width="320"> | <img src="site/img/readme-frequency-analyzer.png" alt="Frequency Analyzer holding 433.920 MHz" width="320"> | <img src="site/img/readme-wardriver.png" alt="SubGHz Wardriver menu: Start capture, Captures" width="320"> | <img src="site/img/readme-packet-monitor.png" alt="Packet Monitor fed by BLE advertisements" width="320"> |
+|:--:|:--:|:--:|:--:|
+| Main menu | Frequency Analyzer, 433.920 MHz | SubGHz Wardriver | Packet Monitor (BLE) |
+
+| <img src="site/img/readme-console.png" alt="USB console: ui output listing the main menu" width="720"> | <img src="site/img/readme-infrared.png" alt="Infrared menu with IR Suite as the first row" width="320"> |
+|:--:|
+| Console readback: `ui` prints the menu it is on | Infrared, with IR Suite on top |
+
 [PHOTO: board with external antenna]
 
 ---
