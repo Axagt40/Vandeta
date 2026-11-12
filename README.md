@@ -1,29 +1,54 @@
-# Vandeta™
+# Vandeta
 
-**The only firmware you need for the LilyGo T-Embed CC1101.**
+**Bruce 1.16.1, retuned for the LilyGo T-Embed CC1101 Plus.**
 
 <p align="center">
-  <img src="docs/img/crown-banner.png" alt="Vandeta" width="240">
+  <img src="site/img/crown-banner.png" alt="Vandeta" width="220">
 </p>
 
-[![Release](https://img.shields.io/github/v/release/Axagt40/Vandeta?label=release&color=blue)](https://github.com/Axagt40/Vandeta/releases/latest)
+[![Release](https://img.shields.io/github/v/release/Axagt40/Vandeta?label=release&color=blue&include_prereleases)](https://github.com/Axagt40/Vandeta/releases)
+[![Build](https://github.com/Axagt40/Vandeta/actions/workflows/PR_check.yml/badge.svg)](https://github.com/Axagt40/Vandeta/actions/workflows/PR_check.yml)
 [![Board](https://img.shields.io/badge/board-LilyGo%20T--Embed%20CC1101-orange)](https://lilygo.cc/products/t-embed-cc1101)
 [![Base](https://img.shields.io/badge/base-Bruce%201.16.1-blueviolet)](https://github.com/BruceDevices/firmware)
 [![Licence](https://img.shields.io/badge/licence-AGPL--3.0-green)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20server-5865F2?logo=discord&logoColor=white)](https://discord.gg/dhPXgVerqD)
 
-> **[Install in your browser](https://axagt40.github.io/Vandeta/flash.html)** — no tools, one button, Chrome or Edge
-> · **[Download Vandeta 1.3](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.3)** — one merged image, flash it at `0x0`
-> · **[What's new in 1.3](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.3)**
-> · **[Docs](https://axagt40.github.io/Vandeta/docs.html)**
-> · **[Discord](https://discord.gg/dhPXgVerqD)**
+[GIF: 3 s - Frequency Analyzer sweeping 433 MHz, then a Wardriver capture list]
+
+The T-Embed puts the **CC1101 and the display on one SPI bus**, so a radio
+transaction that lands while the screen is being written comes back as noise and
+stock Bruce's scans, sweeps and captures drop out on this board. Vandeta takes
+the bus for a whole radio operation (`rf_spi_lock()` plus the matching `TFT_eSPI`
+`busLock()`), parks sweeps between hops and uses an adaptive noise floor, so the
+analyzer, the wardriver, the capture layer and the nRF24 tap repeat.
+
+> **[Install](https://axagt40.github.io/Vandeta/flash.html)** ·
+> **[Download 1.4](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.4-pre)** ·
+> **[What's new in 1.4](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.4-pre)** ·
+> **[Docs](https://axagt40.github.io/Vandeta/docs.html)** ·
+> **[Discord](https://discord.gg/dhPXgVerqD)**
+
+1.4 is a pre-release, and the flasher opens on **Official 1.3** - press
+**Pre-release** to select it. The source for every build is published in this
+repository, per release, from 1.4 onward.
+
+| [SCREENSHOT: main menu] | [SCREENSHOT: frequency analyzer sweep] | [SCREENSHOT: wardriver] | [SCREENSHOT: packet monitor] |
+|:--:|:--:|:--:|:--:|
+| Main menu | Frequency Analyzer | Wardriver | Packet Monitor |
+
+[SCREENSHOT: console ui output]
+[SCREENSHOT: IR Suite]
+[PHOTO: board with external antenna]
+
+---
 
 Vandeta is custom firmware for one board, the **LilyGo T-Embed CC1101**, built
 on **[Bruce](https://github.com/BruceDevices/firmware) 1.16.1** — the
 open-source ESP32 offensive-security firmware. It keeps Bruce's architecture,
 menus and tools as its foundation and adds the tooling listed below on top of
 them. Upstream credit and the AGPL-3.0 `LICENSE` are untouched, and the whole
-upstream feature list still applies here (it is reproduced further down).
+upstream feature list still applies here (it is in
+[`docs/UPSTREAM.md`](docs/UPSTREAM.md)).
 
 > **All credit for the firmware belongs to the Bruce project and its
 > contributors.** Vandeta would not exist without it.
@@ -303,9 +328,8 @@ extra layer on top of them.
 * The source is published in this repository, under **AGPL-3.0** — the same
   licence as upstream Bruce. `main` is the build tree, laid out the way
   upstream is: `src/`, `boards/`, `lib/`, `sd_files/` and `platformio.ini` at
-  the root, with the flasher site in `docs/`. Everything the image is built from is here:
-  `src/`, `boards/`, `lib/`, the card files in `sd_files/` and
-  `platformio.ini` (build steps below).
+  the root, with the flasher site in `site/`. Everything the image is built
+  from is here, and the source is published with each release from 1.4 onward.
 * Every released image is one merged file &mdash; bootloader + partition table
   + app &mdash; written at `0x0` and checked against its published SHA-256.
 * The universal IR libraries ship in the 1.3 SD pack and on the card under
@@ -321,7 +345,7 @@ extra layer on top of them.
 
 | | |
 |---|---|
-| Board | **LilyGo T-Embed CC1101** ("T-Embed C1011 plus") |
+| Board | **LilyGo T-Embed CC1101 Plus** |
 | MCU | ESP32-S3, 16 MB flash, 8 MB PSRAM |
 | Display | 320x170 landscape, encoder navigation |
 | Radios | CC1101 Sub-GHz, nRF24 socket, WiFi, BLE |
@@ -417,12 +441,42 @@ Questions, builds and feedback: **Discord** — <https://discord.gg/dhPXgVerqD>
 
 ---
 
+## :white_check_mark: Verified on the board
+
+The 1.4-pre image (`nogit-20261112-134113`) reports `vandeta 1.4-pre` in `info`.
+On it, `t50_ble_attacks.py` scored **22 passed / 0 failed / 0 skipped**,
+`t45_patch_overlay.py` **35 passed / 0 failed / 1 declared skip** and
+`t48_tasks.py` **21 passed / 0 failed**. The MITM transport barrier was measured
+on the 2026-11-08 build, whose engine code is unchanged: a DNS-only payload arms
+it, AAAA/SVCB/HTTPS come back empty, UDP/443 is answered with ICMP, TCP/853 never
+opens, and a poisoned victim was back online 6 s after `mitm stop`
+(`t46_mitm_fallback_live.py` 19/0/1, `t45_mitm_phone_live.py` 24/0/0).
+
+---
+
+## :warning: What this build does not do
+
+* A DHCPv6-provided resolver is not retired; its IPv6 data path is blocked.
+* The DoH reset needs the TLS SNI, so ECH and DoH-by-IP stay invisible.
+* Android Private DNS in strict mode shows a notification when 853 is blocked.
+* The HTTPS endpoint is self-signed, so a strict client warns.
+* A randomised MAC breaks a single-target ARP pair, and the takeover wants a
+  warm ARP entry, so the first run after a reboot can miss.
+* Resolver answers are pinned for 300 s, so a client can keep the board's answer
+  for up to five minutes after `mitm stop`.
+* The BLE MITM relay proxy is not implemented; PEAP stays the passive subset.
+* The CC1101 and the nRF24 cannot demodulate 802.11 - there is no client list,
+  probe or deauth from either one.
+* This board has no microphone, so `modem recv` says so instead of pretending.
+
+---
+
 ## :clap: Credits and licence
 
 * **Bruce** — <https://github.com/BruceDevices/firmware> (upstream:
   <https://github.com/pr3y/Bruce>). Vandeta is built on Bruce 1.16.1; the
-  firmware is Bruce's work and the whole upstream feature list, device support
-  and documentation further down this file are its authors'.
+  firmware is Bruce's work, and the upstream feature list, device support and
+  documentation in `docs/UPSTREAM.md` are its authors'.
 * Licence: **AGPL-3.0** (`LICENSE`), third-party notices in `THIRD_PARTY.md`.
 * **Vandeta™** is an unregistered trademark of the project - the name and
   crown artwork are not covered by the code licence (`TRADEMARK.md`).
@@ -435,321 +489,24 @@ If you use Vandeta in another project, credit it in your README:
 
 That line is a **request**, not an extra licence condition (`ATTRIBUTION.md`);
 `TRADEMARK.md` covers the name and the crown.
-  Both are unchanged from upstream and both apply to this build.
 
 ---
 
 ## :bookmark_tabs: About the upstream project
 
-Everything below this line is the upstream Bruce project — feature list,
-supported devices, credits and license — kept intact on purpose.
+* **Upstream:** [Bruce](https://github.com/BruceDevices/firmware) (originally
+  [pr3y/Bruce](https://github.com/pr3y/Bruce)), AGPL-3.0.
+* **What Vandeta keeps:** every Bruce menu, app, radio and script API - nothing
+  was removed.
+* **What Vandeta changes:** the CC1101 bus lock, the USB console, the IR Suite
+  and the nRF24 capture layer - [`docs/DIFFERENCES.md`](docs/DIFFERENCES.md).
+* **What stays upstream:** Bruce's full feature list, the 18-row device table,
+  its acknowledgements and its disclaimer are kept verbatim in
+  [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
+* **Credit:** the firmware is Bruce's work and its authors'; Vandeta is the layer
+  on top.
 
 ---
 
----
-
-# :shark: Bruce
-
-Bruce is a versatile ESP32 firmware packed with offensive-security tools, built to make Red Team operations fast and portable.
-
-It also supports [M5Stack](https://shop.m5stack.com), [LILYGO](https://lilygo.cc) , [RockBase IoT](https://www.rockbaseiot.com) and [Elecrow](https://www.elecrow.com) products, and works great with the Cardputer, Sticks, M5Cores, T-Decks and T-Embeds.
-
-## :zap: Get Our Official DevKit!
-
-### RF REAPER
-
-**RF REAPER** is our custom PCB devkit, purpose-built for Bruce!
-
-Every major feature works natively, right out of the box. Sub-GHz, NFC/RFID, IR, 2.4GHz(NRF), GPS-ready, and a microSD, all driven by a beefy ESP32-S3 (16MB Flash / 8MB PSRAM). Tons of GPIOs via the AW9523 expander plus Flipper Zero & iButton header compatibility mean you can hack, mod, and build on it endlessly. Want a specific function? Ask us with an issue, we'll check it.
-
-👉 **[Buy the RF REAPER and official boards](https://shop.bruce.computer)**
-
-**Check our fully open-source hardware too:** https://bruce.computer/boards
-
-More custom devkit boards coming soon! Stay across our communities!
-
-## :building_construction: How to install
-
-### The easiest way to install Bruce is using our official Web Flasher!
-
-### Check out: https://bruce.computer/flasher
-
-Alternatively, you can download the latest binary from releases or actions and flash locally using esptool.py
-
-```sh
-esptool.py --port /dev/ttyACM0 write_flash 0x00000 Bruce-<device>.bin
-```
-
-**For m5stack devices**
-
-If you already use M5Launcher to manage your m5stack device, you can install it with OTA
-
-Or you can burn it directly from the [m5burner tool](https://docs.m5stack.com/en/download), just search for 'Bruce' (My official builds will be uploaded by "owner" and have photos.) on the device category you want to and click on burn
-
-## :keyboard: Discord Server
-
-Contact us in our [Discord Server](https://discord.gg/WJ9XF9czVT)!
-
-## :bookmark_tabs: Wiki
-
-For more information on each function supported by Bruce, [read our wiki here](https://wiki.bruce.computer/).
-Also, [read our FAQ](https://wiki.bruce.computer/faq/)
-
-## :computer: List of Features
-
-<details>
-  <summary><h2>WiFi</h2></summary>
-
-- [x] Connect to WiFi
-- [x] WiFi AP
-- [x] Disconnect WiFi
-- [x] [WiFi Atks](https://wiki.bruce.computer/features/wifi/#wifi-atks)
-  - [x] [Beacon Spam](https://wiki.bruce.computer/features/wifi/#beacon-spam)
-  - [x] [Target Atk](https://wiki.bruce.computer/features/wifi/#target-atks)
-    - [x] Information
-    - [x] Target Deauth
-    - [x] EvilPortal + Deauth
-  - [x] Deauth Flood (More than one target)
-  - [x] Additional attacks (in the flat **Wifi Atks** menu)
-    - [x] EAPOL Logoff
-    - [x] Channel Switch
-    - [x] Bad Message
-    - [x] Auth Flood
-    - [x] Probe Request Flood
-    - [x] Authentication Attack
-    - [x] EAPOL Start Attack
-    - [x] Disassociation Attack
-- [x] [Wardriving](https://wiki.bruce.computer/features/gps/#wardriving)
-- [x] [TelNet](https://wiki.bruce.computer/features/wifi/#telnet)
-- [x] [SSH](https://wiki.bruce.computer/features/wifi/#ssh)
-- [x] [RAW Sniffer](https://wiki.bruce.computer/features/wifi/#raw-sniffer)
-- [x] [TCP Client](https://wiki.bruce.computer/features/wifi/#client-tcp)
-- [x] [TCP Listener](https://wiki.bruce.computer/features/wifi/#listen-tcp)
-- [x] [Evil Portal](https://wiki.bruce.computer/features/wifi/#evil-portal)
-- [x] [Scan Hosts](https://wiki.bruce.computer/features/wifi/#scan-hosts) (with TCP Port scanning)
-- [x] [Responder](https://wiki.bruce.computer/features/wifi/#responder)
-- [x] [Arp Spoofing](https://wiki.bruce.computer/features/wifi/#arp-spoofing)
-- [x] [Arp Poisoning](https://wiki.bruce.computer/features/wifi/#arp-poisoning)
-- [x] [Wireguard Tunneling](https://wiki.bruce.computer/features/wifi/#wireguard-tunneling)
-- [x] Brucegotchi
-  - [x] Pwnagotchi friend
-  - [x] Pwngrid spam faces & names
-    - [x] [Optional] DoScreen a very long name and face
-    - [x] [Optional] Flood uniq peer identifiers
-
-</details>
-
-<details>
-  <summary><h2>BLE</h2></summary>
-
-- [x] [BLE Scan](https://wiki.bruce.computer/features/ble/#ble-scan)
-- [x] Bad BLE - Run Ducky scripts, similar to [BadUsb](https://wiki.bruce.computer/features/ble/#badble)
-- [x] BLE Keyboard - Cardputer and T-Deck Only
-- [x] iOS Spam
-- [x] Windows Spam
-- [x] Samsung Spam
-- [x] Capture & Replay (record, filter, analyse, save/load and replay raw advertisements, with per-vendor remote types)
-- [x] Android Spam
-- [x] Spam All
-</details>
-
-<details>
-  <summary><h2>RF</h2></summary>
-
-- [x] Scan/Copy
-- [x] [Custom SubGhz](https://wiki.bruce.computer/features/rf/#replay-payloads-like-flipper)
-- [x] Spectrum
-- [x] Jammer Full (sends a full squared wave into output)
-- [x] Jammer Intermittent (sends PWM signal into output)
-- [x] Config
-  - [x] RF TX Pin
-  - [x] RF RX Pin
-  - [x] RF Module
-    - [x] RF433 T/R M5Stack
-    - [x] [CC1101 (Sub-Ghz)](https://wiki.bruce.computer/features/rf/#cc1101)
-  - [x] RF Frequency
-- [x] Replay
-</details>
-
-<details>
-  <summary><h2>RFID</h2></summary>
-
-- [x] Read tag
-- [x] Read 125kHz
-- [x] Clone tag
-- [x] Write NDEF records
-- [x] Amiibolink
-- [x] Chameleon
-- [x] Write data
-- [x] Erase data
-- [x] Save file
-- [x] Load file
-- [x] Config
-  - [x] [RFID Module](https://wiki.bruce.computer/features/rfid/#supported-modules)
-    - [x] PN532
-    - [x] PN532Killer
-- [ ] Emulate tag
-</details>
-
-<details>
-  <summary><h2>IR</h2></summary>
-
-- [x] TV-B-Gone
-- [x] IR Receiver
-- [x] [Custom IR (NEC, NECext, SIRC, SIRC15, SIRC20, Samsung32, RC5, RC5X, RC6)](https://wiki.bruce.computer/features/ir/#replay-payloads-like-flipper)
-- [x] Config - [X] Ir TX Pin - [X] Ir RX Pin
-</details>
-
-<details>
-  <summary><h2>FM</h2></summary>
-
-- [x] [Broadcast standard](https://wiki.bruce.computer/features/fm/#broadcast-standard)
-- [x] [Broadcast reserved](https://wiki.bruce.computer/features/fm/#broadcast-standard)
-- [x] [Broadcast stop](https://wiki.bruce.computer/features/fm/#broadcast-stop)
-- [ ] [FM Spectrum](https://wiki.bruce.computer/features/fm/#fm-spectrum)
-- [ ] [Hijack Traffic Announcements](https://wiki.bruce.computer/features/fm/#hijack-ta)
-- [ ] [Config](https://wiki.bruce.computer/features/fm/#bookmark_tabs-config)
-</details>
-
-<details>
-  <summary><h2>NRF24</h2></summary>
-
-- [x] [NRF24 Jammer](https://wiki.bruce.computer/features/nrf24/)
-- [x] 2.4G Spectrum
-- [x] Raw Capture (pseudo-promiscuous listen, channel scan, multi-frequency detect, analyse, save/load, replay)
-- [ ] Mousejack
-</details>
-
-<details>
-  <summary><h2>Apps</h2></summary>
-
-- [x] [JavaScript Interpreter](https://wiki.bruce.computer/features/js-interpreter/) [Credits to justinknight93](https://github.com/justinknight93/Doolittle)
-</details>
-
-<details>
-  <summary><h2>Others</h2></summary>
-
-- [x] Mic Spectrum
-- [x] [QRCodes](https://wiki.bruce.computer/features/others/#qrcodes)
-  - [x] Custom
-  - [x] PIX (Brazil bank transfer system)
-- [x] [SD Card Mngr](https://github.com/pr3y/Bruce/wiki/Others#sd-card-mngr)
-  - [x] View image (jpg)
-  - [x] File Info
-  - [x] [Wigle Upload](https://wiki.bruce.computer/features/gps/#how-to-use-wigle)
-  - [x] Play Audio
-  - [x] View File
-- [x] LittleFS Mngr
-- [x] [WebUI](https://wiki.bruce.computer/controlling-device/webui/)
-  - [x] Server Structure
-  - [x] Html
-  - [x] SDCard Mngr
-  - [x] Spiffs Mngr
-- [x] Megalodon
-- [x] [BADUsb (New features, LittleFS and SDCard)](https://wiki.bruce.computer/features/others/#badusb)
-  - [x] BadUSB config menu: USB footprint (VID/PID/manufacturer/product/serial), keyboard layout, HID device type, attack speed and timing, payload folder
-  - [x] Extra Nordic layout, plus import/export/copy of custom layout files
-- [x] USB Keyboard - Cardputer and T-Deck Only
-- [x] [iButton](https://wiki.bruce.computer/features/others/#ibutton)
-- [x] LED Control
-</details>
-
-<details>
-  <summary><h2>Clock</h2></summary>
-
-- [x] RTC Support
-- [x] NTP time adjust
-- [x] Manual adjust
-</details>
-
-<details>
-  <summary><h2>Connect (ESPNOW)</h2></summary>
-
-- [x] Send File
-- [x] Receive File
-- [x] Send Commands
-- [x] Receive Commands
-</details>
-
-<details>
-  <summary><h2>Config</h2></summary>
-
-- [x] Brightness
-- [x] Dim Time
-- [x] Orientation
-- [x] UI Color
-- [x] Boot Sound on/off
-- [x] Clock
-- [x] Sleep
-- [x] Restart
-</details>
-
-## Specific functions per Device, the ones not mentioned here are available to all.
-
-| Device                                                                                                                                                                                      | CC1101 | NRF24 | FM Radio |        PN532         | Mic  | BadUSB | RGB Led | Speaker | Fuel Gauge | LITE_VERSION |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----: | :---: | :------: | :------------------: | :--: | :----: | :-----: | :-----: | :--------: | :----------: |
-| [M5Stack Cardputer](https://shop.m5stack.com/products/m5stack-cardputer-kit-w-m5stamps) (and ADV)                                                                                           |  :ok:  | :ok:  |   :ok:   |         :ok:         | :ok: |  :ok:  |  :ok:   | NS4168  |    :x:     |     :x:      |
-| [M5Stack M5StickC PLUS2](https://shop.m5stack.com/products/m5stickc-plus2-esp32-mini-iot-development-kit)                                                                                   |  :ok:  | :ok:  |   :ok:   |         :ok:         | :ok: | :ok:¹  |   :x:   |  Tone   |    :x:     |     :x:      |
-| [M5Stack M5StickC PLUS](https://shop.m5stack.com/products/m5stickc-plus-esp32-pico-mini-iot-development-kit)                                                                                |  :ok:  | :ok:  |   :ok:   |         :ok:         | :ok: | :ok:¹  |   :x:   |  Tone   |    :x:     |     :x:²     |
-| [M5Stack M5Core BASIC](https://shop.m5stack.com/products/basic-core-iot-development-kit)                                                                                                    |  :ok:  | :ok:  |   :ok:   |         :ok:         | :ok: | :ok:¹  |   :x:   |  Tone   |    :x:     |     :x:      |
-| [M5Stack M5Core2](https://shop.m5stack.com/products/m5stack-core2-esp32-iot-development-kit-v1-1)                                                                                           |  :ok:  | :ok:  |   :ok:   |         :ok:         | :ok: | :ok:¹  |   :x:   |   :x:   |    :x:     |     :x:      |
-| [M5Stack M5CoreS3](https://shop.m5stack.com/products/m5stack-cores3-esp32s3-lotdevelopment-kit)/[SE](https://shop.m5stack.com/products/m5stack-cores3-se-iot-controller-w-o-battery-bottom) |  :ok:  | :ok:  |   :ok:   |         :ok:         | :x:  |  :ok:  |   :x:   |   :x:   |    :x:     |     :x:      |
-| [JCZN CYD&#x2011;2432S028](https://www.aliexpress.us/item/3256804774970998.html)                                                                                                            |  :ok:  | :ok:  |   :ok:   |         :ok:         | :x:  | :ok:¹  |   :x:   |   :x:   |    :x:     |     :x:²     |
-| [Lilygo T&#x2011;Embed CC1101](https://lilygo.cc/products/t-embed-cc1101)                                                                                                                   |  :ok:  | :ok:  |   :ok:   |         :ok:         | :ok: |  :ok:  |  :ok:   |  :ok:   |    :ok:    |     :x:      |
-| [Lilygo T&#x2011;Embed](https://lilygo.cc/products/t-embed)                                                                                                                                 |  :ok:  | :ok:  |   :ok:   |         :ok:         | :ok: |  :ok:  |  :ok:   |  :ok:   |    :x:     |     :x:      |
-| [Lilygo T-Display-S3](https://lilygo.cc/products/t-display-s3)                                                                                                                              |  :ok:  | :ok:  |   :x:    |         :x:          | :x:  |  :ok:  |   :x:   |   :x:   |    :x:     |     :x:      |
-| [Lilygo T&#x2011;Deck](https://lilygo.cc/products/t-deck) ([and pro](https://lilygo.cc/products/t-deck-plus-1))                                                                             |  :ok:  |  :x:  |   :x:    |         :x:          | :x:  |  :ok:  |   :x:   |   :x:   |    :x:     |     :x:      |
-| [Lilygo T-Watch-S3](https://lilygo.cc/products/t-watch-s3)                                                                                                                                  |  :x:   |  :x:  |   :x:    |         :x:          | :x:  |  :ok:  |   :x:   |   :x:   |    :x:     |     :x:      |
-| [Lilygo T-LoRa Pager](https://lilygo.cc/products/t-lora-pager)                                                                                                                              |  :x:   |  :x:  |   :x:    |         :x:          | :x:  |  :ok:  |   :x:   |   :x:   |    :x:     |     :x:      |
-| [Smoochiee V2](https://www.pcbway.com/project/shareproject/Bruce_PCB_Smoochiee_d6a0284b.html)                                                                                               |  :ok:  | :ok:  |   :x:    |         :ok:         | :x:  |  :ok:  |   :x:   |   :x:   |    :x:     |     :x:      |
-| [ESP32-C5](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32c5/esp32-c5-devkitc-1/user_guide.html)                                                                           |  :ok:  | :ok:  |   :x:    |         :ok:         | :x:  |  :x:   |   :x:   |   :x:   |    :x:     |     :x:      |
-| [Bruce RF Reaper](https://www.elecrow.com/bruce-pcb-rf-reaper.html)                                                                                                                         |  :ok:  | :ok:  |   :x:    | :ok: but w/ ST25R3916 | :x:  |  :ok:  |  :ok:   |   :x:   |    :ok:    |     :x:      |
-| [Elecrow 24B](https://www.elecrow.com/2-4inch-esp32-miner-lcd-display-2pcs-cryptocurrency-solo-miner-with-1000kh-s-hashrate.html)                                                            |  :ok:  | :ok:  |   :ok:   |         :ok:         | :x:  | :ok:¹  |   :x:   |   :x:   |    :x:     |     :x:²     |
-| [Elecrow 3.5"](https://www.elecrow.com/esp-terminal-with-esp32-3-5-inch-parallel-480x320-tft-capacitive-touch-display-rgb-by-chip-ili9488.html)                                                                                                                                                        |  :ok:  | :ok:  |   :ok:   |         :ok:         | :x:  | :ok:¹  |   :x:   |   :x:   |    :x:     |     :x:²     |
-| [NM-CYD-C5 + RF HAT](https://https://rockbase.shop/products/nm-cyd-c5-colorful)                                                                                                                         |  :ok:  | :ok:  |   :x:    | :ok: | :x:  |  :ok:  |  :ok:   |   :x:   |    :ok:    |     :x:      |
-² CYD have a LITE_VERSION version for Launcher Compatibility
-¹ Core, CYD and StickCs Bad-USB: [here](https://wiki.bruce.computer/features/others/#badusb)
-
-_LITE_VERSION_: TelNet, SSH, WireGuard, ScanHosts, RawSniffer, Brucegotchi, BLEBacon, BLEScan and Interpreter are NOT available for M5Launcher Compatibility
-
-## :sparkles: Why and how does it look?
-
-Bruce stems from a keen observation within the community focused on devices like Flipper Zero. While these devices offered a glimpse into the world of offensive security, there was a palpable sense that something more could be achieved without being that overpriced, particularly with the robust and modular hardware ecosystem provided by ESP32 Devices, Lilygo and M5Stack products.
-
-![Bruce Main Menu](./media/pictures/pic1.png)
-![Bruce on M5Core](./media/pictures/core.png)
-![Bruce on Stick](./media/pictures/stick.png)
-![Bruce on CYD](./media/pictures/cyd.png)
-![Bruce on CYD with NM-RF-HAT](./media/pictures/bruce-cyd.png)
-
-Other media can be [found here](./media/).
-
-## :clap: Acknowledgements
-
-- [@bmorcelli](https://github.com/bmorcelli) for new core and a bunch of new features, also porting to many devices!
-- [@IncursioHack](https://github.com/IncursioHack) for adding RF and RFID modules features.
-- [@Luidiblu](https://github.com/Luidiblu) for logo and UI design assistance.
-- [@eadmaster](https://github.com/eadmaster) for adding a lot of features.
-- [@rennancockles](https://github.com/rennancockles) for a lot of RFID code, refactoring and others features.
-- [@7h30th3r0n3](https://github.com/7h30th3r0n3) refactoring and a lot of help with WiFi attacks.
-- [@Tawank](https://github.com/Tawank) refactoring interpreter among many other things
-- @pablonymous RF functions to read RAW Data
-- [Smoochiee](https://github.com/smoochiee) for Bruce PCB design.
-- TH3_KR4K3N for Stick cplus extender PCB design.
-- Everyone who contributed in some way to the project, thanks :heart:
-
-Bruce also stands on the shoulders of other great open-source firmware projects,
-which inspired features and code across the project:
-
-- [ESP32Marauder](https://github.com/justcallmekoko/ESP32Marauder) by [@justcallmekoko](https://github.com/justcallmekoko) — WiFi/Bluetooth offensive toolkit.
-- [Launcher](https://github.com/bmorcelli/Launcher) by [@bmorcelli](https://github.com/bmorcelli) — the multi-app launcher/bootloader for the devices.
-- [Evil-M5Project](https://github.com/7h30th3r0n3/Evil-M5Project) by [@7h30th3r0n3](https://github.com/7h30th3r0n3) — WiFi attack suite for M5Stack.
-- [M5Stick-Nemo](https://github.com/n0xa/m5stick-nemo) by [@n0xa](https://github.com/n0xa) — multi-tool firmware for M5Stick devices.
-
-Bruce builds on many free-software libraries, and parts of the RF and NFC/RFID
-modules are derived from other projects. See [THIRD_PARTY.md](./THIRD_PARTY.md)
-for third-party attribution and copyleft-compliance details.
-
-## :construction: Disclaimer
-
-Bruce is a tool for cyber offensive and red team operations, distributed under the terms of the Affero General Public License (AGPL). It is intended for legal and authorized security testing purposes only. Use of this software for any malicious or unauthorized activities is strictly prohibited. By downloading, installing, or using Bruce, you agree to comply with all applicable laws and regulations. This software is provided free of charge, and we do not accept payments for copies or modifications. The developers of Bruce assume no liability for any misuse of the software. Use at your own risk.
+If this is useful on your bench, a star on the repository helps other people
+find it.
