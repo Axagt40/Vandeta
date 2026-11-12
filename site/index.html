@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Vandeta — firmware for the LilyGo T-Embed CC1101</title>
-<meta name="description" content="Vandeta is custom ESP32 firmware for the LilyGo T-Embed CC1101, built on Bruce 1.16.1: sub-GHz, nRF24, BLE, IR, WiFi and a USB console that lets a PC drive the device.">
+<title>Vandeta — firmware for the LilyGo T-Embed CC1101 Plus</title>
+<meta name="description" content="Vandeta is custom ESP32 firmware for the LilyGo T-Embed CC1101 Plus, built on Bruce 1.16.1: sub-GHz, nRF24, BLE, IR, WiFi and a USB console that lets a PC drive the device.">
 <meta name="theme-color" content="#0a0a0f">
-<meta property="og:title" content="Vandeta — firmware for the LilyGo T-Embed CC1101">
-<meta property="og:description" content="Custom firmware for the LilyGo T-Embed CC1101, built on Bruce 1.16.1, with a full USB console.">
+<meta property="og:title" content="Vandeta — firmware for the LilyGo T-Embed CC1101 Plus">
+<meta property="og:description" content="Custom firmware for the LilyGo T-Embed CC1101 Plus, built on Bruce 1.16.1, with a full USB console.">
 <meta property="og:type" content="website">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -32,7 +32,7 @@
   <section class="hero">
     <div class="wrap hero-grid">
       <div>
-        <p class="eyebrow">ESP32-S3 &middot; LilyGo T-Embed CC1101</p>
+        <p class="eyebrow">ESP32-S3 &middot; LilyGo T-Embed CC1101 Plus</p>
         <h1>The only firmware<br>you need.</h1>
         <p class="lede">
           Built on Bruce 1.16.1, with a USB console, extended IR libraries and
@@ -43,13 +43,15 @@
           <a class="btn btn-ghost" href="https://github.com/Axagt40/Vandeta/releases" rel="noopener">Download</a>
           <a class="btn btn-ghost" href="docs.html">Read the docs</a>
         </div>
-        <p class="hero-note">vandeta 1.3 &middot; 4,875,664 bytes &middot; sha256 230cd94b&hellip;f4ba8a &middot; AGPL-3.0</p>
+        <p class="hero-note" id="release-note" data-release-note>
+          vandeta 1.4 pre &middot; AGPL-3.0
+        </p>
       </div>
 
       <aside class="device-card" aria-label="Hardware">
         <h2>The target</h2>
         <dl style="margin:0">
-          <div class="spec"><dt>Board</dt><dd>LilyGo T-Embed CC1101</dd></div>
+          <div class="spec"><dt>Board</dt><dd>LilyGo T-Embed CC1101 Plus</dd></div>
           <div class="spec"><dt>MCU</dt><dd>ESP32-S3</dd></div>
           <div class="spec"><dt>Memory</dt><dd>16 MB flash / 8 MB PSRAM</dd></div>
           <div class="spec"><dt>Display</dt><dd>320 &times; 170, encoder</dd></div>
@@ -58,115 +60,58 @@
         </dl>
       </aside>
     </div>
-  </section>
 
-  <div class="wrap">
-    <div class="stats">
-      <div class="stat"><b>4 radios</b><span>sub-GHz, 2.4 GHz, WiFi, BLE</span></div>
-      <div class="stat"><b>2,858 IR codes</b><span>TV, AC, fans, audio, projectors, LEDs</span></div>
-      <div class="stat"><b>USB control</b><span>menus and radios from a PC</span></div>
-      <div class="stat"><b>AGPL-3.0</b><span>upstream credit kept</span></div>
+    <div class="wrap">
+      <div class="hero-shot">[SCREENSHOT: main menu on the T-Embed]</div>
     </div>
-  </div>
+  </section>
 
   <section class="section">
     <div class="wrap">
       <div class="section-head">
-        <h2>What is on top of Bruce</h2>
+        <h2>Four things it does that stock Bruce does not</h2>
         <p>
-          Bruce's menus, apps, radios and script ecosystem are unchanged and
-          still there. This is the extra layer; every menu and every row the
-          image ships is listed in the <a href="docs.html#features">docs</a>.
+          The rest of the feature list lives in the
+          <a href="https://github.com/Axagt40/Vandeta#readme" rel="noopener">README</a>.
         </p>
       </div>
 
       <div class="cards">
         <article class="card">
-          <span class="card-tag">Developer Options</span>
-          <h3>A USB console over the same cable</h3>
+          <span class="card-tag">Radios</span>
+          <h3>Four radios, all working</h3>
           <p>
-            <code>ui</code>, <code>move</code>, <code>press</code> drive the
-            menus and print the screen you land on; <code>file</code>,
-            <code>errors</code>, <code>mem</code>, <code>proc</code> and
-            <code>livepatch</code> cover the rest. One switch arms it.
-          </p>
-        </article>
-        <article class="card">
-          <span class="card-tag">Sub-GHz</span>
-          <h3>CC1101 that shares the display's SPI bus</h3>
-          <p>
-            A Flipper-style Frequency Analyzer, a wardriver that records whole
-            bursts and replays them verbatim, and a <code>subghz</code> console
-            path for headless testing.
-          </p>
-        </article>
-        <article class="card">
-          <span class="card-tag">nRF24</span>
-          <h3>Pseudo-promiscuous 2.4 GHz capture</h3>
-          <p>
-            CRC off, auto-ack off, degenerate addresses on every pipe, channel
-            hops and RGB-remote presets &mdash; with capture buffers in PSRAM so
-            WiFi and BLE still fit.
-          </p>
-        </article>
-        <article class="card">
-          <span class="card-tag">Packet Monitor</span>
-          <h3>One dashboard, four taps</h3>
-          <p>
-            WiFi, BLE, nRF24 and sub-GHz feed the same table, with filters,
-            per-radio counters, CSV export and PCAP export of captured frames.
+            CC1101 sub-GHz, nRF24 2.4 GHz, WiFi and BLE &mdash; with the
+            CC1101 serialized against the display on the SPI bus they share,
+            and a Packet Monitor fed by all four.
           </p>
         </article>
         <article class="card">
           <span class="card-tag">Infrared</span>
-          <h3>Universal remote, 2,858 codes</h3>
+          <h3>2,858 IR codes</h3>
           <p>
             The Flipper libraries for TV, AC, fans, audio, projectors and LEDs,
-            twelve brand AC encoders, and hand-written RCA and NEC42.
+            with brand, remote and family sweeps in the IR Suite, plus
+            hand-written RCA and NEC42 encoders.
           </p>
         </article>
         <article class="card">
-          <span class="card-tag">RFID / NFC</span>
-          <h3>Read, write and emulate tags</h3>
+          <span class="card-tag">Developer Options</span>
+          <h3>A USB console over the same cable</h3>
           <p>
-            MIFARE, NTAG and 125 kHz reads, NDEF write and emulate, Amiibolink,
-            Chameleon and PN532 over BLE or UART, plus a <b>Field detector</b>
-            that shows a reader's field before you touch it.
+            <code>ui</code>, <code>move</code> and <code>press</code> drive the
+            menus and print the screen you land on; <code>file</code>,
+            <code>errors</code>, <code>mem</code> and <code>livepatch</code>
+            cover the rest. One switch arms it.
           </p>
         </article>
         <article class="card">
-          <span class="card-tag">BLE</span>
-          <h3>A radar for what is advertising</h3>
+          <span class="card-tag">Fit</span>
+          <h3>Built for this board only</h3>
           <p>
-            A live, RSSI-sorted table with Apple Continuity types decoded and a
-            distance estimate, plus capture &amp; replay and a GATT client.
-          </p>
-        </article>
-        <article class="card">
-          <span class="card-tag">WiFi</span>
-          <h3>MITM that reaches WPA2 clients</h3>
-          <p>
-            ARP spoofing, DNS spoofing and HTTP interception on the encrypted
-            station link, exposed to menus and to scripts.
-          </p>
-        </article>
-        <article class="card">
-          <span class="card-tag">BadUSB</span>
-          <h3>HID that iOS and macOS accept</h3>
-          <p>
-            USB footprint, layouts with import/export, timing, a payload
-            manager, and a BLE keyboard that advertises one complete HID
-            payload.
-          </p>
-        </article>
-        <article class="card">
-          <span class="card-tag">JavaScript</span>
-          <h3>Scripts that reach the radios</h3>
-          <p>
-            <code>arpSpoof</code>, <code>dnsSpoof</code>,
-            <code>httpInterceptor</code>, <code>nrf24</code>,
-            <code>scriptFolder</code> and the rest &mdash; with hot reload from
-            the console.
+            One target, so the encoders, the battery, the 320 &times; 170 layout
+            and the shared SPI bus are tuned rather than guessed. The CC1101 and
+            the nRF24 are not simultaneous.
           </p>
         </article>
       </div>
@@ -184,7 +129,7 @@
           <h3>Download the image</h3>
           <p>
             <code>vandeta.bin</code> plus its <code>.sha256</code> from the
-            latest release. Any OS; the browser flasher needs Chrome or Edge.
+            release you want. Any OS; the browser flasher needs Chrome or Edge.
           </p>
         </li>
         <li>
@@ -258,7 +203,7 @@ livepatch apply hello console.log('hi')</code></pre>
       <div>
         <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span>Vandeta</a>
         <p style="margin-top:0.75rem;max-width:32ch">
-          Custom firmware for the LilyGo T-Embed CC1101, built on Bruce 1.16.1.
+          Custom firmware for the LilyGo T-Embed CC1101 Plus, built on Bruce 1.16.1.
         </p>
       </div>
       <div>

@@ -36,7 +36,8 @@
       <p>
         Install, card layout, the USB console, the feature list, building from
         source and what to do when something does not answer. Written for
-        Vandeta 1.3 on the LilyGo T-Embed CC1101.
+        <strong>Vandeta 1.4 pre</strong> on the LilyGo T-Embed CC1101 Plus.
+        1.4 pre is a pre-release; 1.3 is the newest official release.
       </p>
       <ul style="columns:2;max-width:34rem;margin-top:1.25rem;font-size:0.92rem">
         <li><a href="#install">Installation</a></li>
@@ -45,7 +46,7 @@
         <li><a href="#features">Features</a></li>
         <li><a href="#build">Source</a></li>
         <li><a href="#troubleshoot">Troubleshooting</a></li>
-        <li><a href="#hosting">Hosting this site</a></li>
+        <li><a href="HOSTING.md">Hosting this site</a></li>
         <li><a href="#credits">Credits and licence</a></li>
       </ul>
     </div>
@@ -62,6 +63,13 @@
         </p>
       </div>
 
+      <p class="file-meta">
+        The values below are the <strong>1.3</strong> example. The current build
+        is <strong>1.4 pre</strong>; its size and SHA-256 are on the
+        <a href="https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.4-pre">1.4
+        pre release page</a>.
+      </p>
+
       <div class="table-wrap">
         <table>
           <tbody>
@@ -73,10 +81,11 @@
           </tbody>
         </table>
       </div>      <div class="callout warn">
-        <strong>1.3 is the current release.</strong> The table above describes it
-        &mdash; <code>230cd94b&hellip;f4ba8a</code>, 4,875,664 bytes, written at
-        <code>0x0</code>. It rewrites the partition table (the app partition is
-        now 5 MB), so update from 1.2 with a <strong>full-image</strong> flash,
+        <strong>1.4 pre is the current build; 1.3 is the newest official
+        release.</strong> The values above are the 1.3 example &mdash;
+        <code>230cd94b&hellip;f4ba8a</code>, 4,875,664 bytes, written at
+        <code>0x0</code>. 1.3 rewrote the partition table (the app partition is
+        5 MB), so updating from 1.2 needs a <strong>full-image</strong> flash,
         not an app-only write.
       </div>
 
@@ -503,11 +512,14 @@ esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 115200 \
       </div>
 
       <p>
-        Everything the image is built from is in the repository:
-        <code>src/</code>, <code>boards/</code>, <code>lib/</code>,
-        <code>sd_files/</code> and <code>platformio.ini</code>, built with
-        PlatformIO. Every release is also a single merged image, so a flash can
-        always be checked against the SHA-256 published with it.
+        <code>main</code> is the build tree: <code>src/</code>,
+        <code>boards/</code>, <code>lib/</code>, <code>sd_files/</code> and
+        <code>platformio.ini</code> at the root, this site in
+        <code>site/</code> and the markdown documents in <code>docs/</code>.
+        Built with PlatformIO &mdash; <code>BUILD.md</code> has the versions.
+        The source is published with each release from 1.4 onward, and every
+        release is a single merged image, so a flash can always be checked
+        against the SHA-256 published with it.
       </p>
 
       <div class="callout">
@@ -576,72 +588,11 @@ esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 115200 \
       <div class="section-head">
         <h2>Hosting this site</h2>
         <p>
-          Three free options, and the one constraint that decides between them:
-          browsers only expose Web Serial &mdash; which the flasher needs &mdash;
-          on a <strong>secure origin</strong>. That means <code>https://</code>
-          or <code>http://localhost</code>. A plain
-          <code>http://192.168.x.x</code> page loads fine but its
-          <em>Connect</em> button will not work.
+          Maintainer material: the three ways to serve these files, and the one
+          constraint that decides between them, are in
+          <a href="HOSTING.md">HOSTING.md</a>. Reading the docs does not need it.
         </p>
       </div>
-
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Where</th><th>How</th><th>Flasher works?</th></tr></thead>
-          <tbody>
-            <tr>
-              <td><strong>GitHub Pages</strong></td>
-              <td>Free for public repositories: <em>Settings &rarr; Pages &rarr;
-              Deploy from a branch &rarr; <code>main</code> &rarr;
-              <code>/site</code></em>. The site is then served over HTTPS at
-              <code>axagt40.github.io/Vandeta/</code>.</td>
-              <td>Yes</td>
-            </tr>
-            <tr>
-              <td><strong>This computer</strong></td>
-              <td><code>python3 -m http.server 8000 --directory site</code>, then
-              open <code>http://localhost:8000</code>. No account, no upload,
-              works on a train.</td>
-              <td>Yes &mdash; <code>localhost</code> is a secure origin</td>
-            </tr>
-            <tr>
-              <td><strong>Phone (Termux / proot)</strong></td>
-              <td><code>python3 -m http.server 8000 --directory site</code> in
-              Termux or Debian; other devices open
-              <code>http://&lt;phone-ip&gt;:8000</code>. For HTTPS, run a free
-              tunnel (for example a cloudflared quick tunnel) in front of it.</td>
-              <td>Only through the tunnel &mdash; plain LAN HTTP is not secure</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div class="callout">
-        <strong>The board plugs into the computer, not the phone.</strong> The
-        page may be served from anywhere, but <code>navigator.serial</code> only
-        sees devices attached to the machine running Chrome. Serving this folder
-        from a phone is fine for reading the docs; flashing wants the board on
-        the same computer as the browser.
-      </div>
-
-      <div class="callout warn">
-        <strong>Internet, but no account.</strong> The flasher reads the release
-        list from the GitHub API, pulls the image from the repository and imports
-        the pinned <code>esptool-js</code> 0.7.0 bundle from unpkg. Its two
-        channel buttons follow GitHub's own flags: <strong>Official</strong> is
-        the newest release that is not marked pre-release,
-        <strong>Pre-release</strong> the newest one that is. With no connection
-        it falls back
-        to the copies in <code>site/firmware/</code>, labelled as an offline copy.
-      </div>
-
-      <p class="file-meta">
-        The flasher always installs the newest release of the channel that is
-        selected, so cutting a release needs no site edit. Keep
-        <code>site/firmware/vandeta.bin</code> with its <code>.sha256</code>
-        current anyway: that is what an offline visitor gets, and the page still
-        refuses any image whose hash does not match the release digest.
-      </p>
     </div>
   </section>
 
