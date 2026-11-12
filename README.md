@@ -432,7 +432,7 @@ If you use Vandeta in another project, credit it in your README:
 
 > Based on Vandeta™ by Axagt40 - <https://github.com/Axagt40/Vandeta>
 
-`ATTRIBUTION.md` states this as an additional term under AGPL-3.0 section 7;
+That line is a **request**, not an extra licence condition (`ATTRIBUTION.md`);
 `TRADEMARK.md` covers the name and the crown.
   Both are unchanged from upstream and both apply to this build.
 
