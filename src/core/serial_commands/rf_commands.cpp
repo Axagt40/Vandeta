@@ -519,7 +519,7 @@ uint32_t rfWardriverCallback(cmd *c) {
             }
         }
         serialDevice->println(String("frequency=") + String(bruceConfig.rfWardriverFreq, 2));
-        serialDevice->println(String("dedupe_sec=") + String(bruceConfig.rfWardriverDedupeSec));
+        serialDevice->println(String("dedupe_ms=") + String(bruceConfig.rfWardriverDedupeMs));
         serialDevice->println(String("min_pulses=") + String(bruceConfig.rfWardriverMinPulses));
         serialDevice->println(String("hop=") + (bruceConfig.rfWardriverHop ? "1" : "0"));
         serialDevice->println(String("folder=") + RF_WARDRIVER_DIR);

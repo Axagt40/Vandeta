@@ -5,6 +5,7 @@
 #include "core/packet_view.h"
 #include "core/sound_theme.h"
 #include "core/ui_gradient.h"
+#include "rf_bits_ui.h"
 #include "rf_field_meter.h"
 #include "rf_freq_analyzer.h"
 #include "rf_wardriver.h"
@@ -28,7 +29,7 @@
 
 #define SUITE_TITLE_H 26
 #define SUITE_ROW_TOP 34
-#define SUITE_ROW_H 21
+#define SUITE_ROW_H 18
 
 struct SuiteEntry {
     const char *label;
@@ -41,6 +42,9 @@ static const SuiteEntry SUITE_ENTRIES[] = {
     {"Frequency Analyzer", rf_freq_analyzer},
     {"Field Meter", rf_field_meter},
     {"Packet Monitor", suitePacketMonitor},
+    // Task 2: the encoder front end of `rfbits`. It sits in the suite with the
+    // other sub-GHz tools rather than as a top-level RF row.
+    {"Bit Editor", rfBitsEditor},
 #ifndef LITE_VERSION
     {"Wardriver", rfWardriverMenu},
 #endif
@@ -112,12 +116,10 @@ void rf_suite() {
         const bool down = check(NextPress) | check(DownPress);
         if (up) {
             sel = (sel + SUITE_COUNT - 1) % SUITE_COUNT;
-            soundPlay(CUE_NAV_TICK);
             suiteDraw(sel);
             suiteEndPress();
         } else if (down) {
             sel = (sel + 1) % SUITE_COUNT;
-            soundPlay(CUE_NAV_TICK);
             suiteDraw(sel);
             suiteEndPress();
         } else if (check(SelPress)) {
@@ -125,7 +127,6 @@ void rf_suite() {
                 suiteEndPress();
                 continue;
             }
-            soundPlay(CUE_SELECT);
             SelPress = false;
             if (SUITE_ENTRIES[sel].run == nullptr) break; // "Exit"
             SUITE_ENTRIES[sel].run();
@@ -135,7 +136,6 @@ void rf_suite() {
             suiteDraw(sel);
             suiteEndPress();
         } else if (check(EscPress)) {
-            soundPlay(CUE_BACK);
             break;
         }
         vTaskDelay(pdMS_TO_TICKS(20));

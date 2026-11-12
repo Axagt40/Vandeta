@@ -3,12 +3,17 @@
 #include "core/sd_functions.h"
 #include "crypto_commands.h"
 #include "debug_commands.h"
+#include "devflash_commands.h"
+#include "modem_commands.h"
+#include "rfbits_commands.h"
+#include "watch_commands.h"
 #include "more_atk_commands.h"
 #include "gpio_commands.h"
 #include "interpreter_commands.h"
 #include "ir_commands.h"
 #include "mitm_commands.h"
 #include "nrf_commands.h"
+#include "patch_commands.h"
 #include "power_commands.h"
 #include "rf_commands.h"
 #include "rfid_commands.h"
@@ -16,6 +21,7 @@
 #include "settings_commands.h"
 #include "sound_commands.h"
 #include "storage_commands.h"
+#include "tune_commands.h"
 #include "util_commands.h"
 #include "wifi_commands.h"
 #include <globals.h>
@@ -49,6 +55,12 @@ void SerialCli::setup() {
     createUtilCommands(&_cli);
     createWifiCommands(&_cli);
     createDebugCommands(&_cli); // Developer Options verbs (gated on bruceConfig.usbDebug)
+    createTuneCommands(&_cli);  // Task 1 tunables (gated on Developer Mode)
+    createPatchCommands(&_cli); // Task 1 variant tables (same gate)
+    createDevFlashCommands(&_cli); // Task 1 app-only OTA upload (same gate)
+    createRfBitsCommands(&_cli);   // Task 2 bit editor + de Bruijn forcer
+    createWatchCommands(&_cli);    // Task 3/5 blue-team dashboard + fingerprints
+    createModemCommands(&_cli);    // Task 4 audio FSK modem
 
 #ifdef USB_as_HID
     createBadUsbCommands(&_cli);

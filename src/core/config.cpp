@@ -1,4 +1,7 @@
+#include "core/dev/iram_patch.h"
 #include "config.h"
+#include "core/sound_theme.h" // SOUND_THEME_COUNT for the theme clamp
+#include "core/dev/tunables.h"        // task 1 tunables, stored under "tuning"
 #include "core/settings.h"            // applyBatterySaver/applyChargeLimit on change
 #include "core/usb_debug/usbdebug.h" // applyEnabled/releaseResources on toggle
 #include "mifare_keys_manager.h"
@@ -76,6 +79,7 @@ JsonDocument BruceConfig::toJson() const {
     setting["usbDebugBinary"] = usbDebugBinary;
     setting["batterySaver"] = batterySaver;
     setting["chargeLimit"] = chargeLimit;
+    setting["backHoldAction"] = backHoldAction;
     setting["uiGradient"] = uiGradient;
     setting["colorInverted"] = colorInverted;
 
@@ -94,9 +98,20 @@ JsonDocument BruceConfig::toJson() const {
     setting["badUSBBLECustomLayoutFile"] = badUSBBLECustomLayoutFile;
     setting["badUSBBLEApplePatch"] = badUSBBLEApplePatch;
     setting["rfWardriverFreq"] = rfWardriverFreq;
-    setting["rfWardriverDedupeSec"] = rfWardriverDedupeSec;
+    setting["rfWardriverDedupeMs"] = rfWardriverDedupeMs;
     setting["rfWardriverMinPulses"] = rfWardriverMinPulses;
     setting["rfWardriverHop"] = rfWardriverHop;
+
+    // Developer tunables (task 1, phase 1). One object, fed by one table. Entries
+    // flagged TUNE_BACKED are already written above under their own keys - a
+    // second copy of one value is exactly how two settings for one thing appear,
+    // so they are skipped here.
+    JsonObject tuning = setting["tuning"].to<JsonObject>();
+    for (int i = 0; i < tuneCount(); i++) {
+        const tune_entry *e = tuneAt(i);
+        if (e == nullptr || (e->flags & TUNE_BACKED)) continue;
+        tuning[e->name] = tuneGet(e);
+    }
 
     JsonArray dm = setting["disabledMenus"].to<JsonArray>();
     for (int i = 0; i < disabledMenus.size(); i++) { dm.add(disabledMenus[i]); }
@@ -445,6 +460,7 @@ void BruceConfig::fromFile(bool checkFS) {
     // so they are not failures - keep the defaults instead of logging/counting.
     if (!setting["batterySaver"].isNull()) { batterySaver = setting["batterySaver"].as<int>(); }
     if (!setting["chargeLimit"].isNull()) { chargeLimit = setting["chargeLimit"].as<int>(); }
+    if (!setting["backHoldAction"].isNull()) { backHoldAction = setting["backHoldAction"].as<int>(); }
     if (!setting["uiGradient"].isNull()) { uiGradient = setting["uiGradient"].as<int>() != 0; }
     if (!setting["colorInverted"].isNull()) {
         colorInverted = setting["colorInverted"].as<int>();
@@ -535,8 +551,16 @@ void BruceConfig::fromFile(bool checkFS) {
     } else {
         count++;
     }
-    if (!setting["rfWardriverDedupeSec"].isNull()) {
-        rfWardriverDedupeSec = (uint16_t)setting["rfWardriverDedupeSec"].as<int>();
+    if (!setting["rfWardriverDedupeMs"].isNull()) {
+        rfWardriverDedupeMs = setting["rfWardriverDedupeMs"].as<uint32_t>();
+        if (rfWardriverDedupeMs > 600000) rfWardriverDedupeMs = 600000;
+    } else if (!setting["rfWardriverDedupeSec"].isNull()) {
+        // The old key was whole seconds. Migrated once here so a config written
+        // before the move keeps its window, and there is never a seconds key and
+        // a milliseconds key describing the same setting at the same time.
+        uint32_t seconds = setting["rfWardriverDedupeSec"].as<uint32_t>();
+        if (seconds > 600) seconds = 600;
+        rfWardriverDedupeMs = seconds * 1000u;
     } else {
         count++;
     }
@@ -549,6 +573,29 @@ void BruceConfig::fromFile(bool checkFS) {
         rfWardriverHop = setting["rfWardriverHop"].as<bool>();
     } else {
         count++;
+    }
+
+    // Developer tunables (task 1): validate the whole set and fall back to the
+    // per-entry default on a bad value, so a truncated or hand-edited config
+    // cannot break boot. A config written before this object existed simply
+    // keeps the defaults.
+    if (!setting["tuning"].isNull()) {
+        JsonObject tuning = setting["tuning"].as<JsonObject>();
+        for (int i = 0; i < tuneCount(); i++) {
+            tune_entry *e = (tune_entry *)tuneAt(i);
+            if (e == nullptr || (e->flags & TUNE_BACKED)) continue;
+            JsonVariant v = tuning[e->name];
+            if (v.isNull() || !v.is<int>()) {
+                tuneReset(e);
+                continue;
+            }
+            int32_t value = v.as<int>();
+            if (value < e->min || value > e->max) {
+                tuneReset(e); // out of range: default, never a silent clamp here
+                continue;
+            }
+            tuneSet(e, value, nullptr);
+        }
     }
 
     if (!setting["disabledMenus"].isNull()) {
@@ -738,8 +785,10 @@ void BruceConfig::validateSoundVolumeValue() {
 }
 
 void BruceConfig::validateSoundThemeValue() {
-    // Unknown value -> CLASSIC, the behaviour that predates the key.
-    if (soundTheme < 0 || soundTheme >= 3) soundTheme = 1;
+    // Unknown value -> CLASSIC, the behaviour that predates the key. The top
+    // bound is SOUND_THEME_COUNT: leaving it at 3 silently folded the new
+    // MOMENTUM theme back to CLASSIC every time it was picked.
+    if (soundTheme < 0 || soundTheme >= SOUND_THEME_COUNT) soundTheme = 1;
 }
 
 void BruceConfig::setWifiAtStartup(int value) {
@@ -977,6 +1026,13 @@ void BruceConfig::setUsbDebug(int value) {
     // resource the mode allocated, so the device does not carry debug overhead
     // until the next reboot.
     UsbDebug::applyEnabled(usbDebug != 0);
+    // Task 1, phase 3: the overlay is allocated exactly while Developer Mode is
+    // on. One choke point, so the console verb, `settings usbDebug` and the UI
+    // toggle cannot disagree. Turning it off reverts first, then frees.
+    if (usbDebug)
+        vndPatchInit();
+    else
+        vndPatchShutdown();
 }
 
 void BruceConfig::validateUsbDebugValue() {
@@ -1032,6 +1088,17 @@ void BruceConfig::setChargeLimit(int value) {
 void BruceConfig::validateChargeLimitValue() {
     if (chargeLimit < 0) chargeLimit = 0;
     if (chargeLimit > 3) chargeLimit = 3;
+}
+
+void BruceConfig::setBackHoldAction(int value) {
+    backHoldAction = value;
+    validateBackHoldActionValue();
+    saveFile();
+}
+
+void BruceConfig::validateBackHoldActionValue() {
+    if (backHoldAction > 1) backHoldAction = 1;
+    if (backHoldAction < 0) backHoldAction = 0;
 }
 
 void BruceConfig::setColorInverted(int value) {
@@ -1144,9 +1211,9 @@ void BruceConfig::setWardriverFreq(float value) {
     saveFile();
 }
 
-void BruceConfig::setWardriverDedupeSec(uint16_t value) {
-    if (value > 600) value = 600;
-    rfWardriverDedupeSec = value;
+void BruceConfig::setWardriverDedupeMs(uint32_t value) {
+    if (value > 600000) value = 600000;
+    rfWardriverDedupeMs = value;
     saveFile();
 }
 

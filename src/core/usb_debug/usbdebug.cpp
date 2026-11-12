@@ -1,8 +1,10 @@
 #include "usbdebug.h"
+#include "core/dev/build_info.h"
 
 #include "core/sd_functions.h"
 #include "core/serial_commands/debug_commands.h" // debugPollUiWatch()
 #include "core/settings.h"                    // batterySaverClock()
+#include "core/dev/devflash.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -55,6 +57,10 @@ enum : uint8_t {
     FR_SET_MODE = 0x09, // 0 = text, 1 = binary
     FR_EXEC_BATCH = 0x0A,
     FR_INFO = 0x0B,
+    // Phase 4: app-only OTA upload.
+    FR_OTA_BEGIN = 0x0C,
+    FR_OTA_DATA = 0x0D,
+    FR_OTA_END = 0x0E, // FR_OTA_ABORT = 0x0F
 };
 
 enum : uint8_t {
@@ -67,6 +73,7 @@ enum : uint8_t {
     FR_GET_DONE = 0x89,   // download finished
     FR_MODE_R = 0x8A,     // protocol switch acknowledged
     FR_INFO_R = 0x8B,     // key=value system information
+    FR_OTA_R = 0x8C,      // devflash status line (OK ... / ERR ...)
 };
 
 const char *UsbDebug_verbs = "cd pwd usbdebug batch queue history complete hotreload liveupdate errors log proc sys "
@@ -947,7 +954,7 @@ static void handleFrame(uint8_t type, const uint8_t *payload, size_t len) {
         case FR_PING: sendTextFrame(FR_MSG, "PONG"); break;
 
         case FR_INFO: {
-            String info = "version=" + String(BRUCE_VERSION) + "\n";
+            String info = "version=" + String(vndVersion()) + "\n";
             info += "device=" + String(DEVICE_NAME) + "\n";
             info += "chip=" + String(ESP.getChipModel()) + "\n";
             info += "cpu_mhz=" + String(getCpuFrequencyMhz()) + "\n";
@@ -997,6 +1004,40 @@ static void handleFrame(uint8_t type, const uint8_t *payload, size_t len) {
                 start = nl + 1;
             }
             sendTextFrame(FR_EXEC_OK, "QUEUED " + String(count));
+        } break;
+
+        case FR_OTA_BEGIN: {
+            // payload = size(4 LE) crc32(4 LE) build id(8) flags(1, bit0 = force)
+            if (len < 17) {
+                sendTextFrame(FR_OTA_R, "ERR begin header");
+                break;
+            }
+            String msg;
+            DevFlash::begin(get32(payload), get32(payload + 4), payload + 8, (payload[16] & 1) != 0, msg);
+            sendTextFrame(FR_OTA_R, msg);
+        } break;
+
+        case FR_OTA_DATA: {
+            // payload = offset(4 LE) + bytes
+            if (len < 5) {
+                sendTextFrame(FR_OTA_R, "ERR data header");
+                break;
+            }
+            String msg;
+            DevFlash::writeChunk(get32(payload), payload + 4, len - 4, msg);
+            sendTextFrame(FR_OTA_R, msg);
+        } break;
+
+        case FR_OTA_END: {
+            String msg;
+            DevFlash::end(msg);
+            sendTextFrame(FR_OTA_R, msg);
+        } break;
+
+        case 0x0F: { // FR_OTA_ABORT
+            String msg;
+            DevFlash::abort(msg);
+            sendTextFrame(FR_OTA_R, msg);
         } break;
 
         case FR_SET_MODE: {

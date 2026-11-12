@@ -57,6 +57,8 @@ static void mitmPrintStatus(const char *verb) {
         " queries=" + String(netspoof_dns_queries()) + " answers=" + String(netspoof_dns_answers()) +
         " requests=" + String(netspoof_http_requests()) + " redirected=" + String(netspoof_http_redirected()) +
         " injected=" + String(netspoof_http_injected()) + " https=" + String(netspoof_https_requests()) +
+        " quicDropped=" + String(netspoof_quic_dropped()) + " dotDropped=" + String(netspoof_dot_dropped()) +
+        " svcbSuppressed=" + String(netspoof_svcb_suppressed()) + " ipv6Dropped=" + String(netspoof_ipv6_dropped()) +
         " httpsRedirected=" + String(netspoof_https_redirected()) + " httpsInjected=" +
         String(netspoof_https_injected()) + " pairs=" + String(netspoof_arp_pair_count()) +
         " frames=" + String(netspoof_arp_frames()) + " hook=" + (netspoof_hook_installed() ? "1" : "0") +
@@ -450,6 +452,8 @@ uint32_t mitmCallback(cmd *c) {
             " target=" + mitmAttackTargetLabel() + " dnsRules=" + String(netspoof_dns_rule_count()) +
             " injectRules=" + String(netspoof_http_inject_count()) +
             " redirectRules=" + String(netspoof_http_redirect_count()) +
+            " quicDropped=" + String(netspoof_quic_dropped()) + " dotDropped=" + String(netspoof_dot_dropped()) +
+            " svcbSuppressed=" + String(netspoof_svcb_suppressed()) + " ipv6Dropped=" + String(netspoof_ipv6_dropped()) +
             " https=" + (netspoof_https_active() ? "1" : "0") + " pairs=" +
             String(netspoof_arp_pair_count()) +
             " station=" + (WiFi.isConnected() ? WiFi.localIP().toString() : String("down"))
@@ -470,7 +474,7 @@ uint32_t mitmCallback(cmd *c) {
             " redirects=" + String(r.redirects) + " dns=" + String(r.dns) + " bad=" + String(r.bad) +
             " fallback=" + (r.fallbackSet ? (r.fallbackDns ? "dns:" : "302:") + r.fallbackValue : String("none")) +
             " fallbacks=" + String(r.fallbackCount) + " info=" + String(r.wantInfo ? 1 : 0) +
-            " probes=" + String(r.probeCount) +
+            " probes=" + String(r.probeCount) + " sweep=" + String(r.sweep ? r.sweepDwellMs : 0) +
             " target=" + (r.target.length() ? r.target : String("menu")) + " error=" +
             (r.error.length() ? r.error : "-")
         );

@@ -1,4 +1,5 @@
 #include "util_commands.h"
+#include "core/dev/build_info.h"
 #include "core/configPins.h" // getMacAddress()
 #include "core/display.h" // activeMenuOptions()
 #include "core/main_menu.h"
@@ -118,8 +119,8 @@ uint32_t freeCallback(cmd *c) {
 }
 
 uint32_t infoCallback(cmd *c) {
-    serialDevice->println(BRUCE_VERSION);
-    serialDevice->println(GIT_COMMIT_HASH);
+    serialDevice->println(vndVersion());
+    serialDevice->println("build: " + String(vndBuildId()));
     serialDevice->print("SDK: ");
     serialDevice->println(ESP.getSdkVersion());
     // The factory MAC is readable with the radio off; WiFi.macAddress() is all
@@ -134,9 +135,13 @@ uint32_t infoCallback(cmd *c) {
     // Crystal is 40MHz
     // MAC: AA:BB:CC:DD:EE:FF
 
-    if (wifiConnected) {
+    if (wifiConnected && wifiIP.length() > 0) {
         serialDevice->println("Wifi: connected");
         serialDevice->println("Ip: " + wifiIP); // read global var
+    } else if (wifiConnected) {
+        // AP-mode station state can outlive the AP (right after ucmitm), and a
+        // connection with no address is not a connection. Never claim one.
+        serialDevice->println("Wifi: no IP (not connected)");
     } else {
         serialDevice->println("Wifi: not connected");
     }
@@ -203,7 +208,7 @@ uint32_t helpCallback(cmd *c) {
         if (printCommandHelp(topic)) return true;
         serialDevice->println("help: no detailed help for '" + topic + "' - showing the command list");
     }
-    serialDevice->println(BRUCE_VERSION);
+    serialDevice->println(vndVersion());
     serialDevice->print("These shell commands are defined internally.\n");
 
     serialDevice->println("\nWiFi Commands:");
@@ -291,6 +296,38 @@ uint32_t helpCallback(cmd *c) {
     serialDevice->println("  log show|clear          - Dump or empty the error ring buffer.");
     serialDevice->println("  livepatch apply|reload|list|status - Change the JS layer live, no reflash.");
     serialDevice->println("  liveboot enable|disable|status - Run a script automatically at boot.");
+    if (bruceConfig.usbDebug) {
+        // Task 1: developer-only, so it is not part of a stock `help` at all.
+        // Gated on the switch itself, not the legacy devMode alias.
+        serialDevice->println(
+            "  tune list|get <name>|set <name> <value>|reset [name]|save|load - RAM tunables "
+            "(quote a negative value: \"-95\")."
+        );
+        serialDevice->println(
+            "  patch list|<name> <index> - Select a precompiled variant "
+            "(rf_scan, ir_repeat, nrf_capture)."
+        );
+        serialDevice->println(
+            "  patch apply <slot> <file|hex> [--force] | revert <slot|all> | clear | journal | probe <slot> "
+            "- IRAM A/B code overlay (dev mode only)."
+        );
+        serialDevice->println(
+            "  devflash begin <size> <crc32> [buildid] [--force] | chunk <offset> <hex> | end | abort "
+            "- Upload an app-only image to the inactive OTA slot (dev mode only)."
+        );
+    }
+    serialDevice->println("\nBlue team / bench tools:");
+    serialDevice->println(
+        "  bluewatch [secs]  - deauth flood, evil twin, KARMA, ARP conflict, Remote ID"
+    );
+    serialDevice->println(
+        "  wififp [secs]     - probe-request IE fingerprints across MAC rotation"
+    );
+    serialDevice->println(
+        "  rfbits show|load <file>|set <bits> <te> <MHz>|flip <i>|trim <n>|stretch <pct>|"
+        "shorten <pct>|te <us>|repeat <n>|tx|debruijn <n> [te] [MHz] - bit editor + forcer"
+    );
+    serialDevice->println("  modem send <text> [baud] [ultrasonic] | modem recv <secs> - audio FSK modem");
     serialDevice->println("  help <command>          - Usage for one command (e.g. help file).");
 
     serialDevice->println("\nSettings:");

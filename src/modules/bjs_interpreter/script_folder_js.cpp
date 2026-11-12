@@ -1,5 +1,6 @@
 #if !defined(LITE_VERSION) && !defined(DISABLE_INTERPRETER)
 #include "script_folder_js.h"
+#include "core/dev/build_info.h"
 
 #include "globals_js.h"
 #include "helpers_js.h"
@@ -290,7 +291,7 @@ static void sf_setup_globals(JSContext *ctx, SfEntry &e) {
     if (slash > 0) dir = dir.substring(0, slash);
     JS_SetPropertyStr(ctx, *global, "__dirpath", JS_NewString(ctx, dir.c_str()));
     JS_SetPropertyStr(ctx, *global, "__script", JS_NewString(ctx, e.name.c_str()));
-    JS_SetPropertyStr(ctx, *global, "BRUCE_VERSION", JS_NewString(ctx, BRUCE_VERSION));
+    JS_SetPropertyStr(ctx, *global, "BRUCE_VERSION", JS_NewString(ctx, vndVersion()));
     JS_SetPropertyStr(ctx, *global, "BRUCE_PRICOLOR", JS_NewInt32(ctx, bruceConfig.priColor));
     JS_SetPropertyStr(ctx, *global, "BRUCE_SECCOLOR", JS_NewInt32(ctx, bruceConfig.secColor));
     JS_SetPropertyStr(ctx, *global, "BRUCE_BGCOLOR", JS_NewInt32(ctx, bruceConfig.bgColor));

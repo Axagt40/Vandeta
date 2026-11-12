@@ -1,5 +1,7 @@
+#include "core/dev/iram_patch.h"
 #include "custom_ir.h"
 #include "TV-B-Gone.h" // for checkIrTxPin()
+#include "core/dev/tunables.h" // task 1: ir.repeat_variant
 #include "core/display.h"
 #include "core/mykeyboard.h"
 #include "core/sd_functions.h"
@@ -8,10 +10,67 @@
 #include "core/type_convertion.h"
 #include "ir_utils.h"
 #include <IRutils.h>
+#include <functional>
 
 uint32_t swap32(uint32_t value) {
     return ((value & 0x000000FF) << 24) | ((value & 0x0000FF00) << 8) | ((value & 0x00FF0000) >> 8) |
            ((value & 0xFF000000) >> 24);
+}
+
+// Task 1, phase 2: the IR repeat variant table (`ir.repeat_variant`).
+//
+// The repeat path used to be "send the same frame irTxRepeats more times". That
+// stays the default (`fixed`, index 0). The other two are precompiled shapes of
+// the same frames, selected by index, and apply to the next send with no
+// rebuild:
+//
+//   fixed        - irTxRepeats extra identical frames, one send call each.
+//   adaptive_len - the count scales with the payload, so a short frame (RC5, 13
+//                  bits) repeats more often and a long one (Kaseikyo, 48 bits)
+//                  less: ceil(irTxRepeats * 32 / nbits), capped at 32. A remote
+//                  that needs roughly constant airtime still gets enough.
+//   burst        - the same count handed to the library's native repeat argument
+//                  in ONE call, i.e. a compact repeat train instead of N frames.
+//                  A raw buffer has no protocol repeat form, so burst sends the
+//                  same frames as fixed there.
+static int irRepeatMode() {
+    int m = (int)tuneGetByName("ir.repeat_variant", nullptr);
+    return (m < 0 || m > 2) ? 0 : m;
+}
+
+static bool irRepeatIsBurst() { return irRepeatMode() == 2; }
+
+// Task 1, phase 3: patchable slot ir_transmit_button. This is the repeat-count
+// decision every transmitted button goes through (phase 2's whole IR surface),
+// kept as the spec's function name in the slot table.
+__attribute__((noinline)) static uint16_t irRepeatCount(uint16_t nbits) {
+    return ((uint16_t (*)(uint16_t))vndPatchTarget(VND_SLOT_IR_TRANSMIT_BUTTON))(nbits);
+}
+
+__attribute__((noinline, used)) uint16_t ir_transmit_button_body(uint16_t nbits) {
+    const uint16_t base = bruceConfigPins.irTxRepeats;
+    if (base == 0) return 0;
+    if (irRepeatMode() != 1) return base;
+    if (nbits == 0) nbits = 32;
+    uint32_t reps = ((uint32_t)base * 32 + nbits - 1) / nbits;
+    if (reps > 32) reps = 32;
+    return (uint16_t)reps;
+}
+
+// Sends the repeat train. `sendFrame(repeatArg)` sends one frame; repeatArg is 0
+// for a plain frame and the count for the library's native repeat form.
+static void irRepeatTrain(uint16_t reps, const std::function<void(uint16_t)> &sendFrame) {
+    if (reps == 0) return;
+    if (irRepeatIsBurst()) {
+        sendFrame(reps);
+        return;
+    }
+    for (uint16_t i = 0; i < reps; i++) sendFrame(0);
+}
+
+static String irRepeatText(uint16_t reps) {
+    if (reps == 0) return "";
+    return String(" (1 initial + ") + String(reps) + (irRepeatIsBurst() ? " burst repeats)" : " repeats)");
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -329,15 +388,10 @@ void sendNECCommand(String address, String command, bool hideDefaultUI) {
     uint64_t data = irsend.encodeNEC(addressValue, commandValue);
     irsend.sendNEC(data, 32);
 
-    if (bruceConfigPins.irTxRepeats > 0) {
-        for (uint8_t i = 1; i <= bruceConfigPins.irTxRepeats; i++) { irsend.sendNEC(data, 32); }
-    }
+    const uint16_t reps = irRepeatCount(32);
+    irRepeatTrain(reps, [&](uint16_t r) { irsend.sendNEC(data, 32, r); });
 
-    Serial.println(
-        "Sent NEC Command" + (bruceConfigPins.irTxRepeats > 0
-                                  ? " (1 initial + " + String(bruceConfigPins.irTxRepeats) + " repeats)"
-                                  : "")
-    );
+    Serial.println("Sent NEC Command" + irRepeatText(reps));
 
     digitalWrite(bruceConfigPins.irTx, LED_OFF);
 }
@@ -369,15 +423,10 @@ void sendNECextCommand(String address, String command, bool hideDefaultUI) {
     uint32_t data = ((uint32_t)lsbAddress << 16) | lsbCommand;
     irsend.sendNEC(data, 32); // Sends MSB first
 
-    if (bruceConfigPins.irTxRepeats > 0) {
-        for (uint8_t i = 1; i <= bruceConfigPins.irTxRepeats; i++) { irsend.sendNEC(data, 32); }
-    }
+    const uint16_t reps = irRepeatCount(32);
+    irRepeatTrain(reps, [&](uint16_t r) { irsend.sendNEC(data, 32, r); });
 
-    Serial.println(
-        "Sent NECext Command" + (bruceConfigPins.irTxRepeats > 0
-                                     ? " (1 initial + " + String(bruceConfigPins.irTxRepeats) + " repeats)"
-                                     : "")
-    );
+    Serial.println("Sent NECext Command" + irRepeatText(reps));
     digitalWrite(bruceConfigPins.irTx, LED_OFF);
 }
 
@@ -390,14 +439,9 @@ void sendRC5Command(String address, String command, bool hideDefaultUI) {
     uint16_t data = irsend.encodeRC5(addressValue, commandValue);
     irsend.sendRC5(data, 13);
 
-    if (bruceConfigPins.irTxRepeats > 0) {
-        for (uint8_t i = 1; i <= bruceConfigPins.irTxRepeats; i++) { irsend.sendRC5(data, 13); }
-    }
-    Serial.println(
-        "Sent RC5 Command" + (bruceConfigPins.irTxRepeats > 0
-                                  ? " (1 initial + " + String(bruceConfigPins.irTxRepeats) + " repeats)"
-                                  : "")
-    );
+    const uint16_t reps = irRepeatCount(13);
+    irRepeatTrain(reps, [&](uint16_t r) { irsend.sendRC5(data, 13, r); });
+    Serial.println("Sent RC5 Command" + irRepeatText(reps));
     digitalWrite(bruceConfigPins.irTx, LED_OFF);
 }
 
@@ -413,15 +457,10 @@ void sendRC6Command(String address, String command, bool hideDefaultUI) {
 
     irsend.sendRC6(data, 20);
 
-    if (bruceConfigPins.irTxRepeats > 0) {
-        for (uint8_t i = 1; i <= bruceConfigPins.irTxRepeats; i++) { irsend.sendRC6(data, 20); }
-    }
+    const uint16_t reps = irRepeatCount(20);
+    irRepeatTrain(reps, [&](uint16_t r) { irsend.sendRC6(data, 20, r); });
 
-    Serial.println(
-        "Sent RC6 Command" + (bruceConfigPins.irTxRepeats > 0
-                                  ? " (1 initial + " + String(bruceConfigPins.irTxRepeats) + " repeats)"
-                                  : "")
-    );
+    Serial.println("Sent RC6 Command" + irRepeatText(reps));
     digitalWrite(bruceConfigPins.irTx, LED_OFF);
 }
 
@@ -435,15 +474,10 @@ void sendSamsungCommand(String address, String command, bool hideDefaultUI) {
 
     irsend.sendSAMSUNG(data, 32);
 
-    if (bruceConfigPins.irTxRepeats > 0) {
-        for (uint8_t i = 1; i <= bruceConfigPins.irTxRepeats; i++) { irsend.sendSAMSUNG(data, 32); }
-    }
+    const uint16_t reps = irRepeatCount(32);
+    irRepeatTrain(reps, [&](uint16_t r) { irsend.sendSAMSUNG(data, 32, r); });
 
-    Serial.println(
-        "Sent Samsung Command" + (bruceConfigPins.irTxRepeats > 0
-                                      ? " (1 initial + " + String(bruceConfigPins.irTxRepeats) + " repeats)"
-                                      : "")
-    );
+    Serial.println("Sent Samsung Command" + irRepeatText(reps));
     digitalWrite(bruceConfigPins.irTx, LED_OFF);
 }
 
@@ -483,15 +517,10 @@ void sendSonyCommand(String address, String command, uint8_t nbits, bool hideDef
     // 1 initial + 2 repeat
     irsend.sendSony(data, nbits, 2); // Sends MSB First
 
-    if (bruceConfigPins.irTxRepeats > 0) {
-        for (uint8_t i = 1; i <= bruceConfigPins.irTxRepeats; i++) { irsend.sendSony(data, nbits, 2); }
-    }
+    const uint16_t reps = irRepeatCount(nbits);
+    irRepeatTrain(reps, [&](uint16_t r) { irsend.sendSony(data, nbits, 2 + r); });
 
-    Serial.println(
-        "Sent Sony Command" + (bruceConfigPins.irTxRepeats > 0
-                                   ? " (1 initial + " + String(bruceConfigPins.irTxRepeats) + " repeats)"
-                                   : "")
-    );
+    Serial.println("Sent Sony Command" + irRepeatText(reps));
     digitalWrite(bruceConfigPins.irTx, LED_OFF);
 }
 
@@ -537,15 +566,10 @@ void sendKaseikyoCommand(String address, String command, bool hideDefaultUI) {
 
     irsend.sendPanasonic64(msb_data, 48); // Sends MSB First
 
-    if (bruceConfigPins.irTxRepeats > 0) {
-        for (uint8_t i = 1; i <= bruceConfigPins.irTxRepeats; i++) { irsend.sendPanasonic64(msb_data, 48); }
-    }
+    const uint16_t reps = irRepeatCount(48);
+    irRepeatTrain(reps, [&](uint16_t r) { irsend.sendPanasonic64(msb_data, 48, r); });
 
-    Serial.println(
-        "Sent Kaseikyo Command" + (bruceConfigPins.irTxRepeats > 0
-                                       ? " (1 initial + " + String(bruceConfigPins.irTxRepeats) + " repeats)"
-                                       : "")
-    );
+    Serial.println("Sent Kaseikyo Command" + irRepeatText(reps));
     digitalWrite(bruceConfigPins.irTx, LED_OFF);
 }
 
@@ -558,6 +582,8 @@ bool sendDecodedCommand(String protocol, String value, uint8_t bits, bool hideDe
     IRsend irsend(bruceConfigPins.irTx); // Set the GPIO to be used to sending the message.
     irsend.begin();
     bool success = false;
+    // Task 1, phase 2: set per branch below, printed once at the end.
+    uint16_t reps = 0;
     if (!hideDefaultUI) { displayTextLine("Sending.."); }
 
     if (hasACState(type)) {
@@ -574,11 +600,11 @@ bool sendDecodedCommand(String protocol, String value, uint8_t bits, bool hideDe
         // success = irsend.send(type, state, bits / 8);
         success = irsend.send(type, state, state_pos); // safer
 
-        if (bruceConfigPins.irTxRepeats > 0) {
-            for (uint8_t i = 1; i <= bruceConfigPins.irTxRepeats; i++) {
-                irsend.send(type, state, state_pos);
-            }
-        }
+        // An AC state is its whole frame: its bit count is what scales. This
+        // library's state overload takes no repeat argument, so burst sends the
+        // same frames as fixed here (like a raw train).
+        reps = irRepeatCount((uint16_t)(state_pos * 8));
+        for (uint16_t i = 0; i < reps; i++) { irsend.send(type, state, state_pos); }
 
     } else {
         value.replace(" ", "");
@@ -588,17 +614,12 @@ bool sendDecodedCommand(String protocol, String value, uint8_t bits, bool hideDe
             irsend.send(type, value_int, bits); // bool send(const decode_type_t type, const uint64_t data,
                                                 // const uint16_t nbits, const uint16_t repeat = kNoRepeat);
 
-        if (bruceConfigPins.irTxRepeats > 0) {
-            for (uint8_t i = 1; i <= bruceConfigPins.irTxRepeats; i++) { irsend.send(type, value_int, bits); }
-        }
+        reps = irRepeatCount(bits);
+        irRepeatTrain(reps, [&](uint16_t r) { irsend.send(type, value_int, bits, r); });
     }
 
     delay(20);
-    Serial.println(
-        "Sent Decoded Command" + (bruceConfigPins.irTxRepeats > 0
-                                      ? " (1 initial + " + String(bruceConfigPins.irTxRepeats) + " repeats)"
-                                      : "")
-    );
+    Serial.println("Sent Decoded Command" + irRepeatText(reps));
     digitalWrite(bruceConfigPins.irTx, LED_OFF);
     return success;
 #else
@@ -658,19 +679,14 @@ void sendRawCommand(uint16_t frequency, String rawData, bool hideDefaultUI) {
     // Send raw command
     irsend.sendRaw(dataBuffer, (uint16_t)count, frequency);
 
-    if (bruceConfigPins.irTxRepeats > 0) {
-        for (uint8_t i = 1; i <= bruceConfigPins.irTxRepeats; i++) {
-            irsend.sendRaw(dataBuffer, (uint16_t)count, frequency);
-        }
-    }
+    // One pulse pair is roughly one bit, so a raw train gets a bit count too.
+    // sendRaw has no native repeat form: burst keeps the same frames as fixed.
+    const uint16_t reps = irRepeatCount((uint16_t)(count / 2));
+    for (uint16_t i = 0; i < reps; i++) { irsend.sendRaw(dataBuffer, (uint16_t)count, frequency); }
 
     free(dataBuffer);
 
-    Serial.println(
-        "Sent Raw Command" + (bruceConfigPins.irTxRepeats > 0
-                                  ? " (1 initial + " + String(bruceConfigPins.irTxRepeats) + " repeats)"
-                                  : "")
-    );
+    Serial.println("Sent Raw Command" + irRepeatText(reps));
     digitalWrite(bruceConfigPins.irTx, LED_OFF);
 }
 

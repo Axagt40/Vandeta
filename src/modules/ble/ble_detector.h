@@ -20,7 +20,17 @@
 //
 // This is a receive-only scanner: it never connects and never writes.
 
-/// Open the live detector screen. Returns when the user backs out.
+/// Open the live radar table (no class filter: everything in range).
 void bleDetectorRun();
+
+/**
+ * @brief BLE Detector menu (Bluetooth > BLE Detector): pick the device class
+ * the table should show.
+ *
+ * Rows: Everything, Trackers & tags, Phones & audio, Apple, Drones, Beacons,
+ * and Back. The classes all drive the same scan engine (the class only filters
+ * rows), so switching never restarts the radio.
+ */
+void vandetaRadarMenu();
 
 #endif

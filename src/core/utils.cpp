@@ -1,4 +1,5 @@
 #include "utils.h"
+#include "core/dev/build_info.h"
 #include "core/configPins.h"     // getMacAddress()
 #include "core/wifi/wifi_common.h" //to return MAC addr
 #include "scrollableTextArea.h"
@@ -161,7 +162,7 @@ void updateTimeStr(struct tm timeInfo) {
 void showDeviceInfo() {
     ScrollableTextArea area = ScrollableTextArea("DEVICE INFO");
 
-    area.addLine("Bruce Version: " + String(BRUCE_VERSION));
+    area.addLine("Bruce Version: " + String(vndVersion()));
     area.addLine("EEPROM size: " + String(EEPROMSIZE));
     area.addLine("");
     area.addLine("[MEMORY]");

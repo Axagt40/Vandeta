@@ -23,6 +23,7 @@ private:
     void powerMenu(void);
     void pinsMenu(void);
     void usbDebugMenu(void);
+    void tunablesMenu(void); // task 1 tunables, encoder mirror of `tune list`
 
     // Helper methods for complex operations
     void switchToUSBSerial(void);

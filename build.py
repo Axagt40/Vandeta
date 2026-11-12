@@ -124,6 +124,30 @@ def _merge_bins_callback(target, source, env):
         except FileNotFoundError:
             size = 0
         print(f"[merge_bin] Success -> {out_bin} ({size} bytes)")
+        # Phase 4: the ELF and map ship beside the image, and the app-only
+        # image (what `devflash` sends, offset 0x10000) is always written.
+        for ext in (".elf", ".map"):
+            src = build_dir / f"firmware{ext}"
+            if src.exists():
+                dst = proj_dir / f"vandeta-{pioenv}{ext}"
+                try:
+                    shutil.copyfile(src, dst)
+                    print(f"[merge_bin] Debug file -> {dst}")
+                except OSError as e:
+                    print(f"[merge_bin] Warning: could not write {dst}: {e}")
+        app_out = proj_dir / f"vandeta-app-{pioenv}.bin"
+        try:
+            shutil.copyfile(app_bin, app_out)
+            print(
+                f"[merge_bin] App-only image -> {app_out} "
+                f"({app_out.stat().st_size} bytes, flash at 0x{APP_OFFSET:X})"
+            )
+        except OSError as e:
+            print(f"[merge_bin] Warning: could not write {app_out}: {e}")
+        try:
+            print(f"[merge_bin] build id -> {(proj_dir / 'vnd_build_id.txt').read_text().strip()}")
+        except OSError:
+            pass
         # Only the shipping environment owns the release name. A fast/dev build
         # (no LTO, larger image) used to overwrite vandeta.bin, so the next
         # release could quietly ship the bench build. Dev images keep their
@@ -145,6 +169,18 @@ def _merge_bins_callback(target, source, env):
                 )
                 env.Exit(1)
 
+def _dev_image_callback(target, source, env):
+    """`pio run -t dev`: the app-only image is already written by the merge
+    callback; this target only exists so the fast path has a name."""
+    app_out = proj_dir / f"vandeta-app-{pioenv}.bin"
+    if app_out.exists():
+        print(f"[dev] {app_out} ({app_out.stat().st_size} bytes) -> flash at 0x{APP_OFFSET:X}")
+        print(f"[dev] push it with: python3 tools/devflash.py --image {app_out}")
+    else:
+        print("[dev] app image missing: run a normal build first")
+        env.Exit(1)
+
+
 # Automatically run after firmware.bin is generated
 senv.AddPostAction(str(app_bin), _merge_bins_callback)
 
@@ -156,6 +192,14 @@ senv.AddCustomTarget(
     actions=[_merge_bins_callback],
     title="Build Firmware (merge)",
     description="Merge bootloader + partitions + app into a single .bin file"
+)
+
+senv.AddCustomTarget(
+    name="dev",
+    dependencies=[str(app_bin)],
+    actions=[_dev_image_callback],
+    title="Dev Image (app-only)",
+    description="Build the app and write vandeta-app-<env>.bin for devflash (offset 0x10000)"
 )
 
 # Keep your upload-nobuild helper

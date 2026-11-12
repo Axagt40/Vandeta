@@ -1,4 +1,5 @@
 #include "display.h"
+#include "core/dev/build_info.h"
 #include "core/wifi/webInterface.h" // for server
 #include "core/wifi/wg.h"           //for isConnectedWireguard to print wireguard lock
 #include "mykeyboard.h"
@@ -767,7 +768,6 @@ int loopOptionsImpl(
         if (EscPress && PrevPress) EscPress = false;
 #endif
         if (menuType != MENU_TYPE_MAIN && check(EscPress)) {
-            soundPlay(CUE_BACK);
             index = -1;
             break;
         }
@@ -795,7 +795,6 @@ int loopOptionsImpl(
                 rotarySteps++;
                 redraw = true;
             }
-            soundPlay(CUE_NAV_TICK); // one tick per drained batch, not per detent
             vTaskDelay(4 / portTICK_PERIOD_MS);
             PrevPress = false;
             NextPress = false;
@@ -811,7 +810,6 @@ int loopOptionsImpl(
                 int prevEnabled = findNextEnabled(index, -1);
                 if (prevEnabled >= 0) {
                     index = prevEnabled;
-                    soundPlay(CUE_NAV_TICK);
                 }
                 redraw = true;
 #else
@@ -845,7 +843,6 @@ int loopOptionsImpl(
                     int prevEnabled = findNextEnabled(index, -1);
                     if (prevEnabled >= 0) {
                         index = prevEnabled;
-                        soundPlay(CUE_NAV_TICK);
                     }
                     redraw = true;
                 }
@@ -857,7 +854,6 @@ int loopOptionsImpl(
                 if (nextEnabled >= 0) {
                     if (!bruceConfig.devMode && nextEnabled <= index) devModeCounter++;
                     index = nextEnabled;
-                    soundPlay(CUE_NAV_TICK);
                 }
                 redraw = true;
             }
@@ -886,7 +882,6 @@ int loopOptionsImpl(
             }
             if (chosen >= options.size() || !options[chosen].enabled) continue;
             Serial.println("Selected: " + String(options[chosen].label));
-            soundPlay(CUE_SELECT);
             options[chosen].operation();
             break;
         }
@@ -1133,7 +1128,7 @@ void drawStatusBar() {
         tft.print(timeStr);
     } else {
         setTftDisplay(12, 12, bruceConfig.priColor, 1, bruceConfig.bgColor);
-        tft.print(String(BRUCE_VERSION));
+        tft.print(String(vndVersion()));
     }
 
     int iconCount = 0;

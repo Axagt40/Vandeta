@@ -1,4 +1,6 @@
+#include "core/dev/iram_patch.h"
 #include "rf_scan.h"
+#include "core/dev/tunables.h" // task 1: rf.scan_dwell_ms / rf.park_ms
 #include "core/led_control.h"
 #include "core/sd_functions.h"
 #include "core/type_convertion.h"
@@ -187,17 +189,55 @@ void RFScan::init_freqs() {
 // almost never seen. Same filters/threshold/step sizes as Flipper are used here,
 // plus a real listening window per hop so a frame is captured even when RSSI is
 // inconclusive (the RMT receiver does not need RSSI to catch an OOK edge).
-#define RF_SCAN_CARRIER_RSSI (-93)   // Flipper's analyzer threshold, dBm
+// Task 1 tunable `rf.noise_floor` (default -93, Flipper's analyzer threshold):
+// the dBm a carrier has to clear before this sweep calls it a signal.
+static int rfScanCarrierRssi() { return (int)tuneGetByName("rf.noise_floor", nullptr); }
+
+// Task 1, phase 2: the sweep's structural choice, `rf.scan_variant`.
+//   0 seq      - a plain hop: `rf.scan_dwell_ms` per frequency, the absolute
+//                floor as the threshold, no fine pass, nothing parked on. It is
+//                the "walk the band and report what is there" sweep.
+//   1 park     - the same plain hop, but a pass that sees carriers parks on the
+//                strongest for `rf.park_ms` (no fine pass, no floor tracking).
+//   2 adaptive - today's behaviour (default): track the ambient noise floor, run
+//                the fine pass on a carrier, park after _MAX_TRIES carriers.
+static int rfScanVariant() {
+    int v = (int)tuneGetByName("rf.scan_variant", nullptr);
+    return (v < 0 || v > 2) ? 2 : v;
+}
+
+static const char *rfScanVariantName(int v) {
+    switch (v) {
+        case 0: return "seq";
+        case 1: return "park";
+        default: return "adaptive";
+    }
+}
+
 #define RF_SCAN_CARRIER_MARGIN 6     // ...and stay this far above the noise floor
-#define RF_SCAN_DWELL_MS 70          // listen per frequency: ~4 s for all 57
+// Sweep pace is the task 1 tunable `rf.scan_dwell_ms` (default 70 ms: ~4 s for
+// all 57). The carrier dwell below stays a constant - it is the "something is
+// here" window that catches a frame, not the sweep pace.
 #define RF_SCAN_CARRIER_DWELL_MS 400 // listen at a detected carrier
 #define RF_SCAN_COARSE_RXBW 650      // Flipper's Ook650 preset (58 kHz for fine)
 #define RF_SCAN_FINE_RXBW 58
 #define RF_SCAN_FINE_SPAN 0.30f // +-300 kHz around the coarse hit
 #define RF_SCAN_FINE_STEP 0.02f // 20 kHz
-#define RF_SCAN_HOLD_MS 15000   // listen at a sweep-found frequency this long
+// How long a sweep-found frequency is listened to is the task 1 tunable
+// `rf.park_ms` (default 15000 ms).
+
+// Task 1, phase 3: patchable slot rf_scan_step. This is the park decision a
+// sweep makes on a carrier - the value the acceptance changes live.
+__attribute__((noinline, used)) uint32_t rf_scan_step_body() {
+    return (uint32_t)tuneGetByName("rf.park_ms", nullptr);
+}
+
+__attribute__((noinline)) uint32_t rf_scan_step() {
+    return ((uint32_t (*)())vndPatchTarget(VND_SLOT_RF_SCAN_STEP))();
+}
 
 bool RFScan::fast_scan() {
+    VndPatchGate vndGate; // `patch apply` refuses while a sweep is stepping
     const int lo = range_limits[bruceConfigPins.rfScanRange][0];
     const int hi = range_limits[bruceConfigPins.rfScanRange][1];
 
@@ -207,6 +247,10 @@ bool RFScan::fast_scan() {
         newPass = true;
     }
     float checkFrequency = subghz_frequency_list[idx];
+
+    // Task 1, phase 2: which structural sweep to run.
+    const int variant = rfScanVariant();
+    const bool adaptive = variant == 2;
 
     // First hop of a sweep: switch to Flipper's wide coarse filter.
     if (!noiseFloorValid) rfSetRxBW(RF_SCAN_COARSE_RXBW);
@@ -218,26 +262,41 @@ bool RFScan::fast_scan() {
     rfGetRssi(); // the first read after a retune is unsettled
     rssi = rfGetRssi();
 
-    // Follow the ambient noise floor so a busy band does not look like a carrier
-    // everywhere, while still keeping Flipper's very permissive absolute floor.
-    if (!noiseFloorValid) {
-        noiseFloor = rssi;
-        noiseFloorValid = true;
+    // adaptive follows the ambient noise floor so a busy band does not look like
+    // a carrier everywhere, while still keeping Flipper's very permissive
+    // absolute floor. seq and park use that absolute floor as it is, so a
+    // variant change is a real change of threshold policy too.
+    int carrierThreshold;
+    if (adaptive) {
+        if (!noiseFloorValid) {
+            noiseFloor = rssi;
+            noiseFloorValid = true;
+        } else {
+            noiseFloor += (rssi - noiseFloor) / 8;
+        }
+        carrierThreshold = noiseFloor + RF_SCAN_CARRIER_MARGIN;
+        if (carrierThreshold < rfScanCarrierRssi()) carrierThreshold = rfScanCarrierRssi();
     } else {
-        noiseFloor += (rssi - noiseFloor) / 8;
+        noiseFloorValid = true; // no tracking; the coarse filter is set once
+        carrierThreshold = rfScanCarrierRssi();
     }
-    int carrierThreshold = noiseFloor + RF_SCAN_CARRIER_MARGIN;
-    if (carrierThreshold < RF_SCAN_CARRIER_RSSI) carrierThreshold = RF_SCAN_CARRIER_RSSI;
     bool carrier = rssi > carrierThreshold;
 
     // One line per sweep pass keeps `log on` useful for checking the sweep is
-    // actually alive (and shows the ambient floor of the location).
-    if (newPass) Serial.printf("[RFSCAN] pass: noise floor %d dBm, threshold %d dBm\n", noiseFloor, carrierThreshold);
+    // actually alive (and shows which variant runs and the ambient floor).
+    if (newPass) {
+        Serial.printf(
+            "[RFSCAN] pass: variant=%s noise floor %d dBm, threshold %d dBm\n",
+            rfScanVariantName(variant),
+            adaptive ? noiseFloor : rfScanCarrierRssi(),
+            carrierThreshold
+        );
+    }
 
     // Flipper's fine pass: pinpoint the carrier to 20 kHz before listening there.
     float listenFreq = checkFrequency;
     int listenRssi = rssi;
-    if (carrier) {
+    if (carrier && adaptive) {
         rfSetRxBW(RF_SCAN_FINE_RXBW);
         for (float f = checkFrequency - RF_SCAN_FINE_SPAN; f <= checkFrequency + RF_SCAN_FINE_SPAN + 1e-4f;
              f += RF_SCAN_FINE_STEP) {
@@ -261,7 +320,10 @@ bool RFScan::fast_scan() {
     // Listen instead of only sampling RSSI: the RMT receiver captures an OOK
     // frame whatever the RSSI reading said.
     uint32_t start = millis();
-    const uint32_t dwell = carrier ? RF_SCAN_CARRIER_DWELL_MS : RF_SCAN_DWELL_MS;
+    const uint32_t sweepDwell = (uint32_t)tuneGetByName("rf.scan_dwell_ms", nullptr);
+    // seq is the plain hop and does not stop longer on a carrier: it walks the
+    // band at the configured pace.
+    const uint32_t dwell = (carrier && variant != 0) ? RF_SCAN_CARRIER_DWELL_MS : sweepDwell;
     while (millis() - start < dwell) {
         if (EscPress) return false;
         std::vector<int> d;
@@ -310,22 +372,32 @@ bool RFScan::fast_scan() {
         _freqs[_try].rssi = listenRssi;
         _try++;
         if (_try >= _MAX_TRIES) {
-            int max_index = 0;
-            for (int i = 1; i < _MAX_TRIES; ++i) {
-                if (_freqs[i].rssi > _freqs[max_index].rssi) { max_index = i; }
-            }
+            if (variant == 0) {
+                // seq reports carriers but never parks on one: the band keeps
+                // moving, which is what makes it the plain sweep.
+                _try = 0;
+            } else {
+                int max_index = 0;
+                for (int i = 1; i < _MAX_TRIES; ++i) {
+                    if (_freqs[i].rssi > _freqs[max_index].rssi) { max_index = i; }
+                }
 
-            // Park on the winning frequency to listen for a frame. This used to
-            // call setRfFreq(freq, 1), i.e. silently rewrite the user's config to
-            // "Fixed" - after the first noise hit an "all ranges" scan stopped
-            // sweeping for good. Park temporarily instead (see holdUntilMs).
-            frequency = _freqs[max_index].freq;
-            holdUntilMs = millis() + RF_SCAN_HOLD_MS;
-            rfSetRxBW(256);
-            noiseFloorValid = false;
-            setMHZ(frequency);
-            Serial.println("Frequency Found: " + String(frequency));
-            return false;
+                // Park on the winning frequency to listen for a frame. This used
+                // to call setRfFreq(freq, 1), i.e. silently rewrite the user's
+                // config to "Fixed" - after the first noise hit an "all ranges"
+                // scan stopped sweeping for good. Park temporarily instead (see
+                // holdUntilMs).
+                frequency = _freqs[max_index].freq;
+                const uint32_t parkMs = rf_scan_step();
+                holdUntilMs = millis() + parkMs;
+                rfSetRxBW(256);
+                noiseFloorValid = false;
+                setMHZ(frequency);
+                Serial.println(
+                    "Frequency Found: " + String(frequency) + " (park " + String(parkMs) + " ms)"
+                );
+                return false;
+            }
         }
     }
     ++idx;
@@ -917,6 +989,13 @@ String rf_scan(float start_freq, float stop_freq, int max_loops) {
 
     rfSetRxBW(256);
 
+    // Task 1, phase 2: the same `rf.scan_variant` the interactive sweep reads, so
+    // a headless run and the menu run the same policy.
+    const int variant = rfScanVariant();
+    Serial.printf(
+        "[RFSCAN] band sweep %.3f-%.3f MHz, variant=%s\n", start_freq, stop_freq, rfScanVariantName(variant)
+    );
+
     const float settingf1 = start_freq;
     const float settingf2 = stop_freq;
     float freq = settingf1; // start at the requested band, not at 0 MHz
@@ -937,9 +1016,18 @@ String rf_scan(float start_freq, float stop_freq, int max_loops) {
         setMHZ(freq);
 
         int rssi = rfGetRssi();
+        // seq reports the first carrier of the pass as it is seen instead of
+        // waiting for the strongest one at the end of it: no prioritising, no
+        // noise-floor memory. This makes the three variants differ in output as
+        // well as in dwell/parking.
+        if (variant == 0 && rssi > rfScanCarrierRssi() && String(freq, 3) != last_reported) {
+            Serial.printf("\r\nSignal found at Freq: %.3f Rssi: %d\r\n", freq, rssi);
+            out += String(freq, 3) + ",";
+            last_reported = String(freq, 3);
+        }
         // Same permissive floor as the interactive sweep / Flipper analyzer;
         // -75 was strict enough to miss ordinary keyfobs a few metres away.
-        if (rssi > RF_SCAN_CARRIER_RSSI && rssi > mark_rssi) {
+        if (rssi > rfScanCarrierRssi() && rssi > mark_rssi) {
             mark_rssi = rssi;
             mark_freq = freq;
         }
@@ -951,10 +1039,21 @@ String rf_scan(float start_freq, float stop_freq, int max_loops) {
             // Report the strongest carrier of the pass, once per distinct
             // frequency: a multi-pass sweep otherwise repeats the same "Signal
             // found" line until the timeout expires.
-            if (mark_rssi > RF_SCAN_CARRIER_RSSI && String(mark_freq, 3) != last_reported) {
+            if (variant != 0 && mark_rssi > rfScanCarrierRssi() && String(mark_freq, 3) != last_reported) {
                 Serial.printf("\r\nSignal found at Freq: %.3f Rssi: %d\r\n", mark_freq, mark_rssi);
                 out += String(mark_freq, 3) + ",";
                 last_reported = String(mark_freq, 3);
+                if (variant == 1) {
+                    // park: stay on the hit for `rf.park_ms`, bounded by the
+                    // caller's time budget, instead of moving on immediately.
+                    const uint32_t parkUntil = millis() + (uint32_t)tuneGetByName("rf.park_ms", nullptr);
+                    while ((int32_t)(millis() - parkUntil) < 0) {
+                        if (check(EscPress)) break;
+                        if (deadline != 0 && (int32_t)(millis() - deadline) >= 0) break;
+                        rfGetRssi();
+                        vTaskDelay(1 / portTICK_PERIOD_MS);
+                    }
+                }
             }
             // Reset the peak so the next sweep finds its own maximum instead of
             // repeating the previous one.
@@ -965,7 +1064,7 @@ String rf_scan(float start_freq, float stop_freq, int max_loops) {
     }
 
     deinitRfModule();
-    if (out.length()) Serial.println("Scan complete: " + out);
+    if (out.length()) Serial.println("Scan complete: " + out + " variant=" + rfScanVariantName(variant));
     return out;
 }
 

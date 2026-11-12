@@ -217,6 +217,7 @@ struct WifiPortalConfig {
 
 struct WifiPortalStats {
     bool ok = false;
+    uint8_t channel = 0;       // channel the twin actually started on
     uint32_t requests = 0;     // HTTP requests answered
     uint32_t deauthFrames = 0; // deauth frames sent at the real AP
     int clients = 0;           // stations associated with the twin when it stopped

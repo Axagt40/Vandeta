@@ -16,6 +16,7 @@ JSValue native_irUniversalCode(JSContext *ctx, JSValue *this_val, int argc, JSVa
 JSValue native_irUniversalSend(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue native_irUniversalFamily(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue native_irTransmitButton(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue native_irNormalizeMenu(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 }
 
 #endif

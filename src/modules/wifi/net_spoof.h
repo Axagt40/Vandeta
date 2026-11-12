@@ -197,6 +197,28 @@ bool netspoof_dns_active();
 uint32_t netspoof_dns_queries();
 uint32_t netspoof_dns_answers();
 
+// ---------------------------------------------------------------------------
+// Transport fallback (1.4)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Counters for the "keep the client on the IPv4/TCP path" barrier.
+ *
+ * While any rule set is armed (DNS, HTTP or the HTTPS endpoint) the engine
+ * drops QUIC/DoQ, DNS-over-TLS and IPv6 from the victim, and answers AAAA /
+ * SVCB / HTTPS with no records. That is what makes a dual-stack or HTTP/3
+ * client fall back to the intercepted path instead of bypassing it. Observe-only
+ * recon never arms the barrier, so these stay 0 there.
+ *
+ * `quicDropped` covers UDP/443 and UDP/853, `dotDropped` TCP/853,
+ * `svcbSuppressed` counts the empty AAAA/SVCB/HTTPS answers, and
+ * `ipv6Dropped` counts the victim's IPv6 frames discarded by the layer-2 hook.
+ */
+uint32_t netspoof_quic_dropped();
+uint32_t netspoof_dot_dropped();
+uint32_t netspoof_svcb_suppressed();
+uint32_t netspoof_ipv6_dropped();
+
 /**
  * @brief Add a DNS rule.
  * @param domain name to match, or "*" for every query
@@ -291,6 +313,9 @@ uint16_t netspoof_https_port();
 
 bool netspoof_http_add_redirect(const String &pattern, const String &url, bool wildcard, String &err);
 bool netspoof_http_add_injection(const String &pattern, const String &html, bool wildcard, String &err);
+/// Page answered to the OS captive-portal probe (see the `portal` payload line).
+void netspoof_http_set_portal_page(const String &html);
+String netspoof_http_portal_page();
 void netspoof_http_clear_rules();
 /// Drop only the injection (page) rules, leaving redirects in place.
 void netspoof_http_clear_injections();

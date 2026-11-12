@@ -2,6 +2,7 @@
 #include "ir_js.h"
 
 #include "modules/ir/custom_ir.h"
+#include "modules/ir/ir_normalize.h"
 #include "modules/ir/ir_read.h"
 #include "modules/ir/ir_universal.h"
 
@@ -231,6 +232,22 @@ JSValue native_irTransmitButton(JSContext *ctx, JSValue *this_val, int argc, JSV
     if (!file.exist) return JS_NewBool(false);
 
     return JS_NewBool(sendIrFileButton(file.fs, file.path, name, true));
+}
+
+// ir.normalizeMenu() -> Task 4's learn-and-normalize page, driven from the IR
+// Suite menu. It owns the keypad while it runs (the interpreter is paused) and
+// returns true once the page has been left.
+JSValue native_irNormalizeMenu(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    // The page ends by setting returnToMenu (its report is a loopOptions-style
+    // page); inside the suite that would tear the interpreter down, so the flag
+    // is cleared before and after. IrNorm::menu() does the same on its side.
+    returnToMenu = false;
+    IrNorm::menu();
+    returnToMenu = false;
+    return JS_NewBool(true);
 }
 
 #endif

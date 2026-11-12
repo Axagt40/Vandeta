@@ -2,7 +2,8 @@
 
 #include "core/display.h"
 #include "core/sd_functions.h"
-#include "TV-B-Gone.h" // irSweepPauseIfRequested(), lock/unlock_ir_tx()
+#include "TV-B-Gone.h"
+#include "core/dev/tunables.h" // task 1: ir.sweep_delay_ms // irSweepPauseIfRequested(), lock/unlock_ir_tx()
 #include "custom_ir.h"
 #include "ir_ac.h"
 #include "ir_utils.h" // setup_ir_pin()
@@ -25,7 +26,9 @@ namespace {
 // Flipper's universal scenes transmit one candidate per application tick and
 // the tick is 100 ms, so back-to-back codes in a sweep are ~100 ms apart. Keep
 // that gap: it is what makes a sweep feel (and behave) like Momentum's port.
-const uint32_t SWEEP_GAP_MS = 100;
+// It is the default of the task 1 tunable `ir.sweep_delay_ms`, so a session can
+// shorten or lengthen it from the console without a rebuild.
+static uint32_t sweepGapMs() { return (uint32_t)tuneGetByName("ir.sweep_delay_ms", nullptr); }
 
 struct Signal {
     String name;
@@ -399,7 +402,7 @@ int irUniversalSend(
         // Same keys as TV-B-Gone: SEL pauses, ESC cancels. On the console the
         // sweep just runs to the end (or `max`).
         if (showUI && irSweepPauseIfRequested()) break;
-        delay(SWEEP_GAP_MS);
+        delay(sweepGapMs());
     }
     f.close();
 

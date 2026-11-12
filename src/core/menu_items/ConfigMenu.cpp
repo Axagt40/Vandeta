@@ -1,5 +1,6 @@
 #include "ConfigMenu.h"
 #include "../mykeyboard.h"
+#include "core/dev/tunables.h" // Developer Options > Tunables (task 1)
 #include "core/display.h"
 #include "core/usb_debug/usbdebug.h"
 #include "core/i2c_finder.h"
@@ -311,6 +312,13 @@ void ConfigMenu::powerMenu() {
 
                  if (choice == 1) { powerOff(); }
              }                                    },
+            // What holding BACK on the main menu does on boards that own the
+            // gesture (T-Embed): the stock deep sleep, or a full power off so
+            // the device can be switched off with one button.
+            {String("Back Hold Act: ") + (bruceConfig.backHoldAction ? "Power Off" : "Sleep"),
+             [this]() {
+                 bruceConfig.setBackHoldAction(bruceConfig.backHoldAction ? 0 : 1);
+             }                                    },
             {"Back",       []() {}                },
         };
 
@@ -386,6 +394,8 @@ void ConfigMenu::usbDebugMenu() {
                  UsbDebug::printErrors(false);
                  displayInfo("Log ring dumped to USB serial");
              }                                                    },
+            // The same entries `tune list` prints: one table, two front ends.
+            {"Tunables", [this]() { tunablesMenu(); }},
             {"Back",                                               []() {}},
         };
 
@@ -395,6 +405,54 @@ void ConfigMenu::usbDebugMenu() {
         if (selected == -1 || selected == localOptions.size() - 1) { return; }
         last = selected;
         // Menu rebuilds so the toggle labels stay accurate
+    }
+}
+
+/*********************************************************************
+**  Function: tunablesMenu
+**  Developer Options > Tunables (task 1, phase 1): the encoder mirror
+**  of `tune list`. A value is clamped into its entry's range by
+**  tuneSet(); nothing is written to bruce.conf until Save.
+**********************************************************************/
+void ConfigMenu::tunablesMenu() {
+    int last = 0; // keep the cursor on the row that was just used
+    while (true) {
+        std::vector<Option> localOptions;
+        for (int i = 0; i < tuneCount(); i++) {
+            const tune_entry *e = tuneAt(i);
+            if (e == nullptr) continue;
+            // "(stored)" is an entry with no consumer yet - it says so here too,
+            // instead of looking like a value that changes behaviour.
+            String label = String(e->name) + ": " + String(tuneGet(e));
+            if (e->flags & TUNE_PENDING) label += " (stored)";
+            localOptions.push_back({label, [e]() {
+                                       String v = num_keyboard(String(tuneGet(e)), 7, String(e->name));
+                                       if (v.length() == 0) return; // BACK aborts, nothing else
+                                       bool clamped = false;
+                                       int32_t requested = v.toInt();
+                                       int32_t applied = tuneSet((tune_entry *)e, requested, &clamped);
+                                       if (clamped) {
+                                           displayInfo(
+                                               String(e->name) + " = " + String(applied) + " (clamped)", true
+                                           );
+                                       }
+                                   }});
+        }
+        localOptions.push_back({"Save to bruce.conf", [this]() {
+                                    bruceConfig.saveFile();
+                                    displayInfo("Tuning saved", true);
+                                }});
+        localOptions.push_back({"Reset all", [this]() {
+                                    tuneResetAll();
+                                    displayInfo("Tuning reset to defaults", true);
+                                }});
+        localOptions.push_back({"Back", []() {}});
+
+        int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Tunables", last);
+
+        if (selected == -1 || selected == (int)localOptions.size() - 1) { return; }
+        last = selected;
+        // Menu rebuilds so the labels show the value that was just set
     }
 }
 

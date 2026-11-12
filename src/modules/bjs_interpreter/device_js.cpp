@@ -1,5 +1,6 @@
 #if !defined(LITE_VERSION) && !defined(DISABLE_INTERPRETER)
 #include "device_js.h"
+#include "core/dev/build_info.h"
 #include <esp_heap_caps.h>
 #include <globals.h>
 
@@ -20,7 +21,7 @@ JSValue native_getBoard(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
 }
 
 JSValue native_getBruceVersion(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
-    return JS_NewString(ctx, BRUCE_VERSION);
+    return JS_NewString(ctx, vndVersion());
 }
 
 JSValue native_getBattery(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {

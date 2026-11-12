@@ -1,0 +1,13 @@
+# T-Embed CC1101, 16 MB: factory app + 64 KB dev-only patch partition + LittleFS.
+# The overlay needs exactly 8 slots x 2 banks x 4 KB = 64 KB. It is taken from
+# the factory slot's headroom (the app ends at ~0x4BAAA0, leaving ~277 KB below
+# the partition's 0x500000 end), so the spiffs and coredump partitions keep
+# their original offset and size. Shrinking
+# spiffs in place is not an option: littlefs asserts in lfs_fs_grow_ when the
+# partition is smaller than the superblock's block count.
+# Name,     Type, SubType,   Offset,   Size,     Flags
+nvs,        data, nvs,       0x9000,   0x6000,
+factory,    app,  factory,   0x10000,  0x4F0000,
+vndpatch,   data, 0x40,      0x500000, 0x10000,
+spiffs,     data, spiffs,    0x510000, 0xAE0000,
+coredump,   data, coredump,  0xFF0000, 0x10000,

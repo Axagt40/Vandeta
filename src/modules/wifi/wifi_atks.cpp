@@ -1,3 +1,4 @@
+#include "core/dev/iram_patch.h"
 // Borrowed from https://github.com/justcallmekoko/ESP32Marauder/
 // Learned from https://github.com/risinek/esp32-wifi-penetration-tool/
 // Arduino IDE needs to be tweeked to work, follow the instructions:
@@ -18,6 +19,8 @@
 #include "evil_portal.h"
 #include "mitm_menu.h"
 #include "modules/ble/ble_common.h"
+#include "modules/wifi/countersurv.h"
+#include "modules/wifi/eapol_ident.h"
 #include "more_atks.h"
 #include "karma_attack.h"
 #include "sniffer.h"
@@ -280,6 +283,12 @@ void wifi_atk_menu() {
         // text (see mitm_menu.h). The console verbs are still `dnsinject` and
         // `htmlint`.
         {"MITM Attack",     [=]() { mitmAttackMenu(); }      },
+        // Task 3/5 blue-team tools live on the attack page next to the attacks
+        // they detect: the dashboard (deauth/evil twin/KARMA/ARP/Remote ID +
+        // BLE rotation). BLE Cadence moved to BLE > BLE Attacks, where the BLE
+        // menu owns it.
+        {"Counter-Surv",    [=]() { CounterSurv::dashboard(); }},
+        // Task 5 harvest now sits directly below EAPOL Logoff in Target Atks.
 #endif
     };
     addOptionToMainMenu();
@@ -677,6 +686,9 @@ AGAIN:
 #ifndef LITE_VERSION
         {"Capture Handshake",     [=]() { capture_handshake(tssid, mac, channel); }         },
         {"EAPOL Logoff",          [=]() { moreTargetEapolLogoff(tssid, mac, channel); }     },
+        // Passive 802.1X identity harvest. It is not target-specific, but this
+        // is where EAPOL Logoff lives, so the two EAPOL actions stay together.
+        {"EAPOL Harvest",         [=]() { EapolIdent::menu(); }                            },
         {"Channel Switch",        [=]() { moreTargetChannelSwitch(tssid, mac, channel); }   },
         {"Bad Message",           [=]() { moreTargetBadMessage(tssid, mac, channel); }      },
         {"Authentication Attack", [=]() { moreTargetAuthAttack(tssid, mac, channel); }     },
@@ -1705,7 +1717,9 @@ static uint32_t portal_deauth_burst(const uint8_t bssid[6], uint8_t channel, con
 // its own feed (mitm_menu.cpp); this one is only used by ucmitm.
 static int16_t portalTextY = -1; // first line under the title, kept across redraws
 
-static void portal_draw_screen(const WifiPortalConfig &cfg, uint32_t upMs, uint32_t deauthFrames) {
+static void portal_draw_screen(
+    const WifiPortalConfig &cfg, uint8_t channel, uint32_t upMs, uint32_t deauthFrames
+) {
     drawMainBorderWithTitle("UC-MITM TWIN");
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
     // The border and title leave the cursor on the first free line. The twin
@@ -1716,7 +1730,7 @@ static void portal_draw_screen(const WifiPortalConfig &cfg, uint32_t upMs, uint3
     tft.setCursor(0, portalTextY);
     String ssid = cfg.ssid;
     if (ssid.length() > 18) ssid = ssid.substring(0, 18) + "..";
-    padprintln("twin: " + ssid + " ch" + String(cfg.channel));
+    padprintln("twin: " + ssid + " ch" + String(channel));
     padprintln("ap: " + WiFi.softAPIP().toString());
     padprintln("clients: " + String(WiFi.softAPgetStationNum()) + "  req: " + String(portalRequests));
     if (cfg.deauth) padprintln("deauth: " + String(deauthFrames) + " frames");
@@ -1725,7 +1739,21 @@ static void portal_draw_screen(const WifiPortalConfig &cfg, uint32_t upMs, uint3
     padprintln("up: " + String(upMs / 1000) + "s   BACK stops");
 }
 
+// Task 1, phase 3: patchable slot portal_serve. The portal's hold time is the
+// parameter that bounds a serve, so it is the decision this slot exposes.
+__attribute__((noinline, used)) uint32_t portal_serve_body(uint32_t durationMs) {
+    uint32_t d = durationMs;
+    if (d < WIFI_PORTAL_MIN_MS) d = WIFI_PORTAL_MIN_MS;
+    if (d > WIFI_PORTAL_MAX_MS) d = WIFI_PORTAL_MAX_MS;
+    return d;
+}
+
+__attribute__((noinline)) uint32_t portal_serve(uint32_t durationMs) {
+    return ((uint32_t (*)(uint32_t))vndPatchTarget(VND_SLOT_PORTAL_SERVE))(durationMs);
+}
+
 WifiPortalStats wifi_portal_run(const WifiPortalConfig &cfg) {
+    VndPatchGate vndGate; // no code flip while the portal's servers are live
     WifiPortalStats stats;
 
     String ssid = cfg.ssid;
@@ -1739,9 +1767,7 @@ WifiPortalStats wifi_portal_run(const WifiPortalConfig &cfg) {
         return stats;
     }
 
-    uint32_t duration = cfg.durationMs;
-    if (duration < WIFI_PORTAL_MIN_MS) duration = WIFI_PORTAL_MIN_MS;
-    if (duration > WIFI_PORTAL_MAX_MS) duration = WIFI_PORTAL_MAX_MS;
+    uint32_t duration = portal_serve(cfg.durationMs);
 
     String page = cfg.html;
     if (page.length() == 0 && cfg.htmlFile.length() > 0) {
@@ -1800,11 +1826,41 @@ WifiPortalStats wifi_portal_run(const WifiPortalConfig &cfg) {
     }
     WiFi.softAPConfig(gateway, gateway, IPAddress(255, 255, 255, 0));
 
+    // A twin belongs on the picked network's channel, but the board's driver can
+    // refuse 12-14: with the default world domain (cc=01) 2G stops at 11, so
+    // softAP() fails with ESP_ERR_INVALID_ARG and the whole run died with
+    // "softAP failed for this ssid/channel/password" - a picked AP on ch13 got
+    // no twin at all. Fold onto the highest channel the domain allows instead of
+    // losing the attack; the log and the run screen say which channel came up.
+    uint8_t apChannel = cfg.channel;
+    wifi_country_t legal = {};
+    if (esp_wifi_get_country(&legal) == ESP_OK && legal.nchan > 0) {
+        int last = (int)legal.schan + (int)legal.nchan - 1;
+        if (last >= 1 && (int)apChannel > last) apChannel = (uint8_t)last;
+    }
+
     String pass = cfg.password.length() > 0 ? cfg.password : emptyString;
-    if (!WiFi.softAP(ssid.c_str(), pass.c_str(), cfg.channel, 0, cfg.maxClients)) {
-        stats.error = "softAP failed for this ssid/channel/password";
-        WiFi.mode(WIFI_OFF);
-        return stats;
+    if (!WiFi.softAP(ssid.c_str(), pass.c_str(), apChannel, 0, cfg.maxClients)) {
+        // Last resort: one channel over still beats a run that never starts.
+        if (apChannel == 1) {
+            stats.error = "softAP failed for this ssid/channel/password";
+            WiFi.mode(WIFI_OFF);
+            return stats;
+        }
+        Serial.printf("[PORTAL] ch%u refused, retrying on ch1\n", (unsigned)apChannel);
+        apChannel = 1;
+        if (!WiFi.softAP(ssid.c_str(), pass.c_str(), apChannel, 0, cfg.maxClients)) {
+            stats.error = "softAP failed for this ssid/channel/password";
+            WiFi.mode(WIFI_OFF);
+            return stats;
+        }
+    }
+    stats.channel = apChannel;
+    if (apChannel != cfg.channel) {
+        Serial.printf(
+            "[PORTAL] ch%u not allowed on this board - twin came up on ch%u\n", (unsigned)cfg.channel,
+            (unsigned)apChannel
+        );
     }
     wifiConnected = true;
     stats.ip = WiFi.softAPIP().toString();
@@ -1834,13 +1890,19 @@ WifiPortalStats wifi_portal_run(const WifiPortalConfig &cfg) {
         if (portalDns != nullptr) portalDns->start(53, "*", WiFi.softAPIP());
     }
 
-    bool deauthOn = cfg.deauth && cfg.hasTargetBssid;
+    // Deauth is transmitted on the twin's channel, so it can only push clients
+    // off the real AP when the two share one (they do unless the channel had to
+    // be folded onto a legal one above).
+    bool deauthOn = cfg.deauth && cfg.hasTargetBssid && apChannel == cfg.channel;
+    if (cfg.deauth && cfg.hasTargetBssid && !deauthOn) {
+        Serial.println("[PORTAL] deauth off: the twin is not on the target channel");
+    }
     if (deauthOn) { memcpy(deauth_frame, deauth_frame_default, sizeof(deauth_frame_default)); }
 
     Serial.printf(
         "[PORTAL] '%s' on ch%d at %s for %lums (redirect=%s dns=%d deauth=%d)\n",
         ssid.c_str(),
-        cfg.channel,
+        (int)apChannel,
         stats.ip.c_str(),
         (unsigned long)duration,
         cfg.redirect.length() > 0 ? cfg.redirect.c_str() : "none",
@@ -1856,19 +1918,19 @@ WifiPortalStats wifi_portal_run(const WifiPortalConfig &cfg) {
     // rest of the AP is left alone.
     const uint8_t *deauthTarget = cfg.hasTargetClient ? cfg.targetClient : _default_target;
 
-    if (cfg.draw) portal_draw_screen(cfg, 0, 0);
+    if (cfg.draw) portal_draw_screen(cfg, apChannel, 0, 0);
 
     while ((int32_t)(deadline - millis()) > 0) {
         if (portalDns != nullptr) portalDns->processNextRequest();
 
         if (deauthOn && (millis() - lastDeauth) >= 250) {
-            stats.deauthFrames += portal_deauth_burst(cfg.targetBssid, cfg.channel, deauthTarget);
+            stats.deauthFrames += portal_deauth_burst(cfg.targetBssid, apChannel, deauthTarget);
             lastDeauth = millis();
         }
 
         if (cfg.draw && (millis() - lastDraw) >= 500) {
             lastDraw = millis();
-            portal_draw_screen(cfg, millis() - start, stats.deauthFrames);
+            portal_draw_screen(cfg, apChannel, millis() - start, stats.deauthFrames);
         }
 
         if (EscPress) break;

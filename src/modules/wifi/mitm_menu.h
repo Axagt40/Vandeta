@@ -68,6 +68,12 @@
 #include "net_spoof.h"
 
 /// Directory holding every MITM payload.
+// Windows a talking host keeps the sweep before it rotates on.
+#define MITM_SWEEP_WINDOWS 4
+
+// Idle windows a sweep host gets before the run drops it.
+#define MITM_SWEEP_IDLE_ROUNDS 3
+
 #define MITM_PAYLOAD_DIR "/BruceSpoof"
 /// Extensions the Payload picker offers: connected, and unconnected (ucmitm).
 #define MITM_PAYLOAD_FILTER "MITM"
@@ -85,12 +91,16 @@
 #define MITM_REDIRECT_MAX_BYTES 2048
 /// A unified payload is a few command lines; 4 KB is ~100 of them.
 #define MITM_SCRIPT_MAX_BYTES 4096
-/// How long a `fallback` line waits for an HTTP hit when it names no time.
-#define MITM_FALLBACK_DEFAULT_MS 10000
+/// How long a `fallback` line waits for an HTTP hit when it names no time is the
+/// task 1 tunable `mitm.fallback_delay_ms` (default 10000, the constant this
+/// used to be). The parser reads it through mitmParseSeconds(); the struct
+/// fields below stay 0 until a line actually carries a time.
 /// How many `fallback` lines one payload can chain (tried in file order).
 #define MITM_FALLBACK_MAX 3
 /// How many `probe <ip>` lines one payload can carry.
 #define MITM_PROBE_MAX 4
+/// How many `skip <ip>` lines one payload can carry (never poisoned).
+#define MITM_SKIP_MAX 8
 /// How many hosts a `probe all` line lists (the feed keeps 10 lines anyway).
 #define MITM_PROBE_LINES 8
 /// ARP window used by `probe all` when the pairing has not scanned yet.
@@ -99,8 +109,13 @@
 #define MITM_RECON_SNIFF_MS 8000
 /// Discovery window for the clients of a ucmitm target when nothing was sniffed.
 #define MITM_UC_DISCOVERY_MS 4000
-/// Where the "Save log" toggle appends the run feed on the card.
-#define MITM_LOG_FILE "" MITM_PAYLOAD_DIR "/mitm-log.txt"
+/// The "Save logs" toggle writes one run's feed here, one file per network.
+///
+/// The attack never touches the card while it runs: the feed is buffered in RAM
+/// (PSRAM) and written when the run closes, so logging cannot slow it down.
+#define MITM_LOG_DIR "/wifi/MITM"
+/// How much of one run's feed is buffered before the log says it was cut.
+#define MITM_LOG_MAX_BYTES 131072
 /// An injected page shares one ethernet frame with the IP/TCP/HTTP headers.
 #define MITM_HTML_MAX 1100
 /// Shown on screen when a payload file cannot be opened.
@@ -162,7 +177,7 @@ String mitmPayloadRead(const String &path, size_t maxBytes, MitmPayloadResult &r
 struct MitmFallbackStep {
     bool dns = false;       // true = DNS answer, false = 302 rule
     String value;           // IP or URL
-    uint32_t afterMs = MITM_FALLBACK_DEFAULT_MS;
+    uint32_t afterMs = 0; // filled in by the parser from mitm.fallback_delay_ms
 };
 
 /// Outcome of loading one `.mitm` / `.txt` / `.html` payload.
@@ -177,7 +192,7 @@ struct MitmScriptResult {
     bool fallbackSet = false;
     bool fallbackDns = false;        // false = redirect fallback
     String fallbackValue;            // IP (dns) or URL (redirect)
-    uint32_t fallbackAfterMs = MITM_FALLBACK_DEFAULT_MS;
+    uint32_t fallbackAfterMs = 0; // ditto: the parser sets it, not a constant
     // Every `fallback` line in file order; the legacy fields above describe the
     // first one so the console status keeps its old shape.
     MitmFallbackStep fallbacks[MITM_FALLBACK_MAX];
@@ -187,6 +202,13 @@ struct MitmScriptResult {
     bool wantInfo = false;           // `info` was in the payload
     String probes[MITM_PROBE_MAX];   // `probe` targets, in file order
     int probeCount = 0;
+    // Many-target sweep (`sweep [ms]`): pair one host at a time, round-robin,
+    // skip a host once served, and never hold more than one ARP pair.
+    bool sweep = false;
+    uint32_t sweepDwellMs = 1200;
+    // Hosts never paired (`skip <ip>`), e.g. the operator's own machine.
+    String skips[MITM_SKIP_MAX];
+    int skipCount = 0;
     // Transparent forwarding (`forward off|auto|on`, default off). With the
     // bridge up a redirected client keeps its internet path, so a redirect to a
     // real page or video can actually load. `offlinePage` is what is served

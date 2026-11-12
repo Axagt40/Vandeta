@@ -159,25 +159,32 @@ void _setBrightness(uint8_t brightval) {
 void InputHandler(void) {
     static unsigned long tm = millis();  // debounce for buttons
     static unsigned long tm2 = millis(); // delay between Select and encoder (avoid missclick)
-    static unsigned long lastEncoderMoveMs = 0;
-    static int posDifference = 0;
     static int lastPos = 0;
     bool sel = !BTN_ACT;
     bool esc = !BTN_ACT;
 
+    // One detent -> exactly one entry in RotaryNetSteps, published at once.
+    //
+    // This used to keep a second, slowly drained counter (posDifference: one
+    // step per 10 ms pass, silently dropped after 30 ms of quiet) beside the
+    // queue. Two counters meant two consumers could apply the same detent: the
+    // menu drained the whole queue, then the flags still queued by this loop
+    // moved a few more rows, and how many depended on the 10 ms cadence - the
+    // "turn once, move twice / move backwards" misinput. There is one counter
+    // now (RotaryNetSteps); globals.h check() takes a step out of it, and a
+    // flag with nothing pending no longer reports a press. Same idea as the
+    // Flipper/Momentum input service: one event per detent, consumed once.
     int newPos = encoder->getPosition();
-    if (newPos != lastPos) {
-        posDifference += (newPos - lastPos);
-        // Independent running total for consumers that want to apply the
-        // full pending backlog in one pass instead of one step at a time
-        // (see drainRotarySteps() in globals.h). Never cleared by the
-        // stale-drop below -- it's drained exactly, not time-limited.
-        RotaryNetSteps += (newPos - lastPos);
+    int delta = newPos - lastPos;
+    if (delta != 0) {
+        rotaryAddSteps(delta);
+        if (delta > 0) PrevPress = true;
+        else NextPress = true;
         lastPos = newPos;
-        lastEncoderMoveMs = millis();
-    } else if (posDifference != 0 && millis() - lastEncoderMoveMs > 30) {
-        // Drop any stale queued steps once the encoder has stopped moving.
-        posDifference = 0;
+        tm2 = millis(); // a turn must not be read as a SEL click
+#ifdef HAS_ENCODER_LED
+        EncoderLedChange = (delta > 0) ? -1 : 1;
+#endif
     }
 
     if (millis() - tm > 200 || LongPress) {
@@ -186,29 +193,12 @@ void InputHandler(void) {
         esc = digitalRead(BK_BTN);
 #endif
     }
-    if (posDifference != 0 || sel == BTN_ACT || esc == BTN_ACT) {
+    if (delta != 0 || sel == BTN_ACT || esc == BTN_ACT) {
         if (!wakeUpScreen()) AnyKeyPress = true;
         else return;
     }
-    if (posDifference > 0) {
-        PrevPress = true;
-        posDifference--;
-#ifdef HAS_ENCODER_LED
-        EncoderLedChange = -1;
-#endif
-        tm2 = millis();
-    }
-    if (posDifference < 0) {
-        NextPress = true;
-        posDifference++;
-#ifdef HAS_ENCODER_LED
-        EncoderLedChange = 1;
-#endif
-        tm2 = millis();
-    }
 
     if (sel == BTN_ACT && millis() - tm2 > 200) {
-        posDifference = 0;
         SelPress = true;
         tm = millis();
     }
@@ -261,6 +251,9 @@ void checkReboot() {
     const int DISPLAY_DELAY = 500;
     const char *SLEEP_TEXT = "DEEP SLEEP IN 3/3";
     const char *RESTART_TEXT = "RESTART IN 5/5";
+    // Config > Power Menu > Back Hold Act picks what this countdown does:
+    // 0 = the stock deep sleep, 1 = cut the rail through the charger chip.
+    const bool powerOffHold = (bruceConfig.backHoldAction == 1);
 
     // Calculate banner dimensions once
     const int maxTextWidth = tft.textWidth(SLEEP_TEXT, 1);
@@ -349,10 +342,14 @@ void checkReboot() {
                 );
 
             } else {
-                // DEEP SLEEP MODE: Normal text, 3 seconds
+                // HOLD MODE: the stock deep sleep, or a power off when the user
+                // picked it in Config > Power Menu > Back Hold Act.
                 if (countDown >= SLEEP_TIMEOUT + 1) {
-                    // Execute deep sleep
                     tft.fillScreen(bruceConfig.bgColor);
+                    if (powerOffHold) {
+                        tft.setTextColor(bruceConfig.secColor, bruceConfig.bgColor);
+                        tft.drawCentreString("POWERING OFF...", tftWidth / 2, tftHeight / 2, 2);
+                    }
                     while (digitalRead(BK_BTN) == BTN_ACT);
                     delay(200);
                     powerDownNFC();
@@ -360,6 +357,12 @@ void checkReboot() {
                     tft.sleep(true);
                     delay(1000); // Delay for debouncing ;)
                     digitalWrite(PIN_POWER_ON, LOW);
+                    if (powerOffHold) {
+                        // BQ25896 shutdown: on a healthy PMU the rail is cut and
+                        // nothing below runs. The deep sleep after it is the
+                        // fallback for a charger that refused the write.
+                        powerOff();
+                    }
                     esp_sleep_enable_ext0_wakeup(GPIO_NUM_6, LOW);
                     esp_deep_sleep_start();
                 }
@@ -368,7 +371,8 @@ void checkReboot() {
                 tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
                 clearTextLine();
                 tft.drawCentreString(
-                    "DEEP SLEEP IN " + String(countDown) + "/" + String(SLEEP_TIMEOUT),
+                    String(powerOffHold ? "POWER OFF IN " : "DEEP SLEEP IN ") + String(countDown) + "/" +
+                        String(SLEEP_TIMEOUT),
                     tftWidth / 2,
                     bannerY,
                     1

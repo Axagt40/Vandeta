@@ -1,5 +1,7 @@
+#include "core/dev/iram_patch.h"
 #include "rf_utils.h"
 #include "core/bus_HAL.h"
+#include "core/dev/tunables.h" // task 1: rf.spi_hold_us
 #include "protocols/rf_config.h" // RF_DBG
 #include "core/sd_functions.h"
 #include "core/settings.h"
@@ -228,8 +230,21 @@ void rf_spi_unlock() {
     xSemaphoreGiveRecursive(rf_spi_mutex);
 }
 
-int rfGetRssi() {
+// Task 1, phase 3: patchable slot rf_get_rssi. The public name is the thunk;
+// the body below is what the cell points at until a payload is applied. 12
+// bytes of code, noinline so LTO cannot inline the thunk into its callers and
+// quietly bypass a patch.
+__attribute__((noinline)) int rfGetRssi() {
+    return ((int (*)())vndPatchTarget(VND_SLOT_RF_GET_RSSI))();
+}
+
+__attribute__((noinline, used)) int rfGetRssi_body() {
     rf_spi_lock();
+    // Task 1 tunable `rf.spi_hold_us`: extra settling time before the burst.
+    // Default 0 is exactly the old behaviour; raise it when a marginal wiring
+    // shows up as an RSSI that jumps around between reads.
+    const int hold = (int)tuneGetByName("rf.spi_hold_us", nullptr);
+    if (hold > 0) delayMicroseconds((unsigned)hold);
     int rssi = ELECHOUSE_cc1101.getRssi();
     rf_spi_unlock();
     return rssi;
@@ -462,7 +477,12 @@ void initCC1101once(SPIClass *SSPI) {
     return;
 }
 
-void setMHZ(float frequency) {
+// Task 1, phase 3: patchable slot rf_set_freq (see rfGetRssi above).
+__attribute__((noinline)) void setMHZ(float frequency) {
+    ((void (*)(float))vndPatchTarget(VND_SLOT_RF_SET_FREQ))(frequency);
+}
+
+__attribute__((noinline, used)) void setMHZ_body(float frequency) {
     if (frequency > 928 || frequency < 280) {
         frequency = 433.92;
         Serial.println("Frequency out of band");
