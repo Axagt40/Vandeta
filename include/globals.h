@@ -239,9 +239,26 @@ extern volatile int EncoderLedChange;
 extern volatile int32_t RotaryNetSteps;
 
 #ifdef HAS_ENCODER
+// One lock for the queue. RotaryNetSteps is WRITTEN by the board's
+// InputHandler() task and READ-DRAINED by the render task (loopOptions and the
+// other drainRotarySteps() callers), so a bare `+=` / `-=` is a read-modify-write
+// that two tasks can interleave: drain reads 3, the input task adds a detent
+// (4), drain writes 3-3=0 and the detent is gone - a turn that silently did
+// nothing, which is what "better but not perfect" felt like on the wheel.
+// Both sides go through this mux, so a detent is always applied exactly once.
+extern portMUX_TYPE rotaryMux;
+
+static inline void rotaryAddSteps(int32_t delta) {
+    portENTER_CRITICAL(&rotaryMux);
+    RotaryNetSteps += delta;
+    portEXIT_CRITICAL(&rotaryMux);
+}
+
 static inline int32_t drainRotarySteps() {
+    portENTER_CRITICAL(&rotaryMux);
     int32_t steps = RotaryNetSteps;
     RotaryNetSteps -= steps;
+    portEXIT_CRITICAL(&rotaryMux);
     return steps;
 }
 #endif
@@ -259,25 +276,39 @@ extern inline bool check(volatile bool &btn, bool resetButtonStatus = true) {
     // for them; every other flag (SelPress, EscPress, etc.) keeps the
     // original suspend+delay+resume debounce untouched.
     //
-    // Take the detent out of the bulk queue as well. A step is published twice -
-    // once as this flag (for screens that poll a button), once in
-    // RotaryNetSteps (for loops that apply a whole backlog at once, see
-    // drainRotarySteps()). Without this, a screen that paged through a list
-    // with the encoder left the backlog standing, and the next menu applied
-    // every one of those steps again - the "menu jumps when I come back from a
-    // list" misinput. PrevPress is the positive/clockwise direction, NextPress
-    // the negative one (same convention as the board InputHandler()s).
+    // Rotary steps have exactly ONE source of truth: RotaryNetSteps. The
+    // PrevPress/NextPress flags are only a wakeup, and this read is what takes
+    // a step out of that queue - so a step can never be applied twice.
+    //
+    // That is what made the encoder feel wrong before. The board InputHandler()
+    // publishes a flag per step it has NOT yet published, while loopOptions()
+    // applies the whole backlog from RotaryNetSteps in one pass. With two
+    // consumers of two counters a fast spin was applied up to twice (the menu
+    // drained N steps, then the flags still queued by the InputHandler moved
+    // another N-1), and how much extra arrived depended on the 10 ms task
+    // cadence - the "sometimes it jumps two rows, sometimes it goes backwards"
+    // misinput. Reading a flag now means "take one pending step of this sign";
+    // with nothing pending it reports no press instead of inventing one.
+    // PrevPress = positive/clockwise step, NextPress = negative (same convention
+    // as the board InputHandler()).
     if (&btn == &NextPress || &btn == &PrevPress) {
-        if (&btn == &NextPress) {
-            if (RotaryNetSteps < 0) RotaryNetSteps += 1;
+        if (!resetButtonStatus) return true; // query form: do not consume
+        // "Test and take one step" has to be ONE atomic operation for the same
+        // reason as the queue itself: a separate test followed by a decrement
+        // can consume a detent the input task has just published, or miss one
+        // that arrived in between.
+        bool took = false;
+        portENTER_CRITICAL(&rotaryMux);
+        if (&btn == &PrevPress) {
+            if (RotaryNetSteps > 0) { RotaryNetSteps -= 1; took = true; }
         } else {
-            if (RotaryNetSteps > 0) RotaryNetSteps -= 1;
+            if (RotaryNetSteps < 0) { RotaryNetSteps += 1; took = true; }
         }
-        if (resetButtonStatus) {
-            btn = false;
-            AnyKeyPress = false;
-            SerialCmdPress = false;
-        }
+        portEXIT_CRITICAL(&rotaryMux);
+        btn = false;
+        if (!took) return false;
+        AnyKeyPress = false;
+        SerialCmdPress = false;
         return true;
     }
 #endif

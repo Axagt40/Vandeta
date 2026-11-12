@@ -1,4 +1,5 @@
 #include "core/wifi/wifi_common.h"
+#include "core/dev/tunables.h"
 #include "core/display.h"
 #include "core/mykeyboard.h"
 #include "core/powerSave.h"
@@ -52,7 +53,14 @@ int wifiScanNets(bool showHidden) {
 // The visit order is deliberate: 1/6/11 are the three non-overlapping carriers
 // a real deployment uses, so the networks that matter are usually in the first
 // half second, and the overlapping ones arrive after.
-#define WIFI_SCAN_STREAM_MS 130
+// Task 1: the streaming scan's per-channel hop is `scan.chan_dwell_ms`, so it
+// can be traded between a faster fill and a fainter AP without a rebuild. It is
+// a different knob from WIFI_SCAN_MAX_MS above (one blocking 13-channel sweep).
+static uint32_t wifiScanStreamMs() {
+    int32_t v = tuneGetByName("scan.chan_dwell_ms", nullptr);
+    return v > 0 ? (uint32_t)v : 130u;
+}
+
 #define WIFI_SCAN_APS_MAX 48
 
 static const uint8_t wifiScanChOrder[] = {1, 6, 11, 2, 7, 12, 3, 8, 13, 4, 9, 5, 10};
@@ -106,7 +114,7 @@ int wifiScanStreamPoll() {
     }
 
     const uint8_t ch = wifiScanChOrder[wifiScanChIdx++];
-    const int n = WiFi.scanNetworks(false, wifiScanShowHidden, false, WIFI_SCAN_STREAM_MS, ch);
+    const int n = WiFi.scanNetworks(false, wifiScanShowHidden, false, wifiScanStreamMs(), ch);
     if (n > 0) {
         for (int i = 0; i < n; i++) {
             const uint8_t *bssid = WiFi.BSSID(i);
@@ -474,7 +482,10 @@ void wifiDisconnect() {
         vTaskDelay(10 / portTICK_PERIOD_MS);
     }
 
+    // Clear the address too: `info` used to report "Wifi: connected" with an
+    // empty Ip: after a ucmitm run, because only the flag was reset.
     wifiConnected = false;
+    wifiIP = "";
     wifiTransitioning = false;
 }
 

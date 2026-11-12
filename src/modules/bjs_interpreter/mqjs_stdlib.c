@@ -403,6 +403,7 @@ static const JSPropDef js_ir[] = {
     JS_CFUNC_DEF("universalCode", 3, native_irUniversalCode),
     JS_CFUNC_DEF("universalSend", 3, native_irUniversalSend),
     JS_CFUNC_DEF("universalFamily", 3, native_irUniversalFamily),
+    JS_CFUNC_DEF("normalizeMenu", 0, native_irNormalizeMenu),
     JS_PROP_END,
 };
 

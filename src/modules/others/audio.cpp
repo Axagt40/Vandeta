@@ -34,7 +34,7 @@ static const float AUDIO_VOLUME_MAX = 100.0f;
 // on the T-Embed's small speaker. The cue path scales its own level by this
 // instead (0.5 * the note's balance), so a cue is clearly louder than the old
 // blip while a square wave at the top of the volume list still does not clip.
-static const float AUDIO_CUE_SCALE = 0.5f;
+static const float AUDIO_CUE_SCALE = 0.9f;
 
 // Task configuration
 static const uint32_t AUDIO_TASK_STACK_SIZE = 16384; // 16KB - increased for complex MP3 files
@@ -684,10 +684,30 @@ bool isAudioFile(const String &filepath) {
 // allowKeyAbort is false for the sound-theme cue player: it runs on its own
 // task, and check(AnyKeyPress) there would consume the press the UI is waiting
 // for - a beep must never eat a button.
+// minMs/drainMs are for the UI cues only. A cue is 8-45 ms, which the I2S path
+// tears down before it is heard, so cues ask for a floor and a drain. The modem
+// sends 1 ms FSK symbols through playTone() on this same function, and giving
+// those a floor stretched every symbol to 120 ms and broke the frame - hence
+// the parameters instead of a constant inside.
 static void playToneInternal(
-    unsigned int frequency, unsigned long duration, short waveType, float amplitude, bool allowKeyAbort
+    unsigned int frequency, unsigned long duration, short waveType, float amplitude, bool allowKeyAbort,
+    unsigned long minMs = 0, uint32_t drainMs = 0
 ) {
     if (!bruceConfig.soundEnabled) return;
+
+    // I2S takes its DMA buffers from DMA-capable internal RAM. The library's
+    // default is 5 x 2304 bytes plus descriptors, and AudioOutputI2S::begin()
+    // ASSERTS when that block is gone - which rebooted the board when Start
+    // attack queued the select cue while the run task and engine had taken the
+    // heap. Cues ask for 3 x 768 bytes instead (SetBuffers below), so this
+    // preflight only has to cover that plus the driver's own allocations.
+    // A cue that cannot be played is not worth a reboot: skip it.
+    const size_t dmaNeed = 3 * 768 + 1024;
+    size_t dmaHave = heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (dmaHave < dmaNeed) {
+        Serial.printf("[AUDIO] tone skipped: DMA block %u < %u bytes\n", (unsigned)dmaHave, (unsigned)dmaNeed);
+        return;
+    }
 
     _setup_codec_speaker(true);
 
@@ -699,6 +719,8 @@ static void playToneInternal(
         return;
     }
 
+    if (minMs != 0 && duration < minMs) duration = minMs;
+
     float hz = frequency;
 
     AudioOutputI2S *out = createConfiguredAudioOutput();
@@ -706,6 +728,12 @@ static void playToneInternal(
         _setup_codec_speaker(false);
         return;
     }
+
+    // 3 x 768 B is the shape a 450 ms `beep` plays loudly on this board, so keep
+    // it: six 1024-byte buffers made AudioGeneratorWAV::begin() fail outright
+    // (the function source had already ended while the bigger block was being
+    // primed) and every cue went silent. Length, not buffer size, was the bug.
+    out->SetBuffers(3, 768);
 
     AudioFileSourceFunction *file = new AudioFileSourceFunction(duration / 1000.0);
     if (!file) {
@@ -744,7 +772,7 @@ static void playToneInternal(
     }
 
     if (!wav->begin(file, out)) {
-        Serial.println("ERROR: Failed to begin tone playback");
+        Serial.printf("[AUDIO] begin failed: %u Hz %lu ms\n", frequency, duration);
         delete wav;
         delete file;
         delete out;
@@ -756,6 +784,11 @@ static void playToneInternal(
         if (!wav->loop() || (allowKeyAbort && check(AnyKeyPress))) { wav->stop(); }
         vTaskDelay(pdMS_TO_TICKS(1));
     }
+
+    // Let the last DMA buffers reach the amplifier: deleting the output stops
+    // I2S immediately and throws away whatever was still queued, which is the
+    // whole note when the generator finished in a few milliseconds.
+    if (drainMs != 0) vTaskDelay(pdMS_TO_TICKS(drainMs));
 
     delete file;
     delete wav;
@@ -774,7 +807,9 @@ void playToneAtLevel(unsigned int frequency, unsigned long duration, float level
     if (!bruceConfig.soundEnabled) return;
     if (level <= 0.0f) return;
     if (level > 1.0f) level = 1.0f;
-    playToneInternal(frequency, duration, 0, level * AUDIO_CUE_SCALE, false);
+    // 120 ms is still a click, not a tune, and it is the shortest note this
+    // board's I2S path plays reliably; 40 ms lets the last buffers drain.
+    playToneInternal(frequency, duration, 0, level * AUDIO_CUE_SCALE, false, 120, 40);
 }
 
 #endif

@@ -1,4 +1,5 @@
 #include "nrf_commands.h"
+#include "core/dev/tunables.h" // task 1: nrf.repeat
 #include "helpers.h"
 #include "modules/NRF24/nrf_capture.h"
 #include "modules/NRF24/nrf_common.h"
@@ -183,12 +184,16 @@ uint32_t nrfCapCallback(cmd *c) {
         return true;
     }
     if (mode == "capture") {
-        uint32_t ms = a.length() ? a.toInt() : 3000;
+        // No window typed: the task 1 tunable `nrf.cap_ms` (default 3000).
+        uint32_t ms = a.length() ? a.toInt() : (uint32_t)tuneGetByName("nrf.cap_ms", nullptr);
         bool hop = b == "1" || b.equalsIgnoreCase("hop");
         int n = nrfCaptureRun(ms, hop);
+        // The layout comes from `nrf.capture_variant` (task 1, phase 2); naming
+        // it here is how a headless run proves which one ran.
+        const char *variant = tuneVariantName(tuneFind("nrf.capture_variant"));
         serialDevice->println(
             String("RESULT capture count=") + String(n) + " dropped=" + String(nrfCaptureDropped()) + " hop=" +
-            (hop ? "1" : "0")
+            (hop ? "1" : "0") + " variant=" + (variant ? variant : "?")
         );
         for (int i = 0; i < n && i < 16; i++) {
             NrfCapturedPacket p;
@@ -448,7 +453,8 @@ uint32_t nrfCapCallback(cmd *c) {
             return false;
         }
         int channel = b.length() ? b.toInt() : nrfCaptureGetChannel();
-        int repeat = d.length() ? d.toInt() : 3;
+        // No count typed: the task 1 tunable `nrf.repeat` (default 3).
+        int repeat = d.length() ? d.toInt() : (int)tuneGetByName("nrf.repeat", nullptr);
         bool ok = nrfReplayRaw(bytes, (uint8_t)len, (uint8_t)channel, (uint8_t)repeat, nrfCaptureGetDataRate());
         serialDevice->println(String("RESULT replay ok=") + (ok ? "1" : "0") + " ch=" + String(channel) + " bytes=" + String(len));
         return true;

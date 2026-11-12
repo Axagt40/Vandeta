@@ -156,11 +156,14 @@ async function loadReleases() {
         ", pre-release " +
         (channels.prerelease ? channels.prerelease.tag : "none")
     );
-    // The pre-release is what the project is testing right now, so it is the
-    // default when it exists. The two buttons make the choice explicit.
-    await selectChannel(channels.prerelease ? "prerelease" : "official", true);
+    // The official release is the default: a visitor pressing Install gets the
+    // release the site documents, never a preview. A pre-release is opt-in
+    // through its own button.
+    await selectChannel(channels.official ? "official" : "prerelease", true);
     setStatus(
-      channels.prerelease ? "Ready. This is the newest pre-release." : "Ready. This is the newest official release.",
+      release && release.prerelease
+        ? "Ready. This is the newest pre-release."
+        : "Ready. This is the newest official release.",
       ""
     );
   } catch (error) {

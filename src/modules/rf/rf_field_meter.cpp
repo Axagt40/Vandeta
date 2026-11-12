@@ -184,7 +184,6 @@ void rf_field_meter() {
             count = 0;
             peakF = 0;
             lastGood = millis();
-            soundPlay(CUE_SELECT);
         }
 
         setMHZ(freq);
@@ -224,7 +223,6 @@ void rf_field_meter() {
         // the meter stays silent, so an empty room does not tick all the way.
         const uint32_t interval = (uint32_t)(1000 - level * 8); // 1000 ms quiet .. 200 ms loud
         if (level >= 5 && rssi >= noise + 6 && millis() - lastBeep >= interval) {
-            soundPlay(CUE_NAV_TICK);
             lastBeep = millis();
         }
 

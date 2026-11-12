@@ -25,6 +25,26 @@ uint32_t settingsCallback(cmd *c) {
     // bruceConfig.toJson(); handle them before the bruceConfig whitelist check
     // below (otherwise they are wrongly rejected as "Invalid field name").
     {
+        // A read must not write. With no value this block used to fall through to
+        // setXxx("".toInt()) == 0, so `settings irTxRepeats` zeroed the very field
+        // it was asked to report (found while testing the phase 2 IR repeat
+        // variants). Report the current pin value instead, and apply nothing.
+        if (setting_value.length() == 0) {
+            JsonDocument pinsDoc;
+            JsonObject pinRoot = pinsDoc.to<JsonObject>();
+            bruceConfigPins.toJson(pinRoot);
+            // toJson() writes the pin keys flat into the object it is given;
+            // the loop below also accepts a MAC-keyed (file-layout) object, so
+            // this keeps working if that layout ever changes.
+            JsonVariant cur = pinRoot[setting_name];
+            for (JsonPair kv : pinRoot) {
+                if (cur.isNull() && kv.value().is<JsonObject>()) cur = kv.value()[setting_name];
+            }
+            if (!cur.isNull()) {
+                serialDevice->println(setting_name + " = " + cur.as<String>());
+                return true;
+            }
+        }
         bool isPinField = true;
         if (setting_name == "bleName") bruceConfigPins.setBleName(setting_value);
         else if (setting_name == "irTx") bruceConfigPins.setIrTxPin(setting_value.toInt());

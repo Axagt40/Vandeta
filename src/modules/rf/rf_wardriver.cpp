@@ -1,5 +1,7 @@
+#include "core/dev/iram_patch.h"
 #include "rf_wardriver.h"
 
+#include "core/dev/tunables.h"
 #include "core/display.h"
 #include "core/mykeyboard.h"
 #include "core/sd_functions.h"
@@ -86,13 +88,14 @@ static uint32_t wrHashBurst(const rmt_symbol_word_t *s, size_t n) {
 }
 
 static bool wrSeenRecently(uint32_t hash) {
-    uint16_t window = bruceConfig.rfWardriverDedupeSec;
+    // One source: `ward.dup_window_ms` is backed by bruceConfig.rfWardriverDedupeMs
+    // (the old rfWardriverDedupeSec key is retired). Milliseconds so the window
+    // can be tuned below a second, which whole seconds could not express.
+    uint32_t window = (uint32_t)tuneGetByName("ward.dup_window_ms", nullptr);
     if (window == 0) return false; // dedupe disabled
     uint32_t now = millis();
     for (int i = 0; i < WR_DEDUPE_SLOTS; i++) {
-        if (wrHashes[i] == hash && wrHashes[i] != 0 && (now - wrHashTimes[i]) < (uint32_t)window * 1000u) {
-            return true;
-        }
+        if (wrHashes[i] == hash && wrHashes[i] != 0 && (now - wrHashTimes[i]) < window) { return true; }
     }
     return false;
 }
@@ -195,7 +198,16 @@ static bool wrSaveBurst(FS *fs, const rmt_symbol_word_t *s, size_t n, WardriverS
 // many edges it has.
 #define WR_SHORT_PULSE_US 50
 
-static bool wrLooksLikeRemote(uint32_t pulses, uint32_t shortPulses) {
+// Task 1, phase 3: patchable slot ward_capture_burst. It is the burst filter
+// that decides what a wardriver run keeps, so a payload can change capture
+// behaviour without a reflash.
+__attribute__((noinline)) static bool ward_capture_burst(uint32_t pulses, uint32_t shortPulses) {
+    return ((bool (*)(uint32_t, uint32_t))vndPatchTarget(VND_SLOT_WARD_CAPTURE_BURST))(
+        pulses, shortPulses
+    );
+}
+
+__attribute__((noinline, used)) bool ward_capture_burst_body(uint32_t pulses, uint32_t shortPulses) {
     if (pulses < bruceConfig.rfWardriverMinPulses) return false;
     return (uint64_t)shortPulses * 4ULL < (uint64_t)pulses;
 }
@@ -719,7 +731,7 @@ String rfWardriverSelfTest() {
 
     // Slicer hash (mostly sub-50 µs edges) must not be saved as a remote, while
     // a normal OOK burst of the same length must be.
-    bool noiseOk = !wrLooksLikeRemote(1000, 900) && wrLooksLikeRemote(60, 2);
+    bool noiseOk = !ward_capture_burst(1000, 900) && ward_capture_burst(60, 2);
 
     bool ok = (saved == 2 && dup == 1 && files == 2 && streamOk && noiseOk);
     String out = String("saved=") + saved + " duplicates=" + dup + " files=" + files +
@@ -858,10 +870,10 @@ void rfWardriverConfigMenu() {
                  }
                  loopOptions(options, MENU_TYPE_SUBMENU, "Wardriver Frequency", cur);
              }                                                                                       },
-            {String("Duplicate window: ") + String(bruceConfig.rfWardriverDedupeSec) + " s",
+            {String("Duplicate window: ") + String(bruceConfig.rfWardriverDedupeMs) + " ms",
              []() {
-                 String v = num_keyboard(String(bruceConfig.rfWardriverDedupeSec), 3, "Dedupe seconds (0=off):");
-                 if (v.length() > 0 && v != "\x1B") bruceConfig.setWardriverDedupeSec((uint16_t)v.toInt());
+                 String v = num_keyboard(String(bruceConfig.rfWardriverDedupeMs), 6, "Dedupe window ms (0=off):");
+                 if (v.length() > 0 && v != "\x1B") bruceConfig.setWardriverDedupeMs((uint32_t)v.toInt());
              }                                                                                       },
             {String("Min pulses: ") + String(bruceConfig.rfWardriverMinPulses),
              []() {
@@ -881,6 +893,8 @@ void rfWardriverConfigMenu() {
 }
 
 void rfWardriverRun(int maxSeconds) {
+    VndPatchGate vndGate; // no code flip while a capture run is live
+
     FS *fs = nullptr;
     if (!getFsStorage(fs) || fs == nullptr) {
         displayError("No storage", true);
@@ -1033,7 +1047,7 @@ void rfWardriverRun(int maxSeconds) {
                     // Short read: the radio saw the idle gap, so the signal is
                     // complete. Too few pulses is still noise, and an exact
                     // repeat of a signal heard moments ago is not stamped twice.
-                    if (!wrLooksLikeRemote(wrStream.pulses, wrStream.shortPulses)) {
+                    if (!ward_capture_burst(wrStream.pulses, wrStream.shortPulses)) {
                         wrStreamEnd(st, false);
                         st.noise++;
                     } else {
@@ -1069,7 +1083,7 @@ void rfWardriverRun(int maxSeconds) {
                     wrStream.symbolCount = n;
                     wrStreamAppend(burst, n);
                 }
-            } else if (totalNs > 300000ULL && wrLooksLikeRemote(pulses, shortPulses)) {
+            } else if (totalNs > 300000ULL && ward_capture_burst(pulses, shortPulses)) {
                 uint32_t h = wrHashBurst(burst, n);
                 if (wrSeenRecently(h)) {
                     st.duplicates++;
@@ -1116,7 +1130,7 @@ void rfWardriverRun(int maxSeconds) {
     // was written: it is a real capture up to the moment the user stopped, not
     // a half-written file.
     if (wrStream.active) {
-        if (wrLooksLikeRemote(wrStream.pulses, wrStream.shortPulses)) {
+        if (ward_capture_burst(wrStream.pulses, wrStream.shortPulses)) {
             if (wrStreamEnd(st, true)) st.saved++;
             else st.noise++;
         } else {

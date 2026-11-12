@@ -1,3 +1,5 @@
+#include "core/dev/iram_patch.h"
+#include "core/dev/build_info.h"
 #include "core/main_menu.h"
 #include <globals.h>
 
@@ -62,6 +64,9 @@ TouchPoint touchPoint;
 keyStroke KeyStroke;
 
 volatile int32_t RotaryNetSteps = 0;
+#ifdef HAS_ENCODER
+portMUX_TYPE rotaryMux = portMUX_INITIALIZER_UNLOCKED;
+#endif
 
 #ifdef HAS_ENCODER
 // Default no-op: boards that define HAS_ENCODER but don't implement
@@ -271,7 +276,7 @@ static const int BOOT_TITLE_Y = 8;
 static const int BOOT_VERSION_Y = 34;
 // 1.3 is the official release, so the splash shows the bare number. This used
 // to read " pre" while 1.3 was a preview; the suffix is kept as an empty string
-// so the release identity stays in one place (BRUCE_VERSION and the console
+// so the release identity stays in one place (vndVersion() and the console
 // `info` verb were always "vandeta 1.3").
 static const char *BOOT_VERSION_SUFFIX = "";
 
@@ -281,10 +286,10 @@ void boot_screen() {
     tft.drawPixel(0, 0, bruceConfig.bgColor);
     tft.drawCentreString("Vandeta", tftWidth / 2, BOOT_TITLE_Y, 1);
     // The wordmark above already says Vandeta, so this line is just "V: 1.3".
-    // BRUCE_VERSION carries the name too ("vandeta 1.3"); take the last word so a
+    // vndVersion() carries the name too ("vandeta 1.3"); take the last word so a
     // version bump in platformio.ini still shows up here.
-    const char *version = BRUCE_VERSION;
-    const char *lastSpace = strrchr(BRUCE_VERSION, ' ');
+    const char *version = vndVersion();
+    const char *lastSpace = strrchr(vndVersion(), ' ');
     if (lastSpace != nullptr) version = lastSpace + 1;
     tft.setTextSize(FP);
     tft.drawCentreString(
@@ -716,6 +721,9 @@ void setup() {
     // Developer Options: prints the boot banner and installs the log hook when the
     // persisted setting is on. Always starts in text protocol mode (safety).
     UsbDebug::begin();
+    // Task 1, phase 3: allocate the IRAM overlay and run the journal's boot
+    // check when Developer Mode is on. Idempotent (config load already did it).
+    vndPatchInit();
 
     wakeUpScreen();
     if (bruceConfig.startupApp != "" && !startupApp.startApp(bruceConfig.startupApp)) {

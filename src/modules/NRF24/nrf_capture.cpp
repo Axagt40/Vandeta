@@ -1,5 +1,7 @@
+#include "core/dev/iram_patch.h"
 #include "nrf_capture.h"
 
+#include "core/dev/tunables.h" // task 1: nrf.capture_variant
 #include "core/display.h"
 #include "core/mykeyboard.h"
 #include "core/sd_functions.h"
@@ -319,14 +321,27 @@ static uint8_t nrfReadOne(uint8_t *buf) {
     return len;
 }
 
+// Task 1, phase 3: patchable slot nrf_capture_raw. The capture window is the
+// one decision every raw capture makes; the consumer below calls through the
+// cell, so a payload changes the window live.
+__attribute__((noinline, used)) uint32_t nrf_capture_raw_body(uint32_t durationMs) {
+    if (durationMs == 0) return 1000;
+    if (durationMs > 300000) return 300000;
+    return durationMs;
+}
+
+__attribute__((noinline)) uint32_t nrf_capture_raw(uint32_t durationMs) {
+    return ((uint32_t (*)(uint32_t))vndPatchTarget(VND_SLOT_NRF_CAPTURE_RAW))(durationMs);
+}
+
 // Common loop for both fixed-channel and hopping captures.
 static int nrfCaptureLoop(
     uint32_t durationMs, const uint8_t *channels, int channelCount, uint32_t hopIntervalMs, bool hop,
     const NrfCaptureProgressFn &progress
 ) {
+    VndPatchGate vndGate; // no code flip while a capture is live
     if (!nrfCapReady) return 0;
-    if (durationMs == 0) durationMs = 1000;
-    if (durationMs > 300000) durationMs = 300000;
+    durationMs = nrf_capture_raw(durationMs);
     // 1 ms minimum: a 3-channel remote is captured by visiting each channel
     // every few ms, so the old 5 ms floor (15 ms per round trip) could miss the
     // whole burst. The loop still samples at 1 ms granularity.
@@ -396,7 +411,29 @@ static int nrfCaptureLoop(
 int nrfCaptureRun(uint32_t durationMs, bool forceHop, uint32_t hopIntervalMs, const NrfCaptureProgressFn &progress) {
     if (!nrfCapReady) return 0;
     nrfCaptureClear();
+
+    // Task 1, phase 2: the capture layout, `nrf.capture_variant`.
+    //   single (0) - the configured mode, exactly as before: hop only if
+    //                nrfCfg.hop, listen on one channel otherwise.
+    //   hop    (1) - force a sweep of the configured channel range.
+    //   locked (2) - rotate only through the three channels of the applied
+    //                profile. A 3-channel remote sends its whole command in a
+    //                few ms, so a 0-125 sweep never spends enough time on any
+    //                one of them to see it. With no profile applied there is
+    //                nothing to lock to, so it stays on the current channel.
+    // An explicit forceHop from the caller still wins: `nrfcap capture <ms> hop`
+    // is a direct instruction, not a default.
+    int variant = (int)tuneGetByName("nrf.capture_variant", nullptr);
+    if (variant < 0 || variant > 2) variant = 0;
     bool hop = forceHop || nrfCfg.hop;
+    if (variant == 1) hop = true;
+    if (variant == 2) {
+        if (nrfCurrProfile >= 0) {
+            const NrfSignalProfile &p = NRF_SIGNAL_PROFILES[nrfCurrProfile];
+            return nrfCaptureLoop(durationMs, p.channels, 3, hopIntervalMs, true, progress);
+        }
+        hop = false;
+    }
     return nrfCaptureLoop(durationMs, nullptr, 0, hopIntervalMs, hop, progress);
 }
 

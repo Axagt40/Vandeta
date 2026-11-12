@@ -22,7 +22,11 @@ enum SoundCue : uint8_t {
 enum SoundTheme : uint8_t {
     SOUND_THEME_VANDETA = 0, // the note set below
     SOUND_THEME_CLASSIC = 1, // exactly the old single 5 kHz blip
-    SOUND_THEME_OFF = 2,     // silent cues; the audio player still works
+    // OFF keeps its stored value from before the Momentum pack existed: the
+    // number is what bruce.conf holds, so renumbering it would switch sound
+    // back on for every device that had deliberately muted its cues.
+    SOUND_THEME_OFF = 2,      // silent cues; the audio player still works
+    SOUND_THEME_MOMENTUM = 3, // the Flipper Momentum feedback voice: short ticks
     SOUND_THEME_COUNT
 };
 

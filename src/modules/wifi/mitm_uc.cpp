@@ -1,4 +1,5 @@
 #include "mitm_uc.h"
+#include "core/dev/tunables.h" // task 1: portal.hold_ms
 
 #if !defined(LITE_VERSION)
 
@@ -436,7 +437,10 @@ String mitmUcRun(const MitmScriptResult &payload, uint32_t durationMs, bool draw
     cfg.redirect = redirect;
     cfg.hijackDns = true;
     cfg.draw = draw;
-    cfg.durationMs = durationMs > 0 ? durationMs : WIFI_PORTAL_MAX_MS;
+    // No explicit duration: the task 1 tunable `portal.hold_ms` decides how long
+    // the twin holds (default 600000 = the WIFI_PORTAL_MAX_MS it replaced).
+    cfg.durationMs =
+        durationMs > 0 ? durationMs : (uint32_t)tuneGetByName("portal.hold_ms", nullptr);
 
     Serial.printf(
         "[UC-MITM] twin '%s' ch%d deauth=%d target=%s\n", cfg.ssid.c_str(), cfg.channel, cfg.deauth ? 1 : 0,
@@ -474,7 +478,7 @@ String mitmUcRun(const MitmScriptResult &payload, uint32_t durationMs, bool draw
     // "joined" is what the twin saw, not what the AP has: a twin that nobody
     // adopts legitimately reports 0, and calling that "clients" read like the
     // discovery had found nobody.
-    summary = String("twin ") + cfg.ssid + " ch" + String(cfg.channel) + " joined " + String(st.clients) +
+    summary = String("twin ") + cfg.ssid + " ch" + String(st.channel) + " joined " + String(st.clients) +
               " requests " + String(st.requests) + " deauth " + String(st.deauthFrames) + " up " +
               String(st.elapsedMs / 1000) + "s";
     if (st.fieldSets > 0) summary += " forms " + String(st.fieldSets) + " [" + st.lastFields + "]";

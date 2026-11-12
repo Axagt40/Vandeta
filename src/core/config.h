@@ -106,6 +106,10 @@ public:
     // before these existed simply keeps the defaults below.
     int batterySaver = 0; // 0 = off, 1 = lower the CPU clock and cap the backlight
     int chargeLimit = 0;  // index: 0=100% 1=90% 2=80% 3=70%, applied to the charger
+    // Back-button hold action (Config > Power Menu). On the T-Embed, holding
+    // BACK on the main menu runs a countdown; 0 keeps the stock deep sleep,
+    // 1 powers the device off through the charger chip instead.
+    int backHoldAction = 0;
 
     // UI gradient: paint primary-coloured UI furniture with the boot splash's
     // pink -> purple ramp instead of one flat colour. Read by ui_gradient.h;
@@ -131,7 +135,9 @@ public:
     // SubGHz Wardriver (RF > Wardriver). No GPS on this board, so a record is
     // the signal itself: frequency, timestamp and the raw pulse train.
     float rfWardriverFreq = 433.92f;   // frequency to listen on
-    uint16_t rfWardriverDedupeSec = 30; // ignore an identical signal this long (0 = off)
+    uint32_t rfWardriverDedupeMs = 30000; // ignore an identical signal this long (0 = off)
+                                          // (was rfWardriverDedupeSec, whole seconds;
+                                          //  fromFile() migrates the old key once)
     uint8_t rfWardriverMinPulses = 16;  // shorter bursts are noise, not a remote
     bool rfWardriverHop = false;        // walk 433/315/868/915 instead of one band
 
@@ -257,6 +263,8 @@ public:
     void validateBatterySaverValue();
     void setChargeLimit(int value);
     void validateChargeLimitValue();
+    void setBackHoldAction(int value);
+    void validateBackHoldActionValue();
     void setColorInverted(int value);
     void validateColorInverted();
     void setBadUSBBLEKeyboardLayout(int value);
@@ -279,7 +287,7 @@ public:
     void setBadUSBBLEApplePatch(bool value);
 
     void setWardriverFreq(float value);
-    void setWardriverDedupeSec(uint16_t value);
+    void setWardriverDedupeMs(uint32_t value);
     void setWardriverMinPulses(uint8_t value);
     void setWardriverHop(bool value);
     void addDisabledMenu(String value);

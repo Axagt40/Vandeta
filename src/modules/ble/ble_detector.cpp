@@ -302,6 +302,62 @@ static bool bleDetBeaconLike(const BleDetEntry &e, uint32_t now) {
     return (now - e.firstSeen) >= 20000 && (now - e.lastSeen) <= BLE_DET_HOLD_MS;
 }
 
+// --- BLE Detector: what the table is looking for --------------------------
+//
+// One scan engine serves every mode: a filter only decides which rows the table
+// draws, so switching class is instant and never restarts the radio. The classes
+// are the ones a person actually asks about - tags/trackers, phones and audio,
+// Apple, drones, and pure beacons - and "Everything" is the old detector.
+// A class is a hint from the advertisement, never proof of the device's owner.
+enum BleRadarClass : uint8_t {
+    RADAR_EVERYTHING = 0,
+    RADAR_TRACKERS,
+    RADAR_PHONES,
+    RADAR_APPLE,
+    RADAR_DRONES,
+    RADAR_BEACONS,
+};
+
+static BleRadarClass sRadarClass = RADAR_EVERYTHING;
+
+static const char *bleRadarClassName() {
+    switch (sRadarClass) {
+        case RADAR_TRACKERS: return "TRACKERS";
+        case RADAR_PHONES: return "PHONES";
+        case RADAR_APPLE: return "APPLE";
+        case RADAR_DRONES: return "DRONES";
+        case RADAR_BEACONS: return "BEACONS";
+        default: return "EVERYTHING";
+    }
+}
+
+static bool bleRadarMatch(const BleDetEntry &e) {
+    if (sRadarClass == RADAR_EVERYTHING) return true;
+    const String name(e.name);
+    switch (sRadarClass) {
+        case RADAR_TRACKERS:
+            return (e.vendor >= 0 && e.vendor < BLE_DET_VENDOR_COUNT && bleDetVendors[e.vendor].tracker) ||
+                   bleDetNameHas(name, "airtag") || bleDetNameHas(name, "tile") ||
+                   bleDetNameHas(name, "smarttag") || bleDetNameHas(name, "chipolo") ||
+                   bleDetNameHas(name, "tracker");
+        case RADAR_PHONES:
+            return bleDetNameHas(name, "iphone") || bleDetNameHas(name, "galaxy") ||
+                   bleDetNameHas(name, "pixel") || bleDetNameHas(name, "oneplus") ||
+                   bleDetNameHas(name, "xiaomi") || bleDetNameHas(name, "redmi") ||
+                   bleDetNameHas(name, "poco") || bleDetNameHas(name, "oppo") ||
+                   bleDetNameHas(name, "huawei") || bleDetNameHas(name, "phone") ||
+                   bleDetNameHas(name, "airpods") || bleDetNameHas(name, "buds") ||
+                   bleDetNameHas(name, "headphone") || bleDetNameHas(name, "speaker");
+        case RADAR_APPLE: return e.apple || e.company == 0x004C;
+        case RADAR_DRONES:
+            return (e.vendor >= 0 && e.vendor < BLE_DET_VENDOR_COUNT &&
+                    strcmp(bleDetVendors[e.vendor].label, "Drone") == 0) ||
+                   bleDetNameHas(name, "drone");
+        case RADAR_BEACONS: return e.advType == BLE_DET_ADV_NONCONN;
+        default: return true;
+    }
+}
+
 // Apple devices never advertise a name: an iPhone is only an Apple Continuity
 // payload (company 0x004C) whose first byte after the company id says what kind
 // of message it is. Without this decode every Apple row read "<?>" and the
@@ -487,7 +543,8 @@ static int bleDetSnapshot(BleDetEntry *snap, int *order, int &n) {
     const uint32_t now = millis();
     int vis = 0;
     for (int i = 0; i < n; i++)
-        if (snap[i].used && (now - snap[i].lastSeen) <= BLE_DET_HOLD_MS) order[vis++] = i;
+        if (snap[i].used && bleRadarMatch(snap[i]) && (now - snap[i].lastSeen) <= BLE_DET_HOLD_MS)
+            order[vis++] = i;
     std::sort(order, order + vis, [&](int a, int b) { return snap[a].rssi > snap[b].rssi; });
     return vis;
 }
@@ -505,7 +562,7 @@ static int bleDetFindVisible(
 static void bleDetDraw(bool full, int count, uint32_t total, uint32_t uptimeMs, bool paused) {
     drawMainBorder(full);
     tft.setTextSize(1);
-    bleDetLine("BLE DETECTOR", 10, 27, bruceConfig.priColor);
+    bleDetLine(String("RADAR ") + bleRadarClassName(), 10, 27, bruceConfig.priColor);
     tft.setTextColor(bruceConfig.secColor, bruceConfig.bgColor);
     tft.drawRightString(
         String(count) + " dev  " + String(total) + " adv" + (paused ? "  HOLD" : ""), tftWidth - 10, 27, 1
@@ -664,6 +721,12 @@ static void bleDetTrackDraw(const BleDetEntry &e, bool gone, const char *status)
 static void bleDetTrack(NimBLEScan *scan, const uint8_t *addr, uint8_t type, bool tracker) {
     BleDetEntry e;
     if (!bleDetFind(addr, type, e)) return;
+
+    // One line so a serial session can confirm the Track page opened (it draws
+    // to the panel only, which the USB mirror never sees).
+    Serial.printf(
+        "bletrack: tracking %02X:%02X:%02X:%02X:%02X:%02X\n", addr[5], addr[4], addr[3], addr[2], addr[1], addr[0]
+    );
 
     // The key that opened this page is still down: without this the first poll
     // reads SEL as pressed and the page closes before it ever drew.
@@ -906,7 +969,6 @@ void bleDetectorRun() {
                 memcpy(bleDetSelAddr, e.addr, 6);
                 bleDetSelType = e.addrType;
                 bleDetSelValid = true;
-                soundPlay(CUE_NAV_TICK);
             }
             lastDraw = millis() - 500; // repaint immediately, paused or not
             full = true;
@@ -917,6 +979,16 @@ void bleDetectorRun() {
             int order[BLE_DET_MAX];
             int n = 0;
             const int vis = bleDetSnapshot(snap, order, n);
+            // Nothing moves the cursor on entry, so a page that only acts on an
+            // explicit selection could not offer Track without a wheel turn.
+            // Default to the first row: SEL then opens the same menu Momentum
+            // shows for the device under the cursor.
+            if (!bleDetSelValid && vis > 0) {
+                const BleDetEntry &first = snap[order[0]];
+                memcpy(bleDetSelAddr, first.addr, 6);
+                bleDetSelType = first.addrType;
+                bleDetSelValid = true;
+            }
             const int idx = bleDetSelValid ? bleDetFindVisible(snap, order, vis, bleDetSelAddr, bleDetSelType) : -1;
 
             uint8_t trackAddr[6] = {0};
@@ -928,7 +1000,11 @@ void bleDetectorRun() {
                 memcpy(trackAddr, e.addr, 6);
                 trackType = e.addrType;
                 if (e.name[0]) trackName = e.name;
-                canTrack = e.vendor >= 0 && e.vendor < BLE_DET_VENDOR_COUNT && bleDetVendors[e.vendor].tracker;
+                // Any row can be tracked, not only recognised tags: pointing at a
+                // device and watching its signal is the whole point of the page,
+                // and Momentum lets you open whatever you have selected. The
+                // vendor table still names the tag, it no longer gates the page.
+                canTrack = true;
             }
 
             std::vector<Option> opts;
@@ -939,8 +1015,9 @@ void bleDetectorRun() {
                     bleDetDronePage();
                     full = true;
                 });
-            // The Track page is offered on recognised trackers only: a live RSSI
-            // bar on an arbitrary beacon is noise, not information.
+            // Track works on whatever the cursor is on, paused or live. The
+            // rising-signal cue is the same one the tag page has always played and
+            // it only sounds when cues are enabled, so a muted device stays mute.
             if (canTrack)
                 opts.emplace_back(String("Track ") + trackName, [&]() {
                     bleDetTrack(scan, trackAddr, trackType, true);
@@ -980,4 +1057,36 @@ void bleDetectorRun() {
     bleDetCount = 0;
     portEXIT_CRITICAL(&bleDetMux);
     returnToMenu = true;
+}
+
+// ---------------------------------------------------------------------------
+// BLE Detector - the BLE class picker
+// ---------------------------------------------------------------------------
+//
+// The table above already shows a device's name, address, RSSI and estimated
+// distance, and holds a device for 15 s after it goes quiet. The classes only
+// filter that list, so "Everything" is the old detector and a class switch is a
+// repaint, not a rescan. The two radio rows (nRF24 census, CC1101 spectrum) that
+// used to sit here are gone: they are not radar targets, they own the SPI bus,
+// and each one is already reachable from its own menu (NRF24 / RF).
+void vandetaRadarMenu() {
+    bool leave = false;
+    while (!leave) {
+        std::vector<Option> opts = {
+            {"Everything",      []() { sRadarClass = RADAR_EVERYTHING; bleDetectorRun(); }},
+            {"Trackers & tags", []() { sRadarClass = RADAR_TRACKERS; bleDetectorRun(); }},
+            {"Phones & audio",  []() { sRadarClass = RADAR_PHONES; bleDetectorRun(); }},
+            {"Apple devices",   []() { sRadarClass = RADAR_APPLE; bleDetectorRun(); }},
+            {"Drones",          []() { sRadarClass = RADAR_DRONES; bleDetectorRun(); }},
+            {"Beacons",         []() { sRadarClass = RADAR_BEACONS; bleDetectorRun(); }},
+            {"Back",            [&leave]() { leave = true; }},
+        };
+        // BACK used to fall straight through: loopOptions() returns -1 for ESC,
+        // leave stayed false, the loop rebuilt the same vector and the menu
+        // reopened, so the page could not be left with the BACK button at all.
+        // A negative return means "the user backed out", which is exactly what
+        // the Back row means too.
+        if (loopOptions(opts, MENU_TYPE_SUBMENU, "BLE Detector") < 0) leave = true;
+    }
+    sRadarClass = RADAR_EVERYTHING; // never leak a filter into the next visit
 }

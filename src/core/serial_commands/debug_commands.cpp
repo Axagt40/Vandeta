@@ -1,4 +1,5 @@
 #include "debug_commands.h"
+#include "core/dev/build_info.h"
 
 #include "core/radio_mem.h"
 #include "core/sd_functions.h"
@@ -376,7 +377,7 @@ static uint32_t sysCallback(cmd *c) {
     serialDevice->println("reset reason: " + String((uint32_t)esp_reset_reason()));
     serialDevice->println("uptime      : " + String(millis() / 1000) + "s");
     serialDevice->println("device      : " + String(DEVICE_NAME));
-    serialDevice->println("version     : " + String(BRUCE_VERSION));
+    serialDevice->println("version     : " + String(vndVersion()));
     serialDevice->println("debug mode  : " + String(UsbDebug::enabled() ? "ON" : "OFF"));
     serialDevice->println("cwd         : " + UsbDebug::cwd());
     return true;

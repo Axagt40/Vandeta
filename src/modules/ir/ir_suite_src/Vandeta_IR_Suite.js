@@ -592,6 +592,16 @@ var MENU = [
     { label: "Use saved remote", run: function () { remotePad(); } },
     { label: "Run IR Suite payload", run: function () { payloadPicker(); } },
     { label: "Mirror image to TV", run: function () { mirrorMenu(); } },
+    // Task 4: learn one waveform, model it against its base unit and save the
+    // normalised .ir. The page is C++ (IrNorm::menu), reached through the
+    // ir.normalizeMenu() binding, so it lives here with the other IR tools
+    // instead of taking a row of the infrared menu.
+    { label: "Learn & normalize", run: function () {
+        // One line, so a serial session can tell this row ran (the page is C++
+        // and prints "irnorm: page open" of its own).
+        console.log("IR Suite: opening Learn & normalize");
+        ir.normalizeMenu();
+    } },
     { label: "Exit", run: function () { done = true; } }
 ];
 

@@ -3,6 +3,7 @@
 #include "helpers.h"
 #include "modules/ir/custom_ir.h"
 #include "modules/ir/ir_ac.h"
+#include "modules/ir/ir_normalize.h"
 #include "modules/ir/ir_read.h"
 #include "modules/ir/ir_universal.h"
 #include <ArduinoJson.h>
@@ -417,6 +418,29 @@ void createIrTxBufferCommand(Command *irCmd) {
     Command cmd = irCmd->addCommand("tx_from_buffer", irTxBufferCallback);
 }
 
+// Task 4: `irnorm [timeout] [save]`. Reports the learned waveform's base unit,
+// protocol and model fit; `save` writes the normalised .ir under /BruceIR.
+uint32_t irNormCallback(cmd *c) {
+    Command cmd(c);
+
+    int timeout = 10;
+    Argument timeoutArg = cmd.getArgument("timeout");
+    if (timeoutArg.isSet()) {
+        long v = timeoutArg.getValue().toInt();
+        if (v > 0) timeout = (int)(v > 60 ? 60 : v);
+    }
+    const bool save = cmd.getArgument("save").isSet();
+
+    String err;
+    const String report = IrNorm::capture(timeout, save, err);
+    if (report.length() == 0) {
+        serialDevice->println("ERR: " + err);
+        return false;
+    }
+    serialDevice->println(report);
+    return true;
+}
+
 void createIrCommands(SimpleCLI *cli) {
     Command cmd = cli->addCompositeCmd("ir", irCallback);
 
@@ -429,4 +453,10 @@ void createIrCommands(SimpleCLI *cli) {
     createIrAcCommands(&cmd);
 
     cli->addSingleArgCmd("IRSend", irSendCallback);
+
+    // Task 4: learn one waveform and model it on its own base unit. `save`
+    // writes the normalised .ir under /BruceIR, otherwise it only reports.
+    Command norm = cli->addCommand("irnorm", irNormCallback);
+    norm.addFlagArg("save");
+    norm.addPosArg("timeout", "10");
 }
