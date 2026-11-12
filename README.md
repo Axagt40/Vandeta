@@ -1,4 +1,4 @@
-# Vandeta
+# Vandeta™
 
 **The only firmware you need for the LilyGo T-Embed CC1101.**
 
@@ -300,8 +300,11 @@ extra layer on top of them.
 <details>
 <summary><b>Build and release</b></summary>
 
-* The source is not published. This repository carries the releases, the
-  browser flasher and the documentation; the code stays private.
+* The source is published in this repository on the **`source` branch**
+  (`main` is the flasher site), under **AGPL-3.0** — the same licence as
+  upstream Bruce. Everything the image is built from is here:
+  `src/`, `boards/`, `lib/`, the card files in `sd_files/` and
+  `platformio.ini` (build steps below).
 * Every released image is one merged file &mdash; bootloader + partition table
   + app &mdash; written at `0x0` and checked against its published SHA-256.
 * The universal IR libraries ship in the 1.3 SD pack and on the card under
@@ -395,6 +398,8 @@ resolve `lib_deps` (Arduino-ESP32 3.3.9, pioarduino platform 55.03.39,
 toolchain-xtensa-esp-elf 14.2.0), cached under `.pio/` afterwards.
 
 ```sh
+git clone -b source https://github.com/Axagt40/Vandeta.git
+cd Vandeta
 pio run -e lilygo-t-embed-cc1101
 ```
 
@@ -418,6 +423,17 @@ Questions, builds and feedback: **Discord** — <https://discord.gg/dhPXgVerqD>
   firmware is Bruce's work and the whole upstream feature list, device support
   and documentation further down this file are its authors'.
 * Licence: **AGPL-3.0** (`LICENSE`), third-party notices in `THIRD_PARTY.md`.
+* **Vandeta™** is an unregistered trademark of the project - the name and
+  crown artwork are not covered by the code licence (`TRADEMARK.md`).
+
+## :handshake: Attribution
+
+If you use Vandeta in another project, credit it in your README:
+
+> Based on Vandeta™ by Axagt40 - <https://github.com/Axagt40/Vandeta>
+
+`ATTRIBUTION.md` states this as an additional term under AGPL-3.0 section 7;
+`TRADEMARK.md` covers the name and the crown.
   Both are unchanged from upstream and both apply to this build.
 
 ---
