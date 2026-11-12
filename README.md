@@ -23,7 +23,7 @@ the bus for a whole radio operation (`rf_spi_lock()` plus the matching `TFT_eSPI
 analyzer, the wardriver, the capture layer and the nRF24 tap repeat.
 
 > **[Install](https://axagt40.github.io/Vandeta/flash.html)** ·
-> **[Download 1.4](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.4-pre)** ·
+> **[Download 1.4 pre](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.4-pre)** ·
 > **[What's new in 1.4](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.4-pre)** ·
 > **[Docs](https://axagt40.github.io/Vandeta/docs.html)** ·
 > **[Discord](https://discord.gg/dhPXgVerqD)**
@@ -300,6 +300,8 @@ extra layer on top of them.
   operation.
 * nRF24 capture buffers are allocated from PSRAM, keeping ≈36 KB of internal
   DRAM free for the radios.
+* `RFID > Read 125kHz` is wired to the UART pins (`RFID125_RX/TX`); the Plus has
+  no 125 kHz antenna of its own, so it needs an RDM6300-class module on them.
 * The WiFi tap brings the radio up directly and releases the driver when it
   closes.
 * Starting a WiFi feature first frees BLE, the web UI and stale captures, and
@@ -418,22 +420,9 @@ mis-typed command can never leave the board in an unusable state.
 
 ## :hammer_and_wrench: Building from source
 
-PlatformIO Core 6.1.19+ and python3; the first build needs network access to
-resolve `lib_deps` (Arduino-ESP32 3.3.9, pioarduino platform 55.03.39,
-toolchain-xtensa-esp-elf 14.2.0), cached under `.pio/` afterwards.
-
-```sh
-git clone https://github.com/Axagt40/Vandeta.git
-cd Vandeta
-pio run -e lilygo-t-embed-cc1101
-```
-
-This produces `vandeta-lilygo-t-embed-cc1101.bin` and a merged copy named
-`vandeta.bin` in the project root (`build.py` runs `esptool merge-bin` as a
-post-action). `BRUCE_VERSION` is a `build_flags` define, so changing it
-invalidates the build cache — expect a 15-25 minute rebuild.
-
----
+`pio run -e lilygo-t-embed-cc1101`, PlatformIO Core 6.1.19+, and the merged
+image goes to the board at `0x0`. Toolchain versions, the merge step and the
+flash command are in [`BUILD.md`](BUILD.md).
 
 ## :speech_balloon: Community
 

@@ -57,6 +57,39 @@
     });
   });
 
+  // Homepage release note: follow the newest pre-release, which is the build
+  // that ships. Values come from the release assets; nothing is hardcoded.
+  var note = document.querySelector("[data-release-note]");
+  if (note) {
+    fetch("https://api.github.com/repos/Axagt40/Vandeta/releases?per_page=30", {
+      headers: { Accept: "application/vnd.github+json" },
+    })
+      .then(function (response) {
+        if (!response.ok) throw new Error("release list " + response.status);
+        return response.json();
+      })
+      .then(function (list) {
+        var pre = (list || []).filter(function (r) {
+          return r.prerelease && !r.draft;
+        })[0];
+        if (!pre) throw new Error("no pre-release");
+        var asset = (pre.assets || []).filter(function (a) {
+          return a.name === "vandeta.bin";
+        })[0];
+        if (!asset) throw new Error("no image asset");
+        var version = String(pre.tag_name || "vandeta-1.4-pre")
+          .replace(/^vandeta-/, "")
+          .replace(/-/, " ");
+        var line = "vandeta " + version + " \u00b7 " + asset.size.toLocaleString("en-US") + " bytes";
+        var digest = (asset.digest || "").replace(/^sha256:/, "");
+        if (digest.length === 64) line += " \u00b7 sha256 " + digest.slice(0, 8) + "\u2026" + digest.slice(-6);
+        note.textContent = line + " \u00b7 AGPL-3.0";
+      })
+      .catch(function () {
+        note.textContent = "release list unavailable";
+      });
+  }
+
   // Footer year
   document.querySelectorAll("[data-year]").forEach(function (node) {
     node.textContent = String(new Date().getFullYear());

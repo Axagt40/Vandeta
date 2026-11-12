@@ -1057,3 +1057,17 @@ details > *:not(summary) {
     animation-duration: 0.01ms !important;
   }
 }
+
+/* Homepage hero image slot. The frame exists so the layout does not jump when
+   the screenshot is dropped in; it holds a bracketed placeholder until then. */
+.hero-shot {
+  margin: 2rem 0 0;
+  padding: 1.1rem 1.2rem;
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  border-radius: 14px;
+  color: var(--muted, #9aa4b2);
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+.hero-shot img { display: block; width: 100%; max-width: 640px; margin: 0 auto; border-radius: 10px; }

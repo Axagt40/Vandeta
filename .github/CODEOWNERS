@@ -1,0 +1,7 @@
+# Default owners for everything in the four trees that need a decision.
+# Review is requested from the owner; it is not a merge gate.
+
+/src/       @Axagt40
+/boards/    @Axagt40
+/site/      @Axagt40
+/docs/      @Axagt40
