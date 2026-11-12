@@ -28,22 +28,6 @@ upstream feature list still applies here (it is reproduced further down).
 > **All credit for the firmware belongs to the Bruce project and its
 > contributors.** Vandeta would not exist without it.
 
-## :scroll: Licence and modifications
-
-Vandeta is a **modified version of Bruce 1.16.1**. This section is the
-modification notice required by AGPL-3.0 section 5a: every change Vandeta makes
-to the upstream tree is a commit on the **`source` branch**, so its history is
-the complete record of what was changed and when.
-
-* Code: **AGPL-3.0**, the upstream `LICENSE` file verbatim - nothing added to
-  it and nothing removed from it.
-* Corresponding source for every released image: the `source` branch - the same
-  tree the image is built from, including `platformio.ini` and `sd_files/`.
-* Third-party components and their licences: `THIRD_PARTY.md`.
-* Name and crown artwork: `TRADEMARK.md`; the reuse credit term:
-  `ATTRIBUTION.md`.
-* No warranty: AGPL-3.0 sections 15-17 apply.
-
 ---
 
 ## :sparkles: Why this exists
