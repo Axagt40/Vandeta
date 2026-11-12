@@ -13,8 +13,6 @@
 [![Licence](https://img.shields.io/badge/licence-AGPL--3.0-green)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20server-5865F2?logo=discord&logoColor=white)](https://discord.gg/dhPXgVerqD)
 
-[GIF: 3 s - Frequency Analyzer sweeping 433 MHz, then a Wardriver capture list]
-
 The T-Embed puts the **CC1101 and the display on one SPI bus**, so a radio
 transaction that lands while the screen is being written comes back as noise and
 stock Bruce's scans, sweeps and captures drop out on this board. Vandeta takes
@@ -39,10 +37,8 @@ Every screen below was captured from the board over USB, at 320 x 170.
 | Main menu | Frequency Analyzer, 433.920 MHz | SubGHz Wardriver | Packet Monitor (BLE) |
 
 | <img src="site/img/readme-console.png" alt="USB console: ui output listing the main menu" width="720"> | <img src="site/img/readme-infrared.png" alt="Infrared menu with IR Suite as the first row" width="320"> |
-|:--:|
+|:--:|:--:|
 | Console readback: `ui` prints the menu it is on | Infrared, with IR Suite on top |
-
-[PHOTO: board with external antenna]
 
 ---
 
