@@ -300,9 +300,10 @@ extra layer on top of them.
 <details>
 <summary><b>Build and release</b></summary>
 
-* The source is published in this repository on the **`source` branch**
-  (`main` is the flasher site), under **AGPL-3.0** — the same licence as
-  upstream Bruce. Everything the image is built from is here:
+* The source is published in this repository, under **AGPL-3.0** — the same
+  licence as upstream Bruce. `main` is the build tree, laid out the way
+  upstream is: `src/`, `boards/`, `lib/`, `sd_files/` and `platformio.ini` at
+  the root, with the flasher site in `docs/`. Everything the image is built from is here:
   `src/`, `boards/`, `lib/`, the card files in `sd_files/` and
   `platformio.ini` (build steps below).
 * Every released image is one merged file &mdash; bootloader + partition table
@@ -398,7 +399,7 @@ resolve `lib_deps` (Arduino-ESP32 3.3.9, pioarduino platform 55.03.39,
 toolchain-xtensa-esp-elf 14.2.0), cached under `.pio/` afterwards.
 
 ```sh
-git clone -b source https://github.com/Axagt40/Vandeta.git
+git clone https://github.com/Axagt40/Vandeta.git
 cd Vandeta
 pio run -e lilygo-t-embed-cc1101
 ```
