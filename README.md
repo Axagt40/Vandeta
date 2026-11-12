@@ -1,4 +1,4 @@
-# Vandeta
+# Vandeta™
 
 **The only firmware you need for the LilyGo T-Embed CC1101.**
 
@@ -423,6 +423,8 @@ Questions, builds and feedback: **Discord** — <https://discord.gg/dhPXgVerqD>
   firmware is Bruce's work and the whole upstream feature list, device support
   and documentation further down this file are its authors'.
 * Licence: **AGPL-3.0** (`LICENSE`), third-party notices in `THIRD_PARTY.md`.
+* **Vandeta™** is an unregistered trademark of the project - the name and
+  crown artwork are not covered by the code licence (`TRADEMARK.md`).
   Both are unchanged from upstream and both apply to this build.
 
 ---
