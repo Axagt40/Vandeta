@@ -425,6 +425,15 @@ Questions, builds and feedback: **Discord** — <https://discord.gg/dhPXgVerqD>
 * Licence: **AGPL-3.0** (`LICENSE`), third-party notices in `THIRD_PARTY.md`.
 * **Vandeta™** is an unregistered trademark of the project - the name and
   crown artwork are not covered by the code licence (`TRADEMARK.md`).
+
+## :handshake: Attribution
+
+If you use Vandeta in another project, credit it in your README:
+
+> Based on Vandeta™ by Axagt40 - <https://github.com/Axagt40/Vandeta>
+
+`ATTRIBUTION.md` states this as an additional term under AGPL-3.0 section 7;
+`TRADEMARK.md` covers the name and the crown.
   Both are unchanged from upstream and both apply to this build.
 
 ---

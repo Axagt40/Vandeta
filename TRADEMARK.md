@@ -44,7 +44,15 @@ Filing content:
 * Applicant: the project owner, individual or company, with address and e-mail.
 * Specimen of use: the GitHub release page or <https://axagt40.github.io/Vandeta/>.
 
-Both offices publish current fees on their own sites; the EUTM route is one
-application for the whole EU and the PRH route is the cheaper single-country
-option. Neither can be filed by the project tooling - the applicant has to sign
-and pay.
+Fees (checked 2026-11-12; the offices' own pages always win):
+
+| Route | Application, first class | Each further class | Term |
+|-------|--------------------------|--------------------|------|
+| EUIPO EUTM, online | EUR 850 | EUR 50 for the 2nd, EUR 150 after that | 10 years, renewable |
+| PRH national, online | EUR 250 | EUR 100 | 10 years, renewable |
+
+The EUTM is one application for all EU member states; the PRH filing is the
+cheaper single-country option. An EU-based SME can first apply to the EUIPO
+**SME Fund**, which reimburses a large share of the filing fee.
+
+Neither can be filed by the project tooling - the applicant has to sign and pay.
