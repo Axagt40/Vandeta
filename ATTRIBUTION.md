@@ -4,30 +4,29 @@ Vandeta is a modification of [Bruce](https://github.com/BruceDevices/firmware) b
 the Bruce project and its contributors. Those credits stay in `README.md` and
 `THIRD_PARTY.md`.
 
-AGPL-3.0 section 7 allows a licensor to add terms that require preserving the
-author's attribution; **this file is that additional term for Vandeta**.
+## A request, not a condition
 
-## If you use it, credit it
+The firmware is **AGPL-3.0** and nothing in this file adds to, narrows or
+replaces that licence: you may use, modify and redistribute the code on the
+AGPL's terms alone. What follows is what the project **asks** for - a courtesy
+that keeps the lineage visible - not an extra requirement.
 
-Any project, firmware, product or guide that uses Vandeta - as a base, as a
-library, or as a starting point - must credit Vandeta and its author in its
-**README** (or the equivalent first-read document).
-
-Copy this line into your README, in a Credits section or the footer:
+If you build on Vandeta, please credit it and its author in your README (or the
+equivalent first-read document), in a Credits section or the footer:
 
 ```
 Based on Vandeta™ by Axagt40 - https://github.com/Axagt40/Vandeta
 ```
 
-What that means in practice:
+Keeping the name **and the link** is the whole ask: a line in your README is
+worth more than a note buried in a source file or a commit message.
 
-* Keep the name **and the link**. A note buried in a source file, a commit
-  message or the binary's About screen is not enough - the credit belongs where
-  someone reads what the project is.
-* Say that a changed version is changed (AGPL-3.0 section 5a), and do not release
-  a modified build **under** the Vandeta name or crown (`TRADEMARK.md`).
-* Shipping binaries still requires the corresponding source (AGPL-3.0 section 6);
-  the credit does not replace that.
+## What the licence already requires (separate from the request above)
 
-Using the firmware as a private tool for yourself is not distribution and needs
-no README - the claim applies when you pass it on or build on it.
+* A changed version must say that it is changed - AGPL-3.0 section 5a.
+* Shipping binaries requires the corresponding source - section 6.
+* The `LICENSE` file travels with the code and is not altered - section 4.
+
+And two things sit outside the code licence: a modified build must not be
+released **under** the Vandeta name or crown (`TRADEMARK.md`), and using the
+firmware privately, without passing it on, needs no credit at all.
