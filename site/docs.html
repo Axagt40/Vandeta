@@ -593,20 +593,20 @@ esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 115200 \
               <td><strong>GitHub Pages</strong></td>
               <td>Free for public repositories: <em>Settings &rarr; Pages &rarr;
               Deploy from a branch &rarr; <code>main</code> &rarr;
-              <code>/docs</code></em>. The site is then served over HTTPS at
+              <code>/site</code></em>. The site is then served over HTTPS at
               <code>axagt40.github.io/Vandeta/</code>.</td>
               <td>Yes</td>
             </tr>
             <tr>
               <td><strong>This computer</strong></td>
-              <td><code>python3 -m http.server 8000 --directory docs</code>, then
+              <td><code>python3 -m http.server 8000 --directory site</code>, then
               open <code>http://localhost:8000</code>. No account, no upload,
               works on a train.</td>
               <td>Yes &mdash; <code>localhost</code> is a secure origin</td>
             </tr>
             <tr>
               <td><strong>Phone (Termux / proot)</strong></td>
-              <td><code>python3 -m http.server 8000 --directory docs</code> in
+              <td><code>python3 -m http.server 8000 --directory site</code> in
               Termux or Debian; other devices open
               <code>http://&lt;phone-ip&gt;:8000</code>. For HTTPS, run a free
               tunnel (for example a cloudflared quick tunnel) in front of it.</td>
@@ -632,13 +632,13 @@ esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 115200 \
         the newest release that is not marked pre-release,
         <strong>Pre-release</strong> the newest one that is. With no connection
         it falls back
-        to the copies in <code>docs/firmware/</code>, labelled as an offline copy.
+        to the copies in <code>site/firmware/</code>, labelled as an offline copy.
       </div>
 
       <p class="file-meta">
         The flasher always installs the newest release of the channel that is
         selected, so cutting a release needs no site edit. Keep
-        <code>docs/firmware/vandeta.bin</code> with its <code>.sha256</code>
+        <code>site/firmware/vandeta.bin</code> with its <code>.sha256</code>
         current anyway: that is what an offline visitor gets, and the page still
         refuses any image whose hash does not match the release digest.
       </p>
