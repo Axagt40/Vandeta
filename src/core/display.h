@@ -236,6 +236,10 @@ Opt_Coord drawOptions(
 
 void drawSubmenu(int index, std::vector<Option> &options, const char *title);
 
+// Root-menu launcher grid (3x3 tiles, theme palette). Declared next to the other
+// draw helpers so loopOptionsImpl() and the root menu share one definition.
+void drawMainMenuGrid(int index, std::vector<Option> &options);
+
 void drawStatusBar();
 void drawMainBorder(bool clear = true);
 void drawMainBorderWithTitle(const String &title, bool clear = true);
