@@ -86,6 +86,13 @@ extra layer on top of them.
   and a framed binary protocol for reliable transfers over the same cable.
 * `livepatch apply <module> <code>` reloads the JavaScript layer without a
   reflash; `liveboot enable|disable|status` runs a script at boot.
+* The developer loop is console-side too: `tune list|get|set|reset|save|load`
+  edits the range-checked values live, `patch <name> <index>` selects an RF scan
+  / IR repeat / nRF capture variant, `patch apply|revert|clear|journal` drives
+  the A/B code overlay, `devflash begin|chunk|end|status` writes an app-only
+  image, and `autotest` runs the board's own checks.
+* `battery`, `buttons`, `clock` and `uptime` report one thing each, so a script
+  can read the board's state without parsing a banner.
 * `display ring on|off` and `display dump` inspect what a screen actually drew.
 * The error ring collects ESP-IDF, Arduino `log_x()` and plain `printf()` /
   NimBLE lines in one place.
@@ -105,6 +112,12 @@ extra layer on top of them.
 * **Frequency Analyzer** — Flipper-style: coarse hop over the three CC1101
   bands, 20 kHz fine pass, big held frequency readout, last three hits, RSSI
   meter, and a log page with sort (`OK`) and scroll.
+* **RF Suite** (`RF > RF Suite`) is the sub-GHz toolbox on one page: Frequency
+  Analyzer, Field Meter, Packet Monitor, Bit Editor and Wardriver.
+* **Bit Editor** (`RF > RF Suite > Bit Editor`) edits a pulse train as 0/1 bits:
+  load or type the string, set `TE` (50-5000 us) and `Repeat` (1-40), flip a
+  single bit, and the console `rfbits` verb re-modulates the whole string (the
+  row label only has room for its beginning; `rfbits show` prints it all).
 * **SubGHz Wardriver** — whole-burst capture (256 pulses, streamed straight to
   the card) in three modes: **Hop** (433/315/868/915, 400 ms), **Fast hop**
   (same bands, 120 ms, dwell re-armed from the end of each burst) and
@@ -163,6 +176,14 @@ extra layer on top of them.
 
 * **BLE Detector** — live table of advertisers with Apple Continuity types
   decoded, distance estimate, paging, hold and clear.
+* **BLE Attacks** (`BLE > Attacks > BLE Atks`) — **BLE Cadence** (a detection
+  pass that reports what it hears), **Pairing Storm** (connect + pair, or
+  connect only), **BLE Flood** (20 s of rotating advertisements: funny names,
+  Rickroll, random names or a custom one) and **Auth Capture** (8 s of pairing
+  capture, saved as `/BruceBLE/auth_<addr>.key`).
+* **BLE Suite** v3.1 (`BLE > Attacks > BLE Suite`) — vulnerability scanning, HID
+  and DuckyScript attacks, FastPair and HFP exploits, audio attacks, a BLE
+  sniffer and a Samsung/model database, in the IR Suite's gradient chrome.
 * **Capture & Replay** with a live packet counter and Back-to-stop.
 * JS GATT client (connect, services, characteristics, read/write/notify) and the
   capture/replay bindings, plus headless advertisement spam.
@@ -192,6 +213,11 @@ extra layer on top of them.
   Also drives a saved remote as a keypad and mirrors an image/video to a DLNA
   or Cast TV. The same library is exposed to scripts (`ir.universalList`,
   `universalSend`, `universalFamily`, `ir.transmitButton`).
+* **Learn & normalize** (`IR Suite > Learn & normalize`) — records one waveform
+  from a real remote, models it against a single `te`, snaps the jittery
+  durations onto that model, names the protocol when the decoder knows it and
+  saves a portable `.ir`; durations the model cannot explain are kept literal
+  rather than bent into shape.
 * **Brand AC remotes** for twelve makes, sending a full state frame (power,
   mode, 16–30 °C, fan).
 * Hand-written encoders for RCA and NEC42, protocols the ESP32 IR library lacks.
@@ -230,6 +256,14 @@ extra layer on top of them.
   `gateway` or `this`, resolved on each query, so a payload loads before the
   board has joined a network. A ready-to-use `/BruceSpoof/test.mitm` (page
   `html/test.html`) proves the whole path without any external site.
+* **Counter-Surv** (`WiFi > Attacks > Counter-Surv`) — the blue-team dashboard on
+  the attack page: deauth, evil-twin, KARMA, ARP and Remote ID events plus BLE
+  address rotation, so an attack in progress is visible while it runs.
+* **EAPOL Harvest** in `Target Atks` — watches a client's own EAPOL frames during
+  authentication, prints the identities it saw, and says plainly when no 802.1X
+  client appeared.
+* **DHCP Starvation** in `Target Atks` — drains a VLAN's DHCP pool so new clients
+  cannot get an address; `moreatk dhcpstarve` runs it from the console.
 * Evil-twin captive portal that refuses with a readable error when DMA memory is
   short.
 * Headless, deadline-bounded attacks so scripts can run them; `moreatk` verb,
@@ -286,6 +320,14 @@ extra layer on top of them.
 <details>
 <summary><b>Menus and navigation</b></summary>
 
+* The root menu is a **3x3 launcher grid**: every page gets a tile with its own
+  icon and label, nine tiles per page, with the page counter (`1/2`) in the strip
+  under the grid. The selected tile is the gradient plate itself; the others keep
+  the background plate with a gradient edge, so the selection reads at a glance.
+* The status strip carries the clock (or the version before a clock is set), the
+  SD / GPS / WiFi / WebUI / BLE / WireGuard icons, the charge state and the
+  battery; the frame and its separator sit on the same splash ramp as the rest
+  of the chrome.
 * Breadcrumb path (`WiFi > Wifi Atks > Target Atks`), `n/total` counter and a
   scrollbar on long lists, plus an encoder hint bar (`TURN` / `SEL` / `BACK`).
 * Capture screens show live progress and `Press BACK to stop`; only Back aborts,
@@ -337,6 +379,10 @@ extra layer on top of them.
   from is here, and the source is published with each release from 1.4 onward.
 * Every released image is one merged file &mdash; bootloader + partition table
   + app &mdash; written at `0x0` and checked against its published SHA-256.
+* Every build also writes its ELF, map and app-only image beside the merged one,
+  and `info` / `sys` print the build ID. The A/B code overlay lives in a 64 KB
+  `vndpatch` partition mapped twice, so a patch applies and reverts without a
+  reflash.
 * The universal IR libraries ship in the 1.3 SD pack and on the card under
   `/infrared/Universal/`.
 * Firmware internals keep Bruce's names — `/BruceJS`, the `bruce` verbs, the
