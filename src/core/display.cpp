@@ -7,6 +7,7 @@
 #include "utils.h"
 #include "core/sound_theme.h" // menu cues, sampled once per navigation event
 #include "core/ui_gradient.h"     // splash pink->purple ramp for the UI chrome
+#include <MenuItemInterface.h> // tile art on the launcher grid
 #include <JPEGDecoder.h>
 #include <interface.h> //for charging ischarging to print charging indicator
 #include <memory>
@@ -1093,20 +1094,47 @@ void drawMainMenuGrid(int index, std::vector<Option> &options) {
         bool selected = (i == index);
         uint16_t ink = options[i].enabled ? bruceConfig.priColor : TFT_DARKGREY;
 
-        tft.fillRoundRect(x, y, tileW, tileH, 4, selected ? bruceConfig.priColor : bruceConfig.bgColor);
-        tft.drawRoundRect(x, y, tileW, tileH, 4, ink);
-        if (selected) tft.fillRect(x + 5, y + tileH - 5, tileW - 10, 2, bruceConfig.secColor);
+        if (selected) {
+            // Selected tile is the gradient plate itself; the label and icon switch to
+            // bgColor ink so they stay readable across the whole pink -> purple ramp.
+            uiGradientFillRoundRect(x, y, tileW, tileH, 4);
+            tft.drawRoundRect(x, y, tileW, tileH, 4, bruceConfig.secColor);
+        } else {
+            tft.fillRoundRect(x, y, tileW, tileH, 4, bruceConfig.bgColor);
+            if (options[i].enabled) {
+                // Unselected tiles keep the background plate but carry the gradient on
+                // their edge and on a strip under the label, so the button still reads
+                // as part of the same UI while the selection stays unambiguous.
+                uiGradientDrawRoundRect(x, y, tileW, tileH, 4);
+            } else {
+                tft.drawRoundRect(x, y, tileW, tileH, 4, TFT_DARKGREY);
+            }
+        }
+        // Icon block on the left, title in the space that is left, so a tile reads
+        // as icon + label like a launcher entry. The art is the item's own drawIcon()
+        // scaled to the row (about a third of its 135 px design height) and painted
+        // in the tile palette; no per-menu artwork had to change.
+        const int iconBox = tileH - 7;
+        const int iconCx = x + 3 + iconBox / 2;
+        const int iconCy = y + tileH / 2 + 1;
+        MenuItemInterface *item = static_cast<MenuItemInterface *>(options[i].hoverPointer);
+        if (item) item->drawIconIn(iconCx, iconCy, iconBox, (float)iconBox / 80.0f, selected);
 
         String label = options[i].label;
         label.toUpperCase();
+        const int labelLeft = x + iconBox + 6;
+        const int labelW = tileW - (iconBox + 9);
         // Built-in font at size 1 is 6 px per glyph: clip rather than spill into the gap.
-        int maxChars = (tileW - 6) / 6;
+        int maxChars = labelW / 6;
         if (maxChars < 1) maxChars = 1;
         if ((int)label.length() > maxChars) label = label.substring(0, maxChars);
 
         tft.setTextSize(1);
         tft.setTextColor(selected ? bruceConfig.bgColor : ink);
-        tft.drawCentreString(label, x + tileW / 2, y + tileH / 2 - 4 - (selected ? 2 : 0), 1);
+        tft.drawCentreString(label, labelLeft + labelW / 2, y + tileH / 2 - 4, 1);
+
+        // Accent after the icon so the art cannot paint over the selected-state bar.
+        if (selected) tft.fillRect(x + 5, y + tileH - 5, tileW - 10, 2, bruceConfig.secColor);
     }
 
     if (pages > 1) {
