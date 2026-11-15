@@ -727,7 +727,13 @@ int loopOptionsImpl(
             options[index].hovered = true;
 
             bool renderedByLambda = false;
-            if (options[index].hover)
+            if (menuType == MENU_TYPE_MAIN) {
+                // The root menu is the launcher grid now: the per-item draw()
+                // lambdas paint a single full-screen glyph, which is the layout
+                // the grid replaces. Submenus are untouched and keep theirs.
+                drawMainMenuGrid(index, options);
+                renderedByLambda = true;
+            } else if (options[index].hover)
                 renderedByLambda = options[index].hover(options[index].hoverPointer, true);
 
             if (!renderedByLambda) {
@@ -1041,6 +1047,74 @@ Opt_Coord drawOptions(
     TouchFooter();
 #endif
     return coord;
+}
+
+
+/***************************************************************************************
+** Function name: drawMainMenuGrid
+** Description:   Flipper-style launcher for the root menu. Each enabled root page gets
+**                a tile painted from the active theme palette: an unselected tile is a
+**                bgColor plate with a priColor outline, the selected one inverts to a
+**                priColor plate with a bgColor label plus a secColor accent, so it stays
+**                readable on dark and light themes alike. 3x3 per page, with the page
+**                counter in the strip under the grid. Navigation stays sequential in
+**                loopOptions(), which walks the tiles and rolls onto the next page at
+**                the end of a row.
+***************************************************************************************/
+#define MAIN_GRID_COLS 3
+#define MAIN_GRID_ROWS 3
+
+void drawMainMenuGrid(int index, std::vector<Option> &options) {
+    const int total = (int)options.size();
+    if (total <= 0) return;
+
+    const int perPage = MAIN_GRID_COLS * MAIN_GRID_ROWS;
+    const int pages = (total + perPage - 1) / perPage;
+    int page = index >= 0 ? index / perPage : 0;
+    if (page >= pages) page = pages - 1;
+    if (page < 0) page = 0;
+
+    // drawMainBorder() draws the frame and status bar; its separator sits at y = 25.
+    const int gridTop = 29;
+    const int gridBottom = tftHeight - 12; // strip under the grid carries the page counter
+    const int gap = 3;
+    const int gridLeft = 6;
+    const int tileW = (tftWidth - 2 * gridLeft - (MAIN_GRID_COLS - 1) * gap) / MAIN_GRID_COLS;
+    const int tileH = (gridBottom - gridTop - (MAIN_GRID_ROWS - 1) * gap) / MAIN_GRID_ROWS;
+
+    tft.fillRect(0, gridTop - 2, tftWidth, tftHeight - gridTop + 2, bruceConfig.bgColor);
+
+    for (int slot = 0; slot < perPage; slot++) {
+        int i = page * perPage + slot;
+        if (i >= total) break;
+
+        int x = gridLeft + (slot % MAIN_GRID_COLS) * (tileW + gap);
+        int y = gridTop + (slot / MAIN_GRID_COLS) * (tileH + gap);
+        bool selected = (i == index);
+        uint16_t ink = options[i].enabled ? bruceConfig.priColor : TFT_DARKGREY;
+
+        tft.fillRoundRect(x, y, tileW, tileH, 4, selected ? bruceConfig.priColor : bruceConfig.bgColor);
+        tft.drawRoundRect(x, y, tileW, tileH, 4, ink);
+        if (selected) tft.fillRect(x + 5, y + tileH - 5, tileW - 10, 2, bruceConfig.secColor);
+
+        String label = options[i].label;
+        label.toUpperCase();
+        // Built-in font at size 1 is 6 px per glyph: clip rather than spill into the gap.
+        int maxChars = (tileW - 6) / 6;
+        if (maxChars < 1) maxChars = 1;
+        if ((int)label.length() > maxChars) label = label.substring(0, maxChars);
+
+        tft.setTextSize(1);
+        tft.setTextColor(selected ? bruceConfig.bgColor : ink);
+        tft.drawCentreString(label, x + tileW / 2, y + tileH / 2 - 4 - (selected ? 2 : 0), 1);
+    }
+
+    if (pages > 1) {
+        tft.setTextSize(1);
+        tft.setTextColor(bruceConfig.secColor, bruceConfig.bgColor);
+        String counter = String(page + 1) + "/" + String(pages);
+        tft.drawCentreString(counter, tftWidth / 2, gridBottom + 1, 1);
+    }
 }
 
 /***************************************************************************************
