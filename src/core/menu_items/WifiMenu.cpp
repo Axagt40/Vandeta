@@ -60,41 +60,14 @@ void WifiMenu::optionsMenu() {
     if (WiFi.getMode() & WIFI_MODE_STA && WiFi.isConnected()) {
         options.push_back({"AP info", displayAPInfo});
     }
-    options.push_back({"Wifi Atks", wifi_atk_menu});
-    options.push_back({"Evil Portal", [=]() {
-                           // WebUI cleanup now handled automatically inside EvilPortal constructor
-                           EvilPortal();
-                       }});
-    options.push_back({"NetCut", [=]() { netcutMenu(); }});
-    // options.push_back({"ReverseShell", [=]()       { ReverseShell(); }});
+    // The flat list reached 22 rows - three screens of scrolling - so the
+    // tools are grouped by what they do. The session rows above stay where
+    // they were, every tool keeps the name it always had, and the front page
+    // fits one screen: Attacks, Scan & Monitor, Remote Access, Config.
+    options.push_back({"Attacks", [this]() { attacksMenu(); }});
 #ifndef LITE_VERSION
-    options.push_back({"Listen TCP", listenTcpPort});
-    options.push_back({"Client TCP", clientTCP});
-    options.push_back({"SOCKS4 Proxy", []() { socks4Proxy(1080); }});
-    options.push_back({"TelNET", telnet_setup});
-    options.push_back({"SSH", lambdaHelper(ssh_setup, String(""))});
-    options.push_back({"Sniffer", sniffer_setup});
-    options.push_back({"Packet Monitor", []() { packetMonitor(PKT_SRC_WIFI); }});
-    options.push_back({"Channel Analyzer", channel_analyzer_setup});
-    options.push_back({"Jam Detect", jam_detect_setup});
-    options.push_back({"Scan Hosts", [=]() {
-                           bool doScan = true;
-                           if (!WiFi.isConnected()) doScan = wifiConnectMenu();
-
-                           if (doScan) {
-                               esp_netif_t *esp_netinterface =
-                                   esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-                               if (esp_netinterface == nullptr) {
-                                   Serial.println("Failed to get netif handle");
-                                   return;
-                               }
-                               ARPScanner{esp_netinterface};
-                           }
-                       }});
-    options.push_back({"Wireguard", wg_setup});
-    options.push_back({"Responder", responder});
-    options.push_back({"Brucegotchi", brucegotchi_start});
-    options.push_back({"WiFi Pass Recovery", wifi_recover_menu});
+    options.push_back({"Scan & Monitor", [this]() { monitorMenu(); }});
+    options.push_back({"Remote Access", [this]() { remoteMenu(); }});
 #endif
 
     options.push_back({"Config", [this]() { configMenu(); }});
@@ -105,6 +78,61 @@ void WifiMenu::optionsMenu() {
 
     options.clear();
 }
+
+void WifiMenu::attacksMenu() {
+    std::vector<Option> atks;
+    atks.push_back({"Wifi Atks", wifi_atk_menu});
+    atks.push_back({"Evil Portal", [=]() {
+                        // WebUI cleanup now handled automatically inside EvilPortal constructor
+                        EvilPortal();
+                    }});
+    atks.push_back({"NetCut", [=]() { netcutMenu(); }});
+    // atks.push_back({"ReverseShell", [=]()       { ReverseShell(); }});
+#ifndef LITE_VERSION
+    atks.push_back({"Responder", responder});
+    atks.push_back({"Brucegotchi", brucegotchi_start});
+    atks.push_back({"WiFi Pass Recovery", wifi_recover_menu});
+#endif
+    atks.push_back({"Back", [this]() { optionsMenu(); }});
+    loopOptions(atks, MENU_TYPE_SUBMENU, "WiFi Attacks");
+}
+
+#ifndef LITE_VERSION
+void WifiMenu::monitorMenu() {
+    std::vector<Option> scan;
+    scan.push_back({"Scan Hosts", [=]() {
+                        bool doScan = true;
+                        if (!WiFi.isConnected()) doScan = wifiConnectMenu();
+
+                        if (doScan) {
+                            esp_netif_t *esp_netinterface = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+                            if (esp_netinterface == nullptr) {
+                                Serial.println("Failed to get netif handle");
+                                return;
+                            }
+                            ARPScanner{esp_netinterface};
+                        }
+                    }});
+    scan.push_back({"Sniffer", sniffer_setup});
+    scan.push_back({"Packet Monitor", []() { packetMonitor(PKT_SRC_WIFI); }});
+    scan.push_back({"Channel Analyzer", channel_analyzer_setup});
+    scan.push_back({"Jam Detect", jam_detect_setup});
+    scan.push_back({"Back", [this]() { optionsMenu(); }});
+    loopOptions(scan, MENU_TYPE_SUBMENU, "Scan & Monitor");
+}
+
+void WifiMenu::remoteMenu() {
+    std::vector<Option> remote;
+    remote.push_back({"Listen TCP", listenTcpPort});
+    remote.push_back({"Client TCP", clientTCP});
+    remote.push_back({"SOCKS4 Proxy", []() { socks4Proxy(1080); }});
+    remote.push_back({"TelNET", telnet_setup});
+    remote.push_back({"SSH", lambdaHelper(ssh_setup, String(""))});
+    remote.push_back({"Wireguard", wg_setup});
+    remote.push_back({"Back", [this]() { optionsMenu(); }});
+    loopOptions(remote, MENU_TYPE_SUBMENU, "Remote Access");
+}
+#endif
 
 void WifiMenu::configMenu() {
     std::vector<Option> wifiOptions;

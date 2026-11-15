@@ -69,15 +69,19 @@
         return response.json();
       })
       .then(function (list) {
+        var official = (list || []).filter(function (r) {
+          return !r.prerelease && !r.draft;
+        })[0];
         var pre = (list || []).filter(function (r) {
           return r.prerelease && !r.draft;
         })[0];
-        if (!pre) throw new Error("no pre-release");
-        var asset = (pre.assets || []).filter(function (a) {
+        var rel = official || pre;
+        if (!rel) throw new Error("no release");
+        var asset = (rel.assets || []).filter(function (a) {
           return a.name === "vandeta.bin";
         })[0];
         if (!asset) throw new Error("no image asset");
-        var version = String(pre.tag_name || "vandeta-1.4-pre")
+        var version = String(rel.tag_name || "vandeta-1.4")
           .replace(/^vandeta-/, "")
           .replace(/-/, " ");
         var line = "vandeta " + version + " \u00b7 " + asset.size.toLocaleString("en-US") + " bytes";

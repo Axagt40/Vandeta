@@ -693,6 +693,8 @@ AGAIN:
         {"Bad Message",           [=]() { moreTargetBadMessage(tssid, mac, channel); }      },
         {"Authentication Attack", [=]() { moreTargetAuthAttack(tssid, mac, channel); }     },
         {"Disassociation Attack", [=]() { moreTargetDisassoc(tssid, mac, channel); }       },
+        // Joins the AP this page was opened on and starves its DHCP pool.
+        {"DHCP Starvation",       [=]() { moreTargetDhcpStarve(tssid, mac, channel); }    },
 #endif
         {"Clone Portal",          [=]() { EvilPortal(tssid, channel, false, false); }      },
         {"Deauth+Clone",          [=]() { EvilPortal(tssid, channel, true, false); }       },

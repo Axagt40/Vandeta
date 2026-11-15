@@ -11,6 +11,12 @@
 
 enum EvilPortalPasswordMode { FULL_PASSWORD = 0, FIRST_LAST_CHAR = 1, HIDE_PASSWORD = 2, SAVE_LENGTH = 3 };
 
+// SubGHz wardriver capture mode (task 7). One persisted choice replaces the old
+// `rfWardriverHop` boolean: Hop walks 433/315/868/915 at the slow dwell, Fast hop
+// walks the same bands between bursts at the fast dwell, and Wideband parks on a
+// single centre with the CC1101's widest filter and a squelch-opened receiver.
+enum WardriverMode : uint8_t { WR_MODE_HOP = 0, WR_MODE_FAST_HOP = 1, WR_MODE_WIDEBAND = 2 };
+
 class BruceConfig : public BruceTheme {
 public:
     struct WiFiCredential {
@@ -138,8 +144,10 @@ public:
     uint32_t rfWardriverDedupeMs = 30000; // ignore an identical signal this long (0 = off)
                                           // (was rfWardriverDedupeSec, whole seconds;
                                           //  fromFile() migrates the old key once)
-    uint8_t rfWardriverMinPulses = 16;  // shorter bursts are noise, not a remote
-    bool rfWardriverHop = false;        // walk 433/315/868/915 instead of one band
+    uint8_t rfWardriverMinPulses = 16; // shorter bursts are noise, not a remote
+    // WR_MODE_HOP / WR_MODE_FAST_HOP / WR_MODE_WIDEBAND. Out-of-range values in
+    // bruce.conf fall back to HOP instead of leaving the loop with no behaviour.
+    uint8_t rfWardriverMode = WR_MODE_HOP;
 
     // Same settings menu, second consumer: BadBLE (the BLE HID keyboard) reads
     // the manufacturer / product / VID / PID above and, when this is on, the
@@ -289,7 +297,7 @@ public:
     void setWardriverFreq(float value);
     void setWardriverDedupeMs(uint32_t value);
     void setWardriverMinPulses(uint8_t value);
-    void setWardriverHop(bool value);
+    void setWardriverMode(uint8_t value);
     void addDisabledMenu(String value);
     void removeDisabledMenu(String value);
 

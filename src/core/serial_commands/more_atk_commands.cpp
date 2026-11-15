@@ -18,6 +18,7 @@
 //   moreatk badmsg <bssid> <channel> <seconds>
 //   moreatk auth <bssid> <channel> <seconds>
 //   moreatk disassoc <bssid> <channel> <seconds>
+//   moreatk dhcpstarve <bssid> <channel> <ssid> <seconds> [password]
 
 static void morePrintResult(const char *name, const MoreAtkResult &r) {
     serialDevice->println(
@@ -84,7 +85,6 @@ uint32_t moreAtkCallback(cmd *c) {
         morePrintResult("eapolstart", more_eapol_start_flood(ms));
         return true;
     }
-
     // Targeted modes: <bssid> <channel> [<extra>] <seconds>
     uint8_t bssid[6];
     if (!moreParseMac(a, bssid)) {
@@ -122,6 +122,23 @@ uint32_t moreAtkCallback(cmd *c) {
         morePrintResult("disassoc", more_disassoc_attack(bssid, channel, s * 1000));
         return true;
     }
+    if (mode == "dhcpstarve") {
+        // <bssid> <channel> <ssid> <seconds> [password]. The password may be
+        // omitted when the board already has one saved for that SSID.
+        String ssid = cmd.getArgument(3).getValue();
+        ssid.trim();
+        uint32_t s = cmd.getArgument(4).getValue().toInt();
+        String pw = cmd.getArgument(5).getValue();
+        pw.trim();
+        if (ssid.length() == 0) {
+            serialDevice->println("ERR dhcpstarve needs <bssid> <channel> <ssid> <seconds> [password]");
+            return false;
+        }
+        if (s == 0) s = 15;
+        if (pw.length() == 0) pw = bruceConfig.getWifiPassword(ssid);
+        morePrintResult("dhcpstarve", more_dhcp_starvation(bssid, ssid, pw, channel, s * 1000));
+        return true;
+    }
     if (mode == "chanswitch") {
         // <bssid> <channel> <ssid> <newChannel> <seconds>
         String ssid = d;
@@ -134,7 +151,8 @@ uint32_t moreAtkCallback(cmd *c) {
     }
 
     serialDevice->println(
-        "modes: scan authflood probe eapolstart eapolattack eapollogoff badmsg auth disassoc chanswitch"
+        "modes: scan authflood probe eapolstart eapolattack eapollogoff badmsg auth disassoc chanswitch "
+        "dhcpstarve"
     );
     return false;
 #else

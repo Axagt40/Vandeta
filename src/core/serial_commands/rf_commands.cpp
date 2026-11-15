@@ -504,6 +504,28 @@ uint32_t rfWardriverCallback(cmd *c) {
         serialDevice->println(ok ? "replayed" : "replay failed");
         return ok;
     }
+    if (action == "mode") {
+        // Task 7: bare form reports, an argument selects. The tokens are the same
+        // ones the tuning table uses for `ward.mode`.
+        if (extra.length() == 0) {
+            serialDevice->println(String("mode=") + rfWardriverModeName(bruceConfig.rfWardriverMode));
+            return true;
+        }
+        String v = extra;
+        v.trim();
+        v.toLowerCase();
+        int mode = -1;
+        if (v == "hop") mode = WR_MODE_HOP;
+        else if (v == "fasthop" || v == "fast") mode = WR_MODE_FAST_HOP;
+        else if (v == "wide" || v == "wideband") mode = WR_MODE_WIDEBAND;
+        if (mode < 0) {
+            serialDevice->println("usage: subghz wardriver mode [hop|fasthop|wide]");
+            return false;
+        }
+        bruceConfig.setWardriverMode((uint8_t)mode);
+        serialDevice->println(String("mode=") + rfWardriverModeName(bruceConfig.rfWardriverMode));
+        return true;
+    }
     if (action == "status" || action.length() == 0) {
         FS *fs = nullptr;
         int files = 0;
@@ -521,13 +543,13 @@ uint32_t rfWardriverCallback(cmd *c) {
         serialDevice->println(String("frequency=") + String(bruceConfig.rfWardriverFreq, 2));
         serialDevice->println(String("dedupe_ms=") + String(bruceConfig.rfWardriverDedupeMs));
         serialDevice->println(String("min_pulses=") + String(bruceConfig.rfWardriverMinPulses));
-        serialDevice->println(String("hop=") + (bruceConfig.rfWardriverHop ? "1" : "0"));
+        serialDevice->println(String("mode=") + rfWardriverModeName(bruceConfig.rfWardriverMode));
         serialDevice->println(String("folder=") + RF_WARDRIVER_DIR);
         serialDevice->println(String("files=") + String(files));
         return true;
     }
     serialDevice->println(
-        "usage: subghz wardriver <status|selftest|list|capture [sec]|identify <f>|identifyall|replay <f>>"
+        "usage: subghz wardriver <status|mode [hop|fasthop|wide]|selftest|list|capture [sec]|identify <f>|identifyall|replay <f>>"
     );
     return false;
 }

@@ -21,14 +21,13 @@ the bus for a whole radio operation (`rf_spi_lock()` plus the matching `TFT_eSPI
 analyzer, the wardriver, the capture layer and the nRF24 tap repeat.
 
 > **[Install](https://axagt40.github.io/Vandeta/flash.html)** ·
-> **[Download 1.4 pre](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.4-pre)** ·
-> **[What's new in 1.4](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.4-pre)** ·
+> **[Download 1.4](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.4)** ·
+> **[What's new in 1.4](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.4)** ·
 > **[Docs](https://axagt40.github.io/Vandeta/docs.html)** ·
 > **[Discord](https://discord.gg/dhPXgVerqD)**
 
-1.4 is a pre-release, and the flasher opens on **Official 1.3** - press
-**Pre-release** to select it. The source for every build is published in this
-repository, per release, from 1.4 onward.
+1.4 is the current official release and the flasher opens on it. The source for
+every build is published in this repository, per release, from 1.4 onward.
 
 Every screen below was captured from the board over USB, at 320 x 170.
 
@@ -107,12 +106,16 @@ extra layer on top of them.
   bands, 20 kHz fine pass, big held frequency readout, last three hits, RSSI
   meter, and a log page with sort (`OK`) and scroll.
 * **SubGHz Wardriver** — whole-burst capture (256 pulses, streamed straight to
-  the card), duplicate window, 433/315/868/915 band hop, short-pulse noise
+  the card) in three modes: **Hop** (433/315/868/915, 400 ms), **Fast hop**
+  (same bands, 120 ms, dwell re-armed from the end of each burst) and
+  **Wideband** (parked on one centre with the 812.5 kHz filter, squelch-opened,
+  bursts capped at 2 s). A capture the receiver lost pulses through is deleted
+  and counted as `chopped`, never replayed. Duplicate window, short-pulse noise
   rejection, a captures browser, verbatim replay and one-pass
   `Identify & save` to a `_dec.sub`.
 * `subghz rx <seconds>` listens for a timed window; `subghz wardriver
-  capture|list|identify|identifyall|replay|status|selftest` drives the wardriver
-  from the console.
+  capture|list|identify|identifyall|replay|status|mode|selftest` drives the
+  wardriver from the console.
 * Replay follows the signal's own length (up to 30 s), and an oversized capture
   is refused with a clear message.
 
@@ -432,10 +435,14 @@ Questions, builds and feedback: **Discord** — <https://discord.gg/dhPXgVerqD>
 
 ## :white_check_mark: Verified on the board
 
-The 1.4-pre image (`nogit-20261112-134113`) reports `vandeta 1.4-pre` in `info`.
-On it, `t50_ble_attacks.py` scored **22 passed / 0 failed / 0 skipped**,
+The 1.4 image (`nogit-20261115-133035`) reports `vandeta 1.4` in `info`.
+On it, `t50_ble_attacks.py` scored **32 passed / 0 failed / 0 skipped**,
+`t23_wardriver_regressions.py` and `t22_wardriver_identify.py` passed every
+check (t23 with one declared skip: its Mode-row walk needs a second console),
+and `t26_mitm_menus.py` **32 passed / 4 failed** - all four are the
+`html-rickroll.mitm` fixture, which is not in this repository.
 `t45_patch_overlay.py` **35 passed / 0 failed / 1 declared skip** and
-`t48_tasks.py` **21 passed / 0 failed**. The MITM transport barrier was measured
+`t48_tasks.py` **21 passed / 0 failed** stay green. The MITM transport barrier was measured
 on the 2026-11-08 build, whose engine code is unchanged: a DNS-only payload arms
 it, AAAA/SVCB/HTTPS come back empty, UDP/443 is answered with ICMP, TCP/853 never
 opens, and a poisoned victim was back online 6 s after `mitm stop`

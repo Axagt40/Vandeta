@@ -57,6 +57,7 @@ modes when asked, so a mistyped command cannot leave the board unusable.
 |---------|--------------|
 | `subghz rx <seconds>` | Listens for a timed window on the CC1101. |
 | `subghz wardriver capture\|list\|identify\|identifyall\|replay\|status\|selftest` | Records, browses, decodes and replays wardriver captures headlessly. |
+| `subghz wardriver mode [hop\|fasthop\|wide]` | Bare form reports the capture mode; the argument selects Hop, Fast hop or Wideband and saves it. |
 | `nrfcap` / `nrf` `info\|init\|promisc\|channel\|rate\|power\|freqrange\|scan\|capture\|capch\|lock\|rgb\|multifreq\|profile\|profiles\|repeat\|list\|replay\|save\|load\|analyze` | The nRF24 side: pseudo-promiscuous capture, channel runs, profiles, replay, packet analysis. |
 | `rfbits` | The sub-GHz bit editor behind `RF > RF Suite > Bit Editor`. |
 | `ir uni list\|buttons\|send` | Universal Remote: categories, button names, a code sweep. |

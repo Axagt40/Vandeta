@@ -1,5 +1,6 @@
 #include "tunables.h"
 
+#include "modules/rf/rf_wardriver.h" // the mode-switch defaults below
 #include <globals.h>
 
 // Storage owned by this table. Entries flagged TUNE_BACKED point into
@@ -18,6 +19,10 @@ static int32_t g_mitm_fallback_delay_ms = 10000;
 static int32_t g_mitm_arp_restore_on_stop = 1;
 static int32_t g_portal_hold_ms = 600000;
 static int32_t g_scan_chan_dwell_ms = 250;
+static int32_t g_ward_hop_ms_slow = WR_HOP_MS_SLOW;
+static int32_t g_ward_hop_ms_fast = WR_HOP_MS_FAST;
+static int32_t g_ward_wide_cap_ms = WR_WIDE_HARD_CAP_MS;
+static int32_t g_ward_wide_squelch_dbm = WR_WIDE_SQUELCH_DBM;
 
 // Task 1, phase 2: variant selections. These are indices, not magnitudes, and
 // every default is the behaviour phase 1 shipped, so a flash changes nothing.
@@ -30,6 +35,8 @@ static int32_t g_nrf_capture_variant = 0; // single
 static const char *const g_rf_scan_variants[] = {"seq", "park", "adaptive", nullptr};
 static const char *const g_ir_repeat_variants[] = {"fixed", "adaptive_len", "burst", nullptr};
 static const char *const g_nrf_capture_variants[] = {"single", "hop", "locked", nullptr};
+// Wardriver capture mode (task 7): the value is the persisted rfWardriverMode.
+static const char *const g_ward_modes[] = {"hop", "fasthop", "wide", nullptr};
 
 static tune_entry g_tunes[] = {
     // RF scan / wardriver front end.
@@ -55,7 +62,19 @@ static tune_entry g_tunes[] = {
     // was retired with the move, and fromFile() migrates a config that still
     // carries it (seconds -> ms) so there is one source, not two.
     {"ward.dup_window_ms", TUNE_U32, &bruceConfig.rfWardriverDedupeMs, 0, 600000, 30000, TUNE_LIVE | TUNE_BACKED},
-    {"ward.band_hop", TUNE_BOOL, &bruceConfig.rfWardriverHop, 0, 1, 0, TUNE_LIVE | TUNE_BACKED},
+    // The old `ward.band_hop` boolean became an index with three choices; it is
+    // the same one setting (rfWardriverMode), not a boolean beside it.
+    {
+        "ward.mode", TUNE_U8, &bruceConfig.rfWardriverMode, 0, 2, 0, TUNE_LIVE | TUNE_BACKED | TUNE_ENUM,
+        g_ward_modes
+    },
+    // Task 7's dwell/cap/squelch. The defaults are the constants the mode switch
+    // replaced; rf_wardriver.cpp reads them by name, so a `tune set` applies to
+    // the next hop or the next squelch poll with no rebuild.
+    {"ward.hop_ms_slow", TUNE_U32, &g_ward_hop_ms_slow, 50, 5000, WR_HOP_MS_SLOW, TUNE_LIVE},
+    {"ward.hop_ms_fast", TUNE_U32, &g_ward_hop_ms_fast, 20, 5000, WR_HOP_MS_FAST, TUNE_LIVE},
+    {"ward.wide_cap_ms", TUNE_U32, &g_ward_wide_cap_ms, 100, 10000, WR_WIDE_HARD_CAP_MS, TUNE_LIVE},
+    {"ward.wide_squelch_dbm", TUNE_I32, &g_ward_wide_squelch_dbm, -120, 0, WR_WIDE_SQUELCH_DBM, TUNE_LIVE},
 
     // nRF24 capture/replay.
     // Wired: nrf_commands.cpp's capture uses it when no window is typed.

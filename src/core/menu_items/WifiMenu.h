@@ -13,6 +13,12 @@ public:
     const String& themePath() override { return bruceConfig.theme.paths.wifi; }
 
 private:
+    // One page per purpose. The flat WiFi list had grown to 22 rows - more
+    // than three screens on the T-Embed - so the tools are grouped and the
+    // front page stays a single glance. Every tool keeps its own name.
+    void attacksMenu(void);
+    void monitorMenu(void);
+    void remoteMenu(void);
     void configMenu(void);
 };
 

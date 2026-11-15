@@ -11,20 +11,15 @@
 // these act on every connectable advertiser in range for a fixed window.
 void BleAttacksMenu();
 
-// Repeated connect/disconnect against every connectable advertiser found by a
-// short scan. This is a connection-slot / radio stress test, not a stealth
-// attack: the target sees a burst of connection attempts.
-void BleConnectionStorm();
-
 // WiFi Beacon SPAM for BLE: rotating fake advertising names from funny,
 // rickroll, random or a custom base name. It fills nearby scanners with
 // devices that do not exist; it does not target a vendor popup.
 void BleFlood();
 
-// Connect to each nearby connectable device and request security, then drop the
-// link, repeatedly. On devices that accept pairing this produces a stream of
-// pairing prompts; devices that reject it simply log failed attempts.
-void BlePairingStorm();
+// The Pairing Storm page behind that row has Start Attack plus a mode toggle:
+// connect + disconnect, or connect + request security + disconnect. Pairing
+// mode reuses auth already on the board (NimBLE bonds, or /BruceBLE/auth_*.key
+// files from Auth Capture) so known devices use their stored LTK.
 
 // Pair once with a peripheral in pairing mode, write the bond material (local
 // address, peer address, LTK/IRK/CSRK, EDIV/RAND) to /BruceBLE/auth_*.key on
