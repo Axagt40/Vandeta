@@ -435,8 +435,8 @@ Questions, builds and feedback: **Discord** — <https://discord.gg/dhPXgVerqD>
 
 ## :white_check_mark: Verified on the board
 
-The 1.4 image (`nogit-20261115-150355`) reports `vandeta 1.4` in `info`.
-On it, `t50_ble_attacks.py` scored **31 passed / 1 failed / 0 skipped**,
+The 1.4 image (`nogit-20261115-163837`) reports `vandeta 1.4` in `info`.
+On it, `t50_ble_attacks.py` scored **32 passed / 0 failed / 0 skipped**,
 `t23_wardriver_regressions.py` and `t22_wardriver_identify.py` passed every
 check (t23 with one declared skip: its Mode-row walk needs a second console),
 and `t26_mitm_menus.py` **32 passed / 4 failed** - all four are the

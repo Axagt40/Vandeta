@@ -42,6 +42,42 @@ public:
         drawStatusBar();
     }
 
+    // Launcher tiles: reuse this item's vector art at tile size. drawIcon() is
+    // written against iconCenterX/iconCenterY and its clear area, so relocating
+    // those (and, on a selected tile, inverting the palette) is enough to paint
+    // the same art inside a tile without touching every menu class.
+    void drawIconIn(int cx, int cy, int box, float scale, bool inverted = false) {
+        if (rotation != bruceConfigPins.rotation) resetCoordinates();
+
+        const int savedCenterX = iconCenterX, savedCenterY = iconCenterY;
+        const int savedAreaX = iconAreaX, savedAreaY = iconAreaY;
+        const int savedAreaW = iconAreaW, savedAreaH = iconAreaH;
+
+        iconCenterX = cx;
+        iconCenterY = cy;
+        iconAreaH = box;
+        iconAreaW = box;
+        iconAreaX = cx - box / 2;
+        iconAreaY = cy - box / 2;
+
+        const auto savedPri = bruceConfig.priColor;
+        const auto savedBg = bruceConfig.bgColor;
+        if (inverted) { // selected plate is priColor, so the art has to draw in bgColor
+            bruceConfig.priColor = savedBg;
+            bruceConfig.bgColor = savedPri;
+        }
+        drawIcon(scale);
+        bruceConfig.priColor = savedPri;
+        bruceConfig.bgColor = savedBg;
+
+        iconCenterX = savedCenterX;
+        iconCenterY = savedCenterY;
+        iconAreaX = savedAreaX;
+        iconAreaY = savedAreaY;
+        iconAreaW = savedAreaW;
+        iconAreaH = savedAreaH;
+    }
+
     void drawArrows(float scale = 1) {
         tft.fillRect(arrowAreaX, iconAreaY, arrowAreaW, iconAreaH, bruceConfig.bgColor);
         tft.fillRect(
