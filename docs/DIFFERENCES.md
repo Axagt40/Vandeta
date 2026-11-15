@@ -9,9 +9,10 @@ build does about it is column three.
 | Host control | WebUI and Telnet over WiFi; no shell over the cable | USB console with a line editor, history, Tab completion: `ui`/`move`/`press`, `ui watch`, `file`, `log`, `errors`, `livepatch`, `liveboot`, `display dump` |
 | Infrared | TV-B-Gone, receiver, custom IR codes | Plus Universal Remote (2,858 codes from the Flipper libraries), IR Suite 1.1 (brand / remote / family sweeps, save as `.ir`, `.txt` payload runs, DLNA/Cast mirroring), hand-written RCA and NEC42 encoders, 12 brand AC remotes |
 | nRF24 | Jammer, 2.4 GHz spectrum | Plus pseudo-promiscuous raw capture (CRC off, auto-ack off), hop 0-125, RGB remote presets, multi-frequency detect, packet analysis, verbatim replay, JS bindings, PSRAM capture buffers |
+| Wardriver | Band-hop on/off | Three modes - Hop 400 ms, Fast hop 120 ms, Wideband parked with an 812.5 kHz filter and squelch - and a capture the receiver lost pulses through is deleted and counted, not saved as a good one |
 | Packet monitor | One radio per screen | One dashboard fed by WiFi, BLE, nRF24 and Sub-GHz at once, with filters, per-radio counters and CSV/PCAP export |
 | MITM | ARP/DNS spoofing, Evil Portal | Plus a whole attack from the keypad with ARP restore on stop, a live event feed, plaintext HTTP on any port, HTTPS on 443 with a self-signed endpoint, and suppression of QUIC, DoT, IPv6 and AAAA/SVCB/HTTPS |
-| Developer loop | Rebuild and reflash | `tune` (15 range-checked values), `patch` (three variant tables plus an A/B code overlay), `devflash`, and a per-build ELF, map, app-only image and build ID |
+| Developer loop | Rebuild and reflash | `tune` (19 range-checked values), `patch` (three variant tables plus an A/B code overlay), `devflash`, and a per-build ELF, map, app-only image and build ID |
 | Board support | 18 devices | One: the LilyGo T-Embed CC1101 Plus |
 | Deliberately not | - | No new radios or protocols: the CC1101 and nRF24 cannot demodulate 802.11. No BLE relay proxy. No PEAP termination. No microphone on this board. No account, cloud or telemetry. |
 

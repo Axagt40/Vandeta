@@ -10,6 +10,7 @@
 #include "rf_send.h"             // readSubFile / txSubFile (raw replay)
 #include "rf_utils.h"
 #include <driver/rmt_rx.h>
+#include <esp_timer.h> // ISR timestamp: the only witness for a missed RMT window
 #include <globals.h>
 #include <math.h>
 
@@ -45,7 +46,11 @@
 // past it is refused with a message instead of aborting the firmware on a failed
 // allocation (std::vector growth on this target has no exceptions to catch).
 #define WR_MAX_TIMINGS 8192
-#define WR_HOP_MS 400 // dwell per band when hopping (a keyfob frame is 50-300 ms)
+// Step 0: a read that arrives later than this while a burst is still in flight
+// means the RMT buffer filled and stopped capturing in between - the card was
+// written, the radio was not listening. The pulses in that window are in no read
+// at all, so the capture is chopped and must not be kept.
+#define WR_OVERLAP_US 4000
 
 // The bands worth covering on a walk: EU/Asia 433 and 868, US 315 and 915.
 // A capture records the band it was heard on, so replays go back out on it.
@@ -56,10 +61,16 @@ struct WardriverStats {
     uint32_t saved = 0;
     uint32_t duplicates = 0;
     uint32_t noise = 0;
+    uint16_t overruns = 0; // bursts deleted because the receiver lost pulses
     uint16_t lastPulses = 0;
     uint32_t lastDurationMs = 0;
     String lastFile;
 };
+
+// Set by the RMT ISR: when the done event fired, and how many events the queue
+// refused. Both are witnesses for the loss the old loop could not see.
+static volatile uint32_t wrRxEventUs = 0;
+static volatile uint32_t wrRxDropped = 0;
 
 static uint32_t wrHashes[WR_DEDUPE_SLOTS];
 static uint32_t wrHashTimes[WR_DEDUPE_SLOTS];
@@ -142,6 +153,7 @@ static bool wrWriteFile(FS *fs, const String &path, const rmt_symbol_word_t *s, 
     );
     bool ok = wrWrote(f, line, len);
     ok = wrWrote(f, "Preset: 0\nProtocol: RAW\n", 24) && ok;
+    if (ok && bruceConfig.rfWardriverMode == WR_MODE_WIDEBAND) ok = wrWrote(f, "Wide: 1\n", 8);
 
     // Same RAW_Data layout the recorder and Sub-GHz sender already agree on:
     // positive = carrier on, negative = carrier off, max 512 values per line.
@@ -201,13 +213,24 @@ static bool wrSaveBurst(FS *fs, const rmt_symbol_word_t *s, size_t n, WardriverS
 // Task 1, phase 3: patchable slot ward_capture_burst. It is the burst filter
 // that decides what a wardriver run keeps, so a payload can change capture
 // behaviour without a reflash.
-__attribute__((noinline)) static bool ward_capture_burst(uint32_t pulses, uint32_t shortPulses) {
-    return ((bool (*)(uint32_t, uint32_t))vndPatchTarget(VND_SLOT_WARD_CAPTURE_BURST))(
-        pulses, shortPulses
+__attribute__((noinline)) static bool
+ward_capture_burst(uint32_t pulses, uint32_t shortPulses, uint32_t durationMs) {
+    return ((bool (*)(uint32_t, uint32_t, uint32_t))vndPatchTarget(VND_SLOT_WARD_CAPTURE_BURST))(
+        pulses, shortPulses, durationMs
     );
 }
 
-__attribute__((noinline, used)) bool ward_capture_burst_body(uint32_t pulses, uint32_t shortPulses) {
+__attribute__((noinline, used)) bool
+ward_capture_burst_body(uint32_t pulses, uint32_t shortPulses, uint32_t durationMs) {
+    if (bruceConfig.rfWardriverMode == WR_MODE_WIDEBAND) {
+        // Wideband is looser on purpose: the 812.5 kHz filter stretches quiet
+        // edges into strings of short pulses, so a real remote carries a share of
+        // sub-80 us edges that a narrow capture would have thrown out. Ten ms of
+        // carrier is still far more than the slicer produces on its own.
+        if (durationMs < 10) return false;
+        if (pulses < (uint32_t)(bruceConfig.rfWardriverMinPulses / 2)) return false;
+        return (uint64_t)shortPulses * 8ULL < (uint64_t)pulses * 5ULL; // under 62.5 %
+    }
     if (pulses < bruceConfig.rfWardriverMinPulses) return false;
     return (uint64_t)shortPulses * 4ULL < (uint64_t)pulses;
 }
@@ -223,7 +246,8 @@ struct WrStream {
     uint32_t symbolCount = 0;
     uint16_t valuesOnLine = 0;
     bool wroteAny = false;
-    bool failed = false; // a short write: card full or pulled
+    bool failed = false;  // a short write: card full or pulled
+    bool overran = false; // the receiver lost pulses in the middle of this burst
     bool active = false;
 };
 
@@ -244,6 +268,10 @@ static bool wrStreamBeginAt(FS *fs, float freqMhz, const String &path) {
     );
     bool hdr = wrWrote(wrStream.f, line, len);
     hdr = wrWrote(wrStream.f, "Preset: 0\nProtocol: RAW\n", 24) && hdr;
+    // Wideband parks on a centre the carrier is only near, so the file says so;
+    // wrReadDurations() ignores keys it does not know and replay stays on the
+    // recorded centre, which is the best a raw capture can promise.
+    if (hdr && bruceConfig.rfWardriverMode == WR_MODE_WIDEBAND) hdr = wrWrote(wrStream.f, "Wide: 1\n", 8);
     if (!hdr) { // card full / pulled: do not keep a header-less file
         wrStream.f.close();
         fs->remove(path);
@@ -260,6 +288,7 @@ static bool wrStreamBeginAt(FS *fs, float freqMhz, const String &path) {
     wrStream.valuesOnLine = 0;
     wrStream.wroteAny = false;
     wrStream.failed = false;
+    wrStream.overran = false;
     wrStream.active = true;
     return true;
 }
@@ -303,7 +332,10 @@ static bool wrStreamEnd(WardriverStats &st, bool keep) {
     bool ok = !wrStream.failed;
     if (wrStream.wroteAny) ok = wrWrote(wrStream.f, "\n", 1) && ok;
     wrStream.f.close();
-    keep = keep && ok;
+    // An overrun is a hole in the pulse train: never keep it, whatever the caller
+    // asked for. The count is kept by wrCloseBurst() so it is reported apart
+    // from noise.
+    keep = keep && ok && !wrStream.overran;
     if (!keep) {
         if (wrStream.fs != nullptr) wrStream.fs->remove(wrStream.path);
     } else {
@@ -317,14 +349,89 @@ static bool wrStreamEnd(WardriverStats &st, bool keep) {
     return keep;
 }
 
-static void wrDraw(bool full, const WardriverStats &st, bool armed, float freqMhz, bool hopping) {
+// Close the burst that is being written, deciding once whether it is a capture.
+// `overran` is step 0: a gap in the pulse train is not a signal, so the file is
+// deleted and counted apart from noise.
+static void wrCloseBurst(WardriverStats &st) {
+    if (!wrStream.active) return;
+    const bool overran = wrStream.overran;
+    const uint32_t pulses = wrStream.pulses;
+    const uint32_t shortPulses = wrStream.shortPulses;
+    const uint32_t durationMs = (uint32_t)(wrStream.totalNs / 1000000ULL);
+    const uint32_t h = wrHashFinish(wrStream.hash, wrStream.symbolCount);
+
+    if (!ward_capture_burst(pulses, shortPulses, durationMs)) {
+        wrStreamEnd(st, false);
+        st.noise++;
+    } else if (overran) {
+        wrStreamEnd(st, false);
+        st.overruns++;
+    } else if (wrSeenRecently(h)) {
+        wrStreamEnd(st, false);
+        st.duplicates++;
+    } else if (wrStreamEnd(st, true)) {
+        wrRememberHash(h);
+        st.saved++;
+    } else {
+        st.noise++; // a short write: the card refused, not the signal
+    }
+}
+
+// Mode helpers (task 7). The suffix is the same slot the old " HOP" tag used.
+static const char *wrModeTag(uint8_t mode) {
+    switch (mode) {
+        case WR_MODE_FAST_HOP: return " FASTHOP";
+        case WR_MODE_WIDEBAND: return " WIDE";
+        default: return " HOP";
+    }
+}
+
+static const char *wrModeLabel(uint8_t mode) {
+    switch (mode) {
+        case WR_MODE_FAST_HOP: return "Fast hop";
+        case WR_MODE_WIDEBAND: return "Wideband";
+        default: return "Hop";
+    }
+}
+
+const char *rfWardriverModeName(uint8_t mode) {
+    switch (mode) {
+        case WR_MODE_FAST_HOP: return "fasthop";
+        case WR_MODE_WIDEBAND: return "wide";
+        default: return "hop";
+    }
+}
+
+static uint32_t wrDwellMs(bool fast) {
+    return (uint32_t)tuneGetByName(fast ? "ward.hop_ms_fast" : "ward.hop_ms_slow", nullptr);
+}
+
+// PKTSTATUS (0x38) bit 6 is CS ("carrier sense"), high while the receiver sees a
+// signal above its threshold. Register access goes through the shared-SPI lock
+// like every other radio read on this board.
+static bool wrCarrierSense() {
+    rf_spi_lock();
+    uint8_t status = ELECHOUSE_cc1101.SpiReadReg(CC1101_PKTSTATUS);
+    rf_spi_unlock();
+    return (status & 0x40) != 0;
+}
+
+static void wrDraw(bool full, const WardriverStats &st, bool listening, float freqMhz, const char *modeTag) {
+    // No String on this path: it redraws once a second for the whole walk, and
+    // a growing String per field is exactly the heap churn this loop avoids.
+    char line[64];
     drawMainBorder(full);
     tft.setTextSize(1);
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
     tft.setCursor(10, 27);
     tft.print("SUBGHz WARDRIVER");
     tft.setTextColor(bruceConfig.secColor, bruceConfig.bgColor);
-    tft.drawRightString(String(freqMhz, 2) + " MHz" + (hopping ? " HOP" : ""), tftWidth - 10, 27, 1);
+    // dtostrf, not "%.2f": this image is linked without full printf float and a
+    // fixed-point format is also the only honest way to show a nominal centre.
+    char freqText[12];
+    dtostrf((double)freqMhz, 0, 2, freqText);
+    snprintf(line, sizeof(line), "%s MHz%s", freqText, modeTag);
+    tft.drawRightString(line, tftWidth - 10, 27, 1);
     tft.drawFastHLine(10, 38, tftWidth - 20, bruceConfig.priColor);
 
     // The counters are the point of the screen: big, and only redrawn when the
@@ -334,28 +441,33 @@ static void wrDraw(bool full, const WardriverStats &st, bool armed, float freqMh
     tft.setCursor(12, 46);
     tft.print("SIGNALS ");
     tft.setTextColor(bruceConfig.secColor, bruceConfig.bgColor);
-    tft.print(st.saved);
+    snprintf(line, sizeof(line), "%u", (unsigned)st.saved);
+    tft.print(line);
 
     tft.setTextSize(1);
     tft.setTextColor(bruceConfig.secColor, bruceConfig.bgColor);
     tft.setCursor(12, 70);
-    tft.print("duplicates skipped " + String(st.duplicates));
+    snprintf(line, sizeof(line), "duplicates skipped %u", (unsigned)st.duplicates);
+    tft.print(line);
     tft.setCursor(12, 82);
-    tft.print("noise dropped     " + String(st.noise));
+    snprintf(line, sizeof(line), "noise %u   chopped %u", (unsigned)st.noise, (unsigned)st.overruns);
+    tft.print(line);
 
     tft.drawFastHLine(10, 96, tftWidth - 20, bruceConfig.secColor);
     tft.setCursor(10, 100);
-    if (st.saved) {
-        tft.print("last: " + String(st.lastPulses) + " pulses, " + String(st.lastDurationMs) + " ms");
-    } else {
-        tft.print("last: waiting for a signal");
-    }
+    if (st.saved)
+        snprintf(
+            line, sizeof(line), "last: %u pulses, %u ms", (unsigned)st.lastPulses, (unsigned)st.lastDurationMs
+        );
+    else snprintf(line, sizeof(line), "last: waiting for a signal");
+    tft.print(line);
     tft.setCursor(10, 112);
-    tft.print(armed ? "listening..." : "radio stopped");
+    tft.print(listening ? "listening..." : "radio stopped");
 
     tft.drawFastHLine(10, tftHeight - 24, tftWidth - 20, bruceConfig.priColor);
     tft.setCursor(10, tftHeight - 21);
-    tft.print(String(st.lastFile.length() ? st.lastFile : String(RF_WARDRIVER_DIR)).substring(0, 50));
+    snprintf(line, sizeof(line), "%.50s", st.lastFile.length() ? st.lastFile.c_str() : RF_WARDRIVER_DIR);
+    tft.print(line);
     tft.setCursor(10, tftHeight - 10);
     tft.print("SEL stop    BACK exit");
 }
@@ -723,6 +835,39 @@ String rfWardriverSelfTest() {
     }
     fs->remove(streamPath);
 
+    // Step 0: a burst the receiver lost pulses through is deleted and counted as
+    // an overrun, never handed to the browser as a good capture.
+    bool overrunOk = false;
+    String overrunPath = String(dir) + "/o.sub";
+    if (wrStreamBeginAt(fs, 433.92f, overrunPath)) {
+        wrStream.pulses = 40;
+        wrStream.shortPulses = 0;
+        wrStream.totalNs = 30000000ULL;
+        wrStream.symbolCount = 8;
+        wrStreamAppend(big, 8);
+        wrStream.overran = true;
+        WardriverStats ost;
+        wrCloseBurst(ost);
+        overrunOk = (ost.overruns == 1 && ost.saved == 0 && !fs->exists(overrunPath));
+    }
+    fs->remove(overrunPath);
+
+    // Wideband stamps "Wide: 1" in the header (the centre is nominal); every
+    // other mode leaves it out, and wrReadDurations() ignores it either way.
+    bool headerOk = false;
+    String headerPath = String(dir) + "/h.sub";
+    if (wrWriteFile(fs, headerPath, big, 8, 433.92f)) {
+        String all;
+        File f = fs->open(headerPath, FILE_READ);
+        if (f) {
+            while (f.available()) all += (char)f.read();
+            f.close();
+        }
+        bool wideMode = (bruceConfig.rfWardriverMode == WR_MODE_WIDEBAND);
+        headerOk = wideMode ? (all.indexOf("Wide: 1") >= 0) : (all.indexOf("Wide:") < 0);
+    }
+    fs->remove(headerPath);
+
     // Leave nothing behind on the card.
     fs->remove(String(dir) + "/a0.sub");
     fs->remove(String(dir) + "/a1.sub");
@@ -731,13 +876,11 @@ String rfWardriverSelfTest() {
 
     // Slicer hash (mostly sub-50 µs edges) must not be saved as a remote, while
     // a normal OOK burst of the same length must be.
-    bool noiseOk = !ward_capture_burst(1000, 900) && ward_capture_burst(60, 2);
-
-    bool ok = (saved == 2 && dup == 1 && files == 2 && streamOk && noiseOk);
+    bool noiseOk = !ward_capture_burst(1000, 900, 40) && ward_capture_burst(60, 2, 40);    bool ok = (saved == 2 && dup == 1 && files == 2 && streamOk && noiseOk && overrunOk && headerOk);
     String out = String("saved=") + saved + " duplicates=" + dup + " files=" + files +
                  " stream=" + (streamOk ? "ok" : "FAIL") + " noise=" + (noiseOk ? "ok" : "FAIL") +
-                 " hash=0x" + String(wrHashBurst(a, 12), HEX) +
-                 (ok ? " PASS" : " FAIL");
+                 " overrun=" + (overrunOk ? "ok" : "FAIL") + " header=" + (headerOk ? "ok" : "FAIL") +
+                 " hash=0x" + String(wrHashBurst(a, 12), HEX) + (ok ? " PASS" : " FAIL");
     Serial.println("[wardriver selftest] " + out);
     return out;
 }
@@ -815,6 +958,10 @@ String rfWardriverIdentifyAllFiles() {
 
 void rfWardriverMenu() {
     while (true) {
+        // The serial console sets returnToMenu on every command it runs; a page
+        // it just opened must not close on the next one. BACK and the Back row
+        // still leave through returnToMenu / the loop exit.
+        returnToMenu = false;
         options.clear();
         options = {
             {"Start capture",
@@ -849,13 +996,19 @@ void rfWardriverMenu() {
 
 void rfWardriverConfigMenu() {
     // Keep the cursor where it is: rebuilding the menu without an index sent it
-    // back to the top after every toggle (turning hop bands on jumped away from
+    // back to the top after every change (turning hop bands on jumped away from
     // the row that was just changed, so it looked like the setting was lost).
     int selected = 0;
     while (true) {
+        returnToMenu = false; // same console-open rule as rfWardriverMenu()
+        const uint8_t mode = bruceConfig.rfWardriverMode > WR_MODE_WIDEBAND ? WR_MODE_HOP
+                                                                           : bruceConfig.rfWardriverMode;
+        const bool wide = (mode == WR_MODE_WIDEBAND);
         options.clear();
-        options = {
-            {String("Frequency: ") + String(bruceConfig.rfWardriverFreq, 2) + " MHz",
+        // In wideband the saved frequency is the centre of an 812.5 kHz window,
+        // not a carrier the receiver is parked on, so the row says so.
+        options.push_back(
+            {String(wide ? "Centre: " : "Frequency: ") + String(bruceConfig.rfWardriverFreq, 2) + " MHz",
              []() {
                  options.clear();
                  const int n = sizeof(subghz_frequency_list) / sizeof(subghz_frequency_list[0]);
@@ -868,27 +1021,48 @@ void rfWardriverConfigMenu() {
                           fabsf(subghz_frequency_list[i] - bruceConfig.rfWardriverFreq) < 0.01f}
                      );
                  }
-                 loopOptions(options, MENU_TYPE_SUBMENU, "Wardriver Frequency", cur);
-             }                                                                                       },
+                 loopOptions(options, MENU_TYPE_SUBMENU, "Wardriver Centre", cur);
+             }                                                                                       }
+        );
+        options.push_back(
             {String("Duplicate window: ") + String(bruceConfig.rfWardriverDedupeMs) + " ms",
              []() {
                  String v = num_keyboard(String(bruceConfig.rfWardriverDedupeMs), 6, "Dedupe window ms (0=off):");
                  if (v.length() > 0 && v != "\x1B") bruceConfig.setWardriverDedupeMs((uint32_t)v.toInt());
-             }                                                                                       },
+             }                                                                                       }
+        );
+        // The pulse floor is a narrow-capture idea: a wide filter produces many
+        // more edges per burst, so leaving the old row visible would only
+        // mislead. Hidden in wideband (stated on the row above), not greyed.
+        if (!wide) options.push_back(
             {String("Min pulses: ") + String(bruceConfig.rfWardriverMinPulses),
              []() {
                  String v = num_keyboard(String(bruceConfig.rfWardriverMinPulses), 2, "Min pulses per signal:");
                  if (v.length() > 0 && v != "\x1B") bruceConfig.setWardriverMinPulses((uint8_t)v.toInt());
-             }                                                                                       },
-            {String("Hop bands: ") + (bruceConfig.rfWardriverHop ? "433/315/868/915" : "OFF (fixed)"),
-             []() { bruceConfig.setWardriverHop(!bruceConfig.rfWardriverHop); }},
-            {"Save folder", []() { displayInfo(RF_WARDRIVER_DIR, true); }},
-            {"Back",        []() {}},
-        };
+             }                                                                                       }
+        );
+        // One row, three states, in the task's order, wrapping. A cycling row
+        // rather than a submenu: the old boolean sat here and the cursor already
+        // survives the rebuild.
+        options.push_back(
+            {String("Mode: ") + wrModeLabel(mode),
+             []() { bruceConfig.setWardriverMode((uint8_t)((bruceConfig.rfWardriverMode + 1) % 3)); }}
+        );
+        options.push_back({"Save folder", []() { displayInfo(RF_WARDRIVER_DIR, true); }});
+        options.push_back({"Back", []() {}});
 
+        // Hiding a row can leave the cursor past the end after a mode change.
+        if (selected >= (int)options.size()) selected = (int)options.size() - 1;
         int sel = loopOptions(options, MENU_TYPE_SUBMENU, "Wardriver Config", selected);
         if (sel == -1 || sel == (int)options.size() - 1) return;
         selected = sel;
+        if (mode != bruceConfig.rfWardriverMode) {
+            // The mode change adds or drops the Min pulses row, so every row
+            // below it moves. Keeping the old index would put the cursor on
+            // "Save folder" (or Back) right after the mode was changed - keep it
+            // on the Mode row instead, which is the row the user just used.
+            selected = (bruceConfig.rfWardriverMode == WR_MODE_WIDEBAND) ? 2 : 3;
+        }
     }
 }
 
@@ -918,6 +1092,15 @@ void rfWardriverRun(int maxSeconds) {
     }
     WardriverStats st;
 
+    // Three modes, one loop (task 7). A config value outside the enum can only
+    // come from a hand edit that slipped past fromFile(); treat it as Hop rather
+    // than run a loop whose mode has no branch.
+    const uint8_t mode =
+        bruceConfig.rfWardriverMode > WR_MODE_WIDEBAND ? WR_MODE_HOP : bruceConfig.rfWardriverMode;
+    const bool wide = (mode == WR_MODE_WIDEBAND);
+    const bool fastHop = (mode == WR_MODE_FAST_HOP);
+    const bool hopping = !wide;
+
     // setup_rf_rx() also brings the module up (initRfModule("rx", freq)); it
     // reads the frequency from bruceConfigPins, so point that at the wardriver
     // setting first and restore it afterwards.
@@ -937,7 +1120,10 @@ void rfWardriverRun(int maxSeconds) {
     }
     setMHZ(bruceConfig.rfWardriverFreq);
 
-    QueueHandle_t queue = xQueueCreate(1, sizeof(rmt_rx_done_event_data_t));
+    // Depth 4, not 1: only one receive is ever pending, but a done event that
+    // arrives while the loop is still on the previous one must still be seen.
+    // A refused send is one of the two overrun witnesses.
+    QueueHandle_t queue = xQueueCreate(4, sizeof(rmt_rx_done_event_data_t));
     if (queue == nullptr) {
         rmt_del_channel(rxCh);
         bruceConfigPins.rfFreq = previousFreq;
@@ -946,18 +1132,32 @@ void rfWardriverRun(int maxSeconds) {
         return;
     }
 
+    // Wideband: one passband for the whole run. 812.5 kHz is the widest the
+    // CC1101 offers and the only setting that catches a remote whose carrier sits
+    // hundreds of kHz off the saved centre. It is restored below, so a later
+    // scan/analyzer is not left with the wide window (and its noise) by a
+    // wardriver run.
+    if (wide) rfSetRxBW(WR_WIDE_BW_KHZ);
+
     rmt_rx_event_callbacks_t cbs = {};
     cbs.on_recv_done = [](rmt_channel_handle_t, const rmt_rx_done_event_data_t *edata, void *user) {
         QueueHandle_t q = (QueueHandle_t)user;
+        // Timestamp in the ISR: the loop needs to know how long ago the RMT
+        // buffer filled, because that gap is exactly what it failed to capture.
+        wrRxEventUs = (uint32_t)esp_timer_get_time();
         BaseType_t wake = pdFALSE;
-        xQueueSendFromISR(q, edata, &wake);
+        // Not `++`: a volatile increment is deprecated in this C++ and the
+        // output is a warning in a file that must stay warning-free.
+        if (xQueueSendFromISR(q, edata, &wake) != pdPASS) wrRxDropped = wrRxDropped + 1;
         return wake == pdTRUE;
     };
     rmt_rx_register_event_callbacks(rxCh, &cbs, queue);
     rmt_enable(rxCh);
 
     rmt_receive_config_t rxcfg = {};
-    rxcfg.signal_range_min_ns = WR_PULSE_MIN_NS;
+    // Wideband ignores edges under 80 us: the wide filter shreds quiet edges
+    // into slicer chatter that a 2 us floor would spend the whole buffer on.
+    rxcfg.signal_range_min_ns = wide ? WR_WIDE_MIN_PULSE_NS : WR_PULSE_MIN_NS;
     rxcfg.signal_range_max_ns = WR_IDLE_MAX_NS;
 
     // Two buffers: the radio is re-armed on the idle one *before* the card is
@@ -971,22 +1171,45 @@ void rfWardriverRun(int maxSeconds) {
 
     bool full = true;
     bool running = true;
+    bool rxFailed = false;
     uint32_t lastDraw = 0;
     uint32_t startedMs = millis();
     uint32_t lastHop = millis();
+    uint32_t dropSeen = wrRxDropped;
+    uint32_t armedSinceMs = 0;
+    uint32_t lastSquelchPoll = 0;
+    bool armed = false;
+    bool rxEnabled = true; // rmt_enable() state, toggled by the wideband idle timeout
 
-    // Hop mode starts on the configured band and then walks the list; fixed
-    // mode just stays where the settings say.
+    // Hop and fast hop start on the configured band and then walk the list;
+    // wideband parks on that frequency and stays there for the whole run.
     int bandIdx = 0;
     for (int i = 0; i < WR_BAND_COUNT; i++) {
         if (fabsf(WR_BANDS[i] - bruceConfig.rfWardriverFreq) < 0.01f) bandIdx = i;
     }
-    float curFreq = bruceConfig.rfWardriverHop ? WR_BANDS[bandIdx] : bruceConfig.rfWardriverFreq;
+    float curFreq = hopping ? WR_BANDS[bandIdx] : bruceConfig.rfWardriverFreq;
+
+    // Arm on the idle buffer and flip: the pulses that arrive while the read we
+    // are about to process is written to the card land in the other buffer.
+    auto wrArm = [&]() -> bool {
+        if (!rxEnabled) {
+            if (rmt_enable(rxCh) != ESP_OK) return false;
+            rxEnabled = true;
+        }
+        if (rmt_receive(rxCh, symbols[bufIdx], rxBytes, &rxcfg) != ESP_OK) return false;
+        bufIdx ^= 1;
+        // The cap is measured from when the squelch opened, not from the last
+        // re-arm: otherwise a continuous burst would reset its own bound on
+        // every read and could grow without limit.
+        if (!armed) armedSinceMs = millis();
+        armed = true;
+        return true;
+    };
 
     // The receive result was ignored before: if the channel refused to arm, the
-    // screen said "listening..." forever while nothing was captured.
-    bool rxFailed = (rmt_receive(rxCh, symbols[bufIdx], rxBytes, &rxcfg) != ESP_OK);
-    if (rxFailed) {
+    // screen said "listening..." forever while nothing was captured. Wideband
+    // starts disarmed on purpose (it waits for the squelch).
+    if (!wide && !wrArm()) {
         rmt_disable(rxCh);
         rmt_del_channel(rxCh);
         vQueueDelete(queue);
@@ -1002,37 +1225,77 @@ void rfWardriverRun(int maxSeconds) {
     delay(150);
 
     while (running) {
-        if (xQueueReceive(queue, &rxData, pdMS_TO_TICKS(20)) == pdPASS) {
+        bool got = false;
+        if (armed) {
+            got = (xQueueReceive(queue, &rxData, pdMS_TO_TICKS(20)) == pdPASS);
+        } else if (wide) {
+            // Wideband idles with the receiver disarmed: an 812.5 kHz window in a
+            // busy band almost never shows the 30 ms gap that ends a burst, so
+            // arming unconditionally would record a continuous wall of noise.
+            // PKTSTATUS bit 6 (CS) says the carrier is there; only then is arming
+            // worth it. ~25 Hz is the spec's poll rate and costs nothing.
+            if (millis() - lastSquelchPoll >= 40) {
+                lastSquelchPoll = millis();
+                const int squelch = (int)tuneGetByName("ward.wide_squelch_dbm", nullptr);
+                if (wrCarrierSense() && rfGetRssi() > squelch && !wrArm()) {
+                    rxFailed = true;
+                    running = false;
+                }
+            } else {
+                vTaskDelay(pdMS_TO_TICKS(10)); // do not spin between polls
+            }
+        }
+
+        bool burstEnded = false;
+        if (got) {
             const rmt_symbol_word_t *burst = rxData.received_symbols;
             size_t n = rxData.num_symbols;
             bool bufferFull = (n >= (size_t)rxSymbols);
 
-            // Re-arm first, on the other buffer: a full buffer means the burst
-            // continues, and an SD write here would drop the pulses that arrive
-            // while the file is open.
-            if (running) {
-                bufIdx ^= 1;
-                if (rmt_receive(rxCh, symbols[bufIdx], rxBytes, &rxcfg) != ESP_OK) {
-                    // Keep the burst that is already on the card, then stop with
-                    // a message instead of pretending to listen.
+            // Step 0: did the receiver lose pulses since the last read? Two
+            // witnesses - the ISR refused a done event, or this read arrived so
+            // late that the RMT buffer had already filled and stopped capturing
+            // while a burst was still in flight (an SD write on a slow card is
+            // exactly that delay). Those pulses are in no read at all, which is
+            // how a chopped burst used to be saved as a complete capture.
+            uint32_t lagUs = (uint32_t)esp_timer_get_time() - wrRxEventUs;
+            bool dropped = (wrRxDropped != dropSeen);
+            dropSeen = wrRxDropped;
+            if (wrStream.active && (dropped || (bufferFull && lagUs > WR_OVERLAP_US))) {
+                wrStream.overran = true;
+            }
+
+            // Re-arm before the card is touched, so the pulses arriving while a
+            // file is written are not lost. In wideband only a full buffer means
+            // the burst continues; a short read is the idle gap, and the hard cap
+            // is the other way out because that gap may never come.
+            const uint32_t capMs = (uint32_t)tuneGetByName("ward.wide_cap_ms", nullptr);
+            const bool capHit = wide && (millis() - armedSinceMs >= capMs);
+            const bool rearm = running && (!wide || (bufferFull && !capHit));
+            if (rearm) {
+                if (!wrArm()) {
                     rxFailed = true;
                     running = false;
                 }
+            } else {
+                armed = false;       // wideband: back to the squelch poll
+                lastSquelchPoll = millis(); // and do not re-trigger on the tail
             }
 
             uint32_t pulses = 0;
             uint32_t shortPulses = 0;
             uint64_t totalNs = 0;
+            const uint32_t shortUs = wide ? WR_WIDE_SHORT_PULSE_US : WR_SHORT_PULSE_US;
             for (size_t i = 0; i < n; i++) {
                 if (burst[i].duration0) {
                     pulses++;
                     totalNs += burst[i].duration0;
-                    if (burst[i].duration0 < WR_SHORT_PULSE_US) shortPulses++;
+                    if (burst[i].duration0 < shortUs) shortPulses++;
                 }
                 if (burst[i].duration1) {
                     pulses++;
                     totalNs += burst[i].duration1;
-                    if (burst[i].duration1 < WR_SHORT_PULSE_US) shortPulses++;
+                    if (burst[i].duration1 < shortUs) shortPulses++;
                 }
             }
 
@@ -1043,33 +1306,16 @@ void rfWardriverRun(int maxSeconds) {
                 wrStream.totalNs += totalNs;
                 wrStream.symbolCount += n;
                 wrStreamAppend(burst, n);
-                if (!bufferFull) {
+                if (!bufferFull || capHit) {
                     // Short read: the radio saw the idle gap, so the signal is
-                    // complete. Too few pulses is still noise, and an exact
-                    // repeat of a signal heard moments ago is not stamped twice.
-                    if (!ward_capture_burst(wrStream.pulses, wrStream.shortPulses)) {
-                        wrStreamEnd(st, false);
-                        st.noise++;
-                    } else {
-                        uint32_t h = wrHashFinish(wrStream.hash, wrStream.symbolCount);
-                        if (wrSeenRecently(h)) {
-                            wrStreamEnd(st, false);
-                            st.duplicates++;
-                        } else {
-                            // Only a completely written file counts as saved; a
-                            // full card must not be reported as a capture (and the
-                            // hash is only remembered once the bytes are on it).
-                            if (wrStreamEnd(st, true)) {
-                                wrRememberHash(h);
-                                st.saved++;
-                            } else {
-                                st.noise++;
-                            }
-                        }
-                    }
+                    // complete. Cap: the burst is deliberately bounded, because a
+                    // wide filter may never show that gap. Either way, close and
+                    // let the filter/dedupe decision happen once.
+                    wrCloseBurst(st);
+                    burstEnded = true;
                     full = true; // the file name line changed
                 }
-            } else if (bufferFull) {
+            } else if (bufferFull && !dropped) {
                 // First read already filled the buffer: a long signal (car
                 // keyfob, doorbell with repeats). Start the file and keep
                 // appending until a read comes back short.
@@ -1083,7 +1329,12 @@ void rfWardriverRun(int maxSeconds) {
                     wrStream.symbolCount = n;
                     wrStreamAppend(burst, n);
                 }
-            } else if (totalNs > 300000ULL && ward_capture_burst(pulses, shortPulses)) {
+            } else if (dropped) {
+                // The read that was lost may have started this burst, so there is
+                // no honest way to treat what arrived as the whole signal.
+                st.overruns++;
+            } else if (totalNs > 300000ULL &&
+                       ward_capture_burst(pulses, shortPulses, (uint32_t)(totalNs / 1000000ULL))) {
                 uint32_t h = wrHashBurst(burst, n);
                 if (wrSeenRecently(h)) {
                     st.duplicates++;
@@ -1099,15 +1350,32 @@ void rfWardriverRun(int maxSeconds) {
                     }
                     full = true; // the file name line changed
                 }
+                burstEnded = true;
             } else if (pulses > 0) {
                 st.noise++;
             }
         }
 
+        // Wideband armed but the carrier vanished before a single edge arrived:
+        // stop the pending receive and go back to the squelch. Without this the
+        // channel would sit armed on a CS glitch forever, and the next
+        // rmt_receive() would be refused as busy.
+        if (wide && armed && !got && millis() - armedSinceMs >= (uint32_t)tuneGetByName("ward.wide_cap_ms", nullptr)) {
+            rmt_disable(rxCh);
+            rxEnabled = false;
+            armed = false;
+            lastSquelchPoll = millis();
+        }
+
+        // Fast hop restarts its 120 ms dwell from the end of a burst, not from
+        // the last hop: the dwell is shorter than a 50-300 ms frame, so timing it
+        // from the hop would move the band in the middle of the next press.
+        if (burstEnded && fastHop) lastHop = millis();
+
         // Never hop in the middle of a burst: the tail would be recorded on a
         // different band than the header says, and replaying the file would
         // then send half of it on the wrong frequency.
-        if (bruceConfig.rfWardriverHop && !wrStream.active && millis() - lastHop > WR_HOP_MS) {
+        if (hopping && !wrStream.active && millis() - lastHop > wrDwellMs(fastHop)) {
             bandIdx = (bandIdx + 1) % WR_BAND_COUNT;
             curFreq = WR_BANDS[bandIdx];
             setMHZ(curFreq);
@@ -1116,7 +1384,7 @@ void rfWardriverRun(int maxSeconds) {
         }
 
         if (full || millis() - lastDraw > 1000) {
-            wrDraw(full, st, true, curFreq, bruceConfig.rfWardriverHop);
+            wrDraw(full, st, running, curFreq, wrModeTag(mode));
             full = false;
             lastDraw = millis();
         }
@@ -1128,32 +1396,30 @@ void rfWardriverRun(int maxSeconds) {
 
     // Stopping (SEL/BACK) can land in the middle of a long signal. Close what
     // was written: it is a real capture up to the moment the user stopped, not
-    // a half-written file.
-    if (wrStream.active) {
-        if (ward_capture_burst(wrStream.pulses, wrStream.shortPulses)) {
-            if (wrStreamEnd(st, true)) st.saved++;
-            else st.noise++;
-        } else {
-            wrStreamEnd(st, false);
-            st.noise++;
-        }
-    }
+    // a half-written file (an overrun still deletes it - a chopped capture is
+    // never replayed).
+    if (wrStream.active) wrCloseBurst(st);
 
     rmt_disable(rxCh);
     rmt_del_channel(rxCh);
     vQueueDelete(queue);
+    // Put the passband back before the radio is shut down: the next feature
+    // expects the 256 kHz profile initRfModule() applies, not the wide window.
+    if (wide) rfSetRxBW(256);
     deinitRfModule();
     bruceConfigPins.rfFreq = previousFreq;
 
     if (rxFailed) displayError("RF receiver stopped", true);
 
     Serial.printf(
-        "[wardriver] %u saved, %u duplicates, %u noise in %us (rx %d symbols)\n",
+        "[wardriver] %u saved, %u duplicates, %u noise, %u overruns in %us (rx %d symbols, mode %s)\n",
         (unsigned)st.saved,
         (unsigned)st.duplicates,
         (unsigned)st.noise,
+        (unsigned)st.overruns,
         (unsigned)((millis() - startedMs) / 1000),
-        rxSymbols
+        rxSymbols,
+        wrModeTag(mode) + 1 // the tag carries its leading space for the screen
     );
     returnToMenu = true;
 }

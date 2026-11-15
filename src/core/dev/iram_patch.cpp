@@ -30,7 +30,7 @@
 void setMHZ_body(float frequency);
 int rfGetRssi_body();
 uint32_t rf_scan_step_body();
-bool ward_capture_burst_body(uint32_t pulses, uint32_t shortPulses);
+bool ward_capture_burst_body(uint32_t pulses, uint32_t shortPulses, uint32_t durationMs);
 uint32_t nrf_capture_raw_body(uint32_t durationMs);
 uint16_t ir_transmit_button_body(uint16_t nbits);
 bool mitm_build_frame_body(

@@ -13,6 +13,9 @@ public:
     const String& themePath() override { return bruceConfig.theme.paths.rf; }
 
 private:
+    // The four spectrum renderers answer the same question, so the RF page
+    // has one Spectrum row and this picker chooses the renderer.
+    void spectrumMenu(void);
     void configMenu(void);
 };
 

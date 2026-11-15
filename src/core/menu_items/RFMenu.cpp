@@ -29,11 +29,14 @@ void RFMenu::optionsMenu() {
         {"Record RAW",      rf_raw_record             }, // Pablo-Ortiz-Lopez
         {"Custom SubGhz",   sendCustomRF              },
 #endif
-        {"Spectrum",        rf_spectrum               },
 #if !defined(LITE_VERSION)
-        {"RSSI Spectrum",   rf_CC1101_rssi            }, // @Pirata
-        {"SquareWave Spec", rf_SquareWave             }, // @Pirata
-        {"Spectogram",      rf_waterfall              }, // dev_eclipse
+        // One row for the four spectrum renderers: they answer the same
+        // question, and four rows of "spectrum" pushed the page past a screen.
+        {"Spectrum",        [this]() { spectrumMenu(); }},
+#else
+        {"Spectrum",        rf_spectrum               },
+#endif
+#if !defined(LITE_VERSION)
 #if defined(BUZZ_PIN) or defined(HAS_NS4168_SPKR) and defined(RF_LISTEN_H)
         {"Listen",          rf_listen                 }, // dev_eclipse
 #endif
@@ -51,6 +54,19 @@ void RFMenu::optionsMenu() {
 
     loopOptions(options, MENU_TYPE_SUBMENU, txt.c_str());
 }
+
+#ifndef LITE_VERSION
+void RFMenu::spectrumMenu() {
+    std::vector<Option> spec = {
+        {"Spectrum",      rf_spectrum   },
+        {"RSSI Spectrum", rf_CC1101_rssi},
+        {"SquareWave",    rf_SquareWave },
+        {"Spectogram",    rf_waterfall  },
+        {"Back",          [this]() { optionsMenu(); }},
+    };
+    loopOptions(spec, MENU_TYPE_SUBMENU, "Spectrum");
+}
+#endif
 
 void RFMenu::configMenu() {
     options = {

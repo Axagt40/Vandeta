@@ -100,7 +100,7 @@ JsonDocument BruceConfig::toJson() const {
     setting["rfWardriverFreq"] = rfWardriverFreq;
     setting["rfWardriverDedupeMs"] = rfWardriverDedupeMs;
     setting["rfWardriverMinPulses"] = rfWardriverMinPulses;
-    setting["rfWardriverHop"] = rfWardriverHop;
+    setting["rfWardriverMode"] = rfWardriverMode;
 
     // Developer tunables (task 1, phase 1). One object, fed by one table. Entries
     // flagged TUNE_BACKED are already written above under their own keys - a
@@ -569,8 +569,17 @@ void BruceConfig::fromFile(bool checkFS) {
     } else {
         count++;
     }
-    if (!setting["rfWardriverHop"].isNull()) {
-        rfWardriverHop = setting["rfWardriverHop"].as<bool>();
+    if (!setting["rfWardriverMode"].isNull()) {
+        // An index, so validate it like one: anything that is not a known mode
+        // boots to Hop rather than leaving the capture loop no branch to take.
+        int mode = setting["rfWardriverMode"].as<int>();
+        if (mode < WR_MODE_HOP || mode > WR_MODE_WIDEBAND) mode = WR_MODE_HOP;
+        rfWardriverMode = (uint8_t)mode;
+    } else if (!setting["rfWardriverHop"].isNull()) {
+        // Migration from the old boolean: on was the 400 ms band walk (Hop); off
+        // was a parked narrow receiver, which is what Wideband now does with a
+        // wider filter. The old key is not written back.
+        rfWardriverMode = setting["rfWardriverHop"].as<bool>() ? WR_MODE_HOP : WR_MODE_WIDEBAND;
     } else {
         count++;
     }
@@ -1224,8 +1233,11 @@ void BruceConfig::setWardriverMinPulses(uint8_t value) {
     saveFile();
 }
 
-void BruceConfig::setWardriverHop(bool value) {
-    rfWardriverHop = value;
+void BruceConfig::setWardriverMode(uint8_t value) {
+    // A mode is a choice, not a magnitude: refuse an unknown index instead of
+    // clamping it onto a neighbour that the caller never asked for.
+    if (value > WR_MODE_WIDEBAND) value = WR_MODE_HOP;
+    rfWardriverMode = value;
     saveFile();
 }
 void BruceConfig::ensureMifareKeysLoaded() {

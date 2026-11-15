@@ -93,6 +93,25 @@ MoreAtkResult more_disassoc_attack(
     const uint8_t bssid[6], uint8_t channel, uint32_t durationMs, const MoreProgressFn &progress = nullptr
 );
 
+/// DHCP starvation at one AP.
+///
+/// Unlike the frame-level attacks above, this one has to join the network first:
+/// an AP drops data frames from a MAC that never associated, so raw 802.11
+/// injection cannot reach a real DHCP server. It associates with `ssid` /
+/// `password` (empty password = open network), then sends DHCP DISCOVERs from
+/// port 68 to the broadcast address, each with a new random client hardware
+/// address in chaddr - the field a DHCP server keys its lease on. The board's
+/// own link keeps its real MAC, so the AP forwards every DISCOVER.
+///
+/// Reach: works on any network the board can join. It exhausts the server's
+/// address pool; it does not authenticate or take over the network.
+/// With `untilBack`, the duration and the no-offer stop are ignored and the
+/// attack runs until BACK; the menu entry uses that.
+MoreAtkResult more_dhcp_starvation(
+    const uint8_t bssid[6], const String &ssid, const String &password, uint8_t channel, uint32_t durationMs,
+    const MoreProgressFn &progress = nullptr, bool untilBack = false
+);
+
 // ---------------------------------------------------------------------------
 // Menu entry points
 // ---------------------------------------------------------------------------
@@ -113,6 +132,7 @@ void moreTargetChannelSwitch(const String &tssid, const String &mac, uint8_t cha
 void moreTargetBadMessage(const String &tssid, const String &mac, uint8_t channel);
 void moreTargetAuthAttack(const String &tssid, const String &mac, uint8_t channel);
 void moreTargetDisassoc(const String &tssid, const String &mac, uint8_t channel);
+void moreTargetDhcpStarve(const String &tssid, const String &mac, uint8_t channel);
 
 // ---------------------------------------------------------------------------
 // Helpers used by the console commands and the menu
@@ -121,14 +141,14 @@ void moreTargetDisassoc(const String &tssid, const String &mac, uint8_t channel)
 /// Parse "AA:BB:CC:DD:EE:FF" into 6 bytes. Returns false on a bad string.
 bool moreParseMac(const String &mac, uint8_t out[6]);
 
-/// Human readable name for a targeted attack id (0..4).
+/// Human readable name for a targeted attack id (0..5).
 const char *moreTargetAtkName(int id);
 
 /// Run one targeted attack by id so the console and the menu share a code path.
 /// `newChannel` is only used by the channel-switch attack.
 MoreAtkResult moreRunTargetAtk(
     int id, const String &ssid, const String &mac, uint8_t channel, uint8_t newChannel, uint32_t durationMs,
-    const MoreProgressFn &progress = nullptr
+    const MoreProgressFn &progress = nullptr, const String &password = ""
 );
 
 #endif

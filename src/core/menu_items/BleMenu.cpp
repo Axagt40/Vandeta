@@ -29,31 +29,65 @@ void BleMenu::optionsMenu() {
     }
 #endif
 #if !defined(LITE_VERSION)
-    options.push_back({"Media Cmds", [=]() { MediaCommands(hid_ble, true); }});
-    options.push_back({"BLE Scan", ble_scan});
-    options.push_back({"BLE Detector", []() { vandetaRadarMenu(); }});
-    options.push_back({"BLE Atks", []() { BleAttacksMenu(); }});
-    options.push_back({"iBeacon", [=]() {
-                           ibeacon("Bruce", "e4c159a0-8c82-11e6-bdf4-0800200c9a66", 0x004C);
-                       }});
-    options.push_back({"Bad BLE", [=]() { ducky_setup(hid_ble, true); }});
-    options.push_back({"BLE Keyboard", [=]() { ducky_keyboard(hid_ble, true); }});
-#endif
+    // 13 flat rows mixed scanning, attacks, HID and device tools, and the two
+    // attack pages ("BLE Suite" and "BLE Atks") read as unrelated buttons.
+    // Four groups now; the session row above and Back are where they were, and
+    // every tool keeps its own name inside its group.
+    options.push_back({"Scan & Detect", [this]() { scanMenu(); }});
+    options.push_back({"Attacks", [this]() { attacksMenu(); }});
+    options.push_back({"HID & BadUSB", [this]() { hidMenu(); }});
+    options.push_back({"Tools", [this]() { toolsMenu(); }});
+#else
     options.push_back({"BLE Spam", [=]() { spamMenu(); }});
     options.push_back({"Capture & Replay", [=]() { bleCaptureMenu(); }});
     options.push_back({"Packet Monitor", [=]() { packetMonitor(PKT_SRC_BLE); }});
-
-#if !defined(LITE_VERSION)
-    options.push_back({"BLE Suite", [=]() { BleSuiteMenu(); }});
-    options.push_back({"Ninebot", [=]() { BLENinebot(); }});
-    options.push_back({"Presenter mode", [=]() { PresenterMode(hid_ble, true); }});
-#else
     options.push_back({"BLE Sniffer", [=]() { BLE_SnifferMenu(); }});
 #endif
     addOptionToMainMenu();
 
     loopOptions(options, MENU_TYPE_SUBMENU, "Bluetooth", 0, false);
 }
+
+#if !defined(LITE_VERSION)
+void BleMenu::scanMenu() {
+    std::vector<Option> scan;
+    scan.push_back({"BLE Scan", ble_scan});
+    scan.push_back({"BLE Detector", []() { vandetaRadarMenu(); }});
+    scan.push_back({"Packet Monitor", [=]() { packetMonitor(PKT_SRC_BLE); }});
+    scan.push_back({"Back", [this]() { optionsMenu(); }});
+    loopOptions(scan, MENU_TYPE_SUBMENU, "Scan & Detect");
+}
+
+void BleMenu::attacksMenu() {
+    std::vector<Option> atks;
+    atks.push_back({"BLE Suite", [=]() { BleSuiteMenu(); }});
+    atks.push_back({"BLE Atks", [=]() { BleAttacksMenu(); }});
+    atks.push_back({"BLE Spam", [=]() { spamMenu(); }});
+    atks.push_back({"iBeacon", [=]() {
+                        ibeacon("Bruce", "e4c159a0-8c82-11e6-bdf4-0800200c9a66", 0x004C);
+                    }});
+    atks.push_back({"Back", [this]() { optionsMenu(); }});
+    loopOptions(atks, MENU_TYPE_SUBMENU, "BLE Attacks");
+}
+
+void BleMenu::hidMenu() {
+    std::vector<Option> hid;
+    hid.push_back({"Bad BLE", [=]() { ducky_setup(hid_ble, true); }});
+    hid.push_back({"BLE Keyboard", [=]() { ducky_keyboard(hid_ble, true); }});
+    hid.push_back({"Presenter mode", [=]() { PresenterMode(hid_ble, true); }});
+    hid.push_back({"Media Cmds", [=]() { MediaCommands(hid_ble, true); }});
+    hid.push_back({"Back", [this]() { optionsMenu(); }});
+    loopOptions(hid, MENU_TYPE_SUBMENU, "HID & BadUSB");
+}
+
+void BleMenu::toolsMenu() {
+    std::vector<Option> tools;
+    tools.push_back({"Capture & Replay", [=]() { bleCaptureMenu(); }});
+    tools.push_back({"Ninebot", [=]() { BLENinebot(); }});
+    tools.push_back({"Back", [this]() { optionsMenu(); }});
+    loopOptions(tools, MENU_TYPE_SUBMENU, "BLE Tools");
+}
+#endif
 
 void BleMenu::drawIcon(float scale) {
     clearIconArea();

