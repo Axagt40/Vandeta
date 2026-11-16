@@ -490,6 +490,11 @@ __attribute__((noinline, used)) void setMHZ_body(float frequency) {
     }
     if (bruceConfigPins.rfModule == CC1101_SPI_MODULE) {
 #if defined(T_EMBED)
+        // Antenna switch first, and deliberately OUTSIDE rf_spi_lock() below:
+        // SW0/SW1 are plain GPIO writes on their own pins, not SPI traffic, and
+        // the 10 ms settle must not be spent holding the bus against the render
+        // task. Only calibration and setMHZ touch the CC1101 over SPI, so those
+        // stay inside the lock.
         static uint8_t antenna =
             200; // 0=(<300), 1=(350-468), 2=(>778), 200=start to settle at the fisrt time
         bool change = true;
