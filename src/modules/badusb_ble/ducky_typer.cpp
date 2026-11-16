@@ -781,7 +781,7 @@ void ducky_startKb(HIDInterface *&hid, bool ble, int functionId) {
             // already up, its own buffers are what the guard would measure, so
             // it would refuse a HID instance that allocates nothing extra.
             bool needBleInit = !NimBLEDevice::isInitialized();
-            if (needBleInit && !radioHasMemForBle()) {
+            if (needBleInit && !radioEnsureMemForBle()) {
                 displayError("Low RAM: free WiFi/SD first", true);
                 returnToMenu = true;
                 return;
