@@ -21,12 +21,13 @@ the bus for a whole radio operation (`rf_spi_lock()` plus the matching `TFT_eSPI
 analyzer, the wardriver, the capture layer and the nRF24 tap repeat.
 
 > **[Install](https://axagt40.github.io/Vandeta/flash.html)** ·
-> **[Download 1.4](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.4)** ·
+> **[Download 1.3](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.3)** ·
 > **[What's new in 1.4](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.4)** ·
 > **[Docs](https://axagt40.github.io/Vandeta/docs.html)** ·
 > **[Discord](https://discord.gg/dhPXgVerqD)**
 
-1.4 is the current official release and the flasher opens on it. The source for
+1.3 is the newest official release and the flasher opens on it. 1.4 is a
+pre-release: select **Pre-release** in the flasher to install it. The source for
 every build is published in this repository, per release, from 1.4 onward.
 
 Every screen below was captured from the board over USB, at 320 x 170.
