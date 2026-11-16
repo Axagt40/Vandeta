@@ -858,7 +858,7 @@ static void bleDetDronePage() {
 // ---------------------------------------------------------------------------
 
 void bleDetectorRun() {
-    if (!NimBLEDevice::isInitialized() && !radioHasMemForBle()) {
+    if (!NimBLEDevice::isInitialized() && !radioEnsureMemForBle()) {
         // Say how short it is instead of the generic "free WiFi/SD first": the
         // guard has already released WiFi and the web UI by this point, so what
         // is left is real fragmentation from the apps that ran before.

@@ -70,15 +70,24 @@ static inline bool radioHasMemForWifi() {
     return radioLargestDmaBlock() >= RADIO_WIFI_MIN_DMA_BLOCK;
 }
 
+// Pure: can this board hold a BLE bring-up right now? It reads the heap and
+// decides - nothing is torn down, nothing is logged, so it is safe to call from
+// a path that must not drop an association (a render callback, a JS binding).
 static inline bool radioHasMemForBle() {
     // return true; // uncomment to disable it
 
     // BOTH conditions matter: total free internal DRAM (NimBLE's many buffers)
     // and one contiguous DMA block for its largest single allocation.
-    if (radioFreeInternal() >= RADIO_BLE_MIN_INTERNAL_FREE &&
-        radioLargestDmaBlock() >= RADIO_BLE_MIN_DMA_BLOCK) {
-        return true;
-    }
+    return radioFreeInternal() >= RADIO_BLE_MIN_INTERNAL_FREE &&
+           radioLargestDmaBlock() >= RADIO_BLE_MIN_DMA_BLOCK;
+}
+
+// Destructive: same question, but when the answer is no it first disconnects and
+// deinitialises Wi-Fi and stops the web UI, then re-checks. Call this from a
+// menu or console entry that is willing to lose the association; never from a
+// path that must keep it - those call radioHasMemForBle() and refuse instead.
+static inline bool radioEnsureMemForBle() {
+    if (radioHasMemForBle()) return true;
     
     // Not enough memory - try to free WiFi
     Serial.printf(
@@ -105,8 +114,7 @@ static inline bool radioHasMemForBle() {
     }
     
     // Recheck after freeing WiFi
-    if (radioFreeInternal() >= RADIO_BLE_MIN_INTERNAL_FREE &&
-        radioLargestDmaBlock() >= RADIO_BLE_MIN_DMA_BLOCK) {
+    if (radioHasMemForBle()) {
         Serial.printf(
             "[RAM] WiFi freed, free internal %u, DMA block %u\n",
             (unsigned)radioFreeInternal(),

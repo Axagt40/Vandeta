@@ -412,7 +412,7 @@ bool BLEStateManager::initBLE(const String &name, int powerLevel) {
             }
         }
 
-        if (!radioHasMemForBle()) {
+        if (!radioEnsureMemForBle()) {
             displayError("Low RAM: free WiFi/SD first", true);
             return false;
         }
