@@ -499,8 +499,8 @@ Questions, builds and feedback: **Discord** — <https://discord.gg/dhPXgVerqD>
 
 ## :white_check_mark: Verified on the board
 
-The 1.4 image (`nogit-20261116-083651`, 4,993,424 B, sha256
-`351a897bd33f5485477fc5344905fdf5dd3c53961049bf52ccc262442b0251b0`) reports
+The 1.4 image (`nogit-20261116-131627`, 4,993,424 B, sha256
+`db660ae63353376b3b26cbbf7305ceb5a6c74b625baa988818ea2f3f62c7c9c3`) reports
 `vandeta 1.4` in `info`. On it, the published harness scored:
 `t26_mitm_menus.py` **36 passed / 0 failed / 0 skipped**,
 `t50_ble_attacks.py` **32 / 0 / 0**, `t45_patch_overlay.py` **35 / 0**,
@@ -515,8 +515,11 @@ on the first try each time.
 `NRF Jammer` has no runtime limit of its own: a `Full`-list run held for 130 s
 with no reboot and the page still occupying the console afterwards (its tight
 loop starves the console task, which is why no command is answered while it
-runs), so it never stopped. The only 30 s safety cap in the tree belongs to the
-CC1101 RF Jammer, not this page. The MITM transport barrier was measured
+runs), so it never stopped. There is no runtime cap anywhere in the tree now: the
+CC1101 `RF Suite > Jammer` (FULL POWER) was started straight from its mode menu
+and read `00:52  P: 4012516` with the pulse counter still climbing, well past
+the 30 s `MAX_JAMMER_RUNTIME` the upstream file carried, and it left the run on
+ESC only. The MITM transport barrier was measured
 on the 2026-11-08 build, whose engine code is unchanged: a DNS-only payload arms
 it, AAAA/SVCB/HTTPS come back empty, UDP/443 is answered with ICMP, TCP/853 never
 opens, and a poisoned victim was back online 6 s after `mitm stop`

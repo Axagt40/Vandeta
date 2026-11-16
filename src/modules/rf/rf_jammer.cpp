@@ -5,8 +5,6 @@
 #include <ELECHOUSE_CC1101_SRC_DRV.h>
 #include <globals.h>
 
-#define MAX_JAMMER_RUNTIME 30000 // 30 seconds max runtime for jammer (safety cutoff)
-
 static const uint32_t MAX_SEQUENCE = 50;
 static const uint32_t DURATION_CYCLES = 3;
 
@@ -268,7 +266,6 @@ void RFJammer::run_full_jammer() {
             update_display(currentTime - startTime);
         }
 
-        if (currentTime - startTime > MAX_JAMMER_RUNTIME) break;
     }
     digitalWrite(nTransmitterPin, LOW);
 }
@@ -334,7 +331,6 @@ void RFJammer::run_itmt_jammer() {
             pulseCount += 200;
         }
 
-        if (millis() - startTime > MAX_JAMMER_RUNTIME) break;
     }
     digitalWrite(nTransmitterPin, LOW);
 }
@@ -416,7 +412,6 @@ void RFJammer::run_noise_jammer() {
             break;
         }
 
-        if (currentTime - startTime > MAX_JAMMER_RUNTIME) break;
 
         delay(50); // Low CPU usage since hardware handles TX
     }
@@ -510,7 +505,6 @@ void RFJammer::run_sweep_jammer() {
             update_display(currentTime - startTime);
         }
 
-        if (currentTime - startTime > MAX_JAMMER_RUNTIME) break;
     }
 
     digitalWrite(nTransmitterPin, LOW);
