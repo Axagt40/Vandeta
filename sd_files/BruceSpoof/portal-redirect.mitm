@@ -9,7 +9,7 @@
 #     simply cuts the target off and every site fails, which is what "no device
 #     can connect to anything" was. The bridge re-sends the frames the engine
 #     does not answer to the real gateway, so HTTPS browsing keeps working.
-#   * `page *` answers every plaintext request with the rickroll page - any
+#   * `page *` answers every plaintext request with the notice page - any
 #     site, any port, typed or clicked.
 #   * Modern phones and browsers reach the network through a captive-portal
 #     probe (connectivitycheck.gstatic.com/generate_204, captive.apple.com/...),
@@ -28,4 +28,4 @@
 # is exactly what this project must never do by accident. Pick the phone first:
 #     mitm target 192.168.1.50
 forward on
-page * html/rickroll.html
+page * html/network-notice.html

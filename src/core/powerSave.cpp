@@ -18,7 +18,7 @@ void checkPowerSaveTime() {
 
     unsigned long elapsed = millis() - previousMillis;
     int startDimmerBright = bruceConfig.bright / 3;
-    int dimmerSetMs = bruceConfig.dimmerSet * 1000;
+    uint32_t dimmerSetMs = bruceConfig.dimmerSet * 1000; // compared against unsigned elapsed
 
     if (elapsed >= dimmerSetMs && !dimmer && !isSleeping) {
         dimmer = true;

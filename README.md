@@ -6,7 +6,7 @@
   <img src="site/img/crown-banner.png" alt="Vandeta" width="220">
 </p>
 
-[![Release](https://img.shields.io/github/v/release/Axagt40/Vandeta?label=release&color=blue&include_prereleases)](https://github.com/Axagt40/Vandeta/releases)
+[![Release](https://img.shields.io/github/v/release/Axagt40/Vandeta?label=release&color=blue)](https://github.com/Axagt40/Vandeta/releases)
 [![Build](https://github.com/Axagt40/Vandeta/actions/workflows/PR_check.yml/badge.svg)](https://github.com/Axagt40/Vandeta/actions/workflows/PR_check.yml)
 [![Board](https://img.shields.io/badge/board-LilyGo%20T--Embed%20CC1101-orange)](https://lilygo.cc/products/t-embed-cc1101)
 [![Base](https://img.shields.io/badge/base-Bruce%201.16.1-blueviolet)](https://github.com/BruceDevices/firmware)
@@ -21,13 +21,12 @@ the bus for a whole radio operation (`rf_spi_lock()` plus the matching `TFT_eSPI
 analyzer, the wardriver, the capture layer and the nRF24 tap repeat.
 
 > **[Install](https://axagt40.github.io/Vandeta/flash.html)** ·
-> **[Download 1.3](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.3)** ·
+> **[Download 1.4](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.4)** ·
 > **[What's new in 1.4](https://github.com/Axagt40/Vandeta/releases/tag/vandeta-1.4)** ·
 > **[Docs](https://axagt40.github.io/Vandeta/docs.html)** ·
 > **[Discord](https://discord.gg/dhPXgVerqD)**
 
-1.3 is the newest official release and the flasher opens on it. 1.4 is a
-pre-release: select **Pre-release** in the flasher to install it. The source for
+1.4 is the newest official release and the flasher opens on it. The source for
 every build is published in this repository, per release, from 1.4 onward.
 
 Every screen below was captured from the board over USB, at 320 x 170.
@@ -61,6 +60,24 @@ Vandeta's goal is to be the **only firmware you need for the T-Embed CC1101**:
 everything Bruce does, plus a full **USB console** that can drive and inspect the
 device from a PC — screens, menus, files, radios, memory and JavaScript — with no
 WiFi, no reflash and no extra hardware.
+
+---
+
+## What this actually does
+
+* **MITM that survives modern clients.** The engine drops QUIC, suppresses
+  IPv6/AAAA/SVCB answers and blocks 853, then restores the target's ARP entry on
+  stop - a poisoned device is online again seconds after `mitm stop`, and what a
+  client can still see is listed under *What this build does not do*.
+* **One bus, one owner.** Every radio transaction holds `rf_spi_lock()` (plus the
+  display's `busLock()`), sweeps park between hops and the noise floor adapts, so
+  a screen repaint no longer shows up as a dropped capture.
+* **A console instead of a reflash.** `ui`/`move`/`press`, `file`, `log`,
+  `errors`, `display dump` and `js run` drive and read back the board over the
+  USB cable - no Wi-Fi, no extra hardware.
+* **A dev loop that fits the board.** `tune`, `patch`, `devflash` and `autotest`
+  change a value or a code slot and verify it, and every build drops an ELF, a
+  map, an app-only image and a build ID.
 
 ---
 
@@ -482,14 +499,27 @@ Questions, builds and feedback: **Discord** — <https://discord.gg/dhPXgVerqD>
 
 ## :white_check_mark: Verified on the board
 
-The 1.4 image (`nogit-20261115-163837`) reports `vandeta 1.4` in `info`.
-On it, `t50_ble_attacks.py` scored **32 passed / 0 failed / 0 skipped**,
-`t23_wardriver_regressions.py` and `t22_wardriver_identify.py` passed every
-check (t23 with one declared skip: its Mode-row walk needs a second console),
-and `t26_mitm_menus.py` **32 passed / 4 failed** - all four are the
-`html-rickroll.mitm` fixture, which is not in this repository.
-`t45_patch_overlay.py` **35 passed / 0 failed / 1 declared skip** and
-`t48_tasks.py` **21 passed / 0 failed** stay green. The MITM transport barrier was measured
+The 1.4 image (`nogit-20261116-131627`, 4,993,424 B, sha256
+`db660ae63353376b3b26cbbf7305ceb5a6c74b625baa988818ea2f3f62c7c9c3`) reports
+`vandeta 1.4` in `info`. On it, the published harness scored:
+`t26_mitm_menus.py` **36 passed / 0 failed / 0 skipped**,
+`t50_ble_attacks.py` **32 / 0 / 0**, `t45_patch_overlay.py` **35 / 0**,
+`t48_tasks.py` **21 / 0**, `t44_tune.py` **32 / 0**, `t51_wardriver_mode.py`
+**22 / 0**, `t29_task1_settings.py` **69 / 0**, `t52_dhcp_starve.py`
+**14 / 0 / 1 declared skip** (the row is not opened: it would attack the live
+LAN), and `t22_wardriver_identify.py` / `t23_wardriver_regressions.py` passed
+every check (t23 with one declared skip: its Mode-row walk needs a second
+console). The board also booted five times in a row and answered an RF operation
+on the first try each time.
+
+`NRF Jammer` has no runtime limit of its own: a `Full`-list run held for 130 s
+with no reboot and the page still occupying the console afterwards (its tight
+loop starves the console task, which is why no command is answered while it
+runs), so it never stopped. There is no runtime cap anywhere in the tree now: the
+CC1101 `RF Suite > Jammer` (FULL POWER) was started straight from its mode menu
+and read `00:52  P: 4012516` with the pulse counter still climbing, well past
+the 30 s `MAX_JAMMER_RUNTIME` the upstream file carried, and it left the run on
+ESC only. The MITM transport barrier was measured
 on the 2026-11-08 build, whose engine code is unchanged: a DNS-only payload arms
 it, AAAA/SVCB/HTTPS come back empty, UDP/443 is answered with ICMP, TCP/853 never
 opens, and a poisoned victim was back online 6 s after `mitm stop`

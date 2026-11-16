@@ -114,7 +114,7 @@ JsonDocument BruceConfig::toJson() const {
     }
 
     JsonArray dm = setting["disabledMenus"].to<JsonArray>();
-    for (int i = 0; i < disabledMenus.size(); i++) { dm.add(disabledMenus[i]); }
+    for (size_t i = 0; i < disabledMenus.size(); i++) { dm.add(disabledMenus[i]); }
 
     JsonArray qrArray = setting["qrCodes"].to<JsonArray>();
     for (const auto &entry : qrCodes) {

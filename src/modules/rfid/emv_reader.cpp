@@ -442,7 +442,7 @@ std::string BinToAscii(uint8_t *BinData, size_t size)
 {
     char AsciiHexNo[5];
     std::string Return;
-    for (int i = 0; i < size; i++) {
+    for (int i = 0; i < (int)size; i++) {
         sprintf(AsciiHexNo, "%02X", BinData[i]);
         Return += AsciiHexNo;
     }

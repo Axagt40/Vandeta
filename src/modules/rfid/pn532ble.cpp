@@ -675,12 +675,12 @@ void Pn532ble::hf14aMfuWriteDumpMode() {
         if (first4Page.size() == 17) { first4Page.erase(first4Page.begin()); }
         if (first4Page.size() == 16) { max_block = first4Page[14] * 2 + 9; }
 
-        if (max_block > mfud.size() / 4) {
+        if (max_block > (int)(mfud.size() / 4)) {
             displayError("Dump size not enough");
             return;
         }
 
-        for (int i = 0; i < mfud.size(); i += 4) {
+        for (size_t i = 0; i < mfud.size(); i += 4) {
             std::vector<uint8_t> data(mfud.begin() + i, mfud.begin() + i + 4);
             bool res = pn532_ble.mfuWrbl(block, data);
             if (res) {

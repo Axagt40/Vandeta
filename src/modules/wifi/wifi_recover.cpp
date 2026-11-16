@@ -169,7 +169,7 @@ static bool parse_pcap_handshake(FS &fs, const String &path, HandshakeData &hs) 
         uint8_t *pkt = (uint8_t *)malloc(read_sz);
         if (!pkt) break;
 
-        if (f.read(pkt, read_sz) != (int)read_sz) {
+        if (f.read(pkt, read_sz) != read_sz) {
             free(pkt);
             break;
         }
@@ -270,7 +270,8 @@ static bool parse_pcap_handshake(FS &fs, const String &path, HandshakeData &hs) 
             memcpy(hs.mic, mic, 16);
             memcpy(hs.sta_mac, sta_addr, 6);
             memcpy(hs.ap_mac, ap_addr, 6);
-            size_t cp = (eapol_len + 4) <= sizeof(hs.eapol) ? (eapol_len + 4) : sizeof(hs.eapol);
+            size_t cp = (size_t)(eapol_len + 4) <= sizeof(hs.eapol) ? (size_t)(eapol_len + 4)
+                           : sizeof(hs.eapol);
             memcpy(hs.eapol, eapol, cp);
             hs.eapol_len = (uint16_t)cp;
             have_m2 = true;

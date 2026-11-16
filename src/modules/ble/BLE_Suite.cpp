@@ -412,7 +412,7 @@ bool BLEStateManager::initBLE(const String &name, int powerLevel) {
             }
         }
 
-        if (!radioHasMemForBle()) {
+        if (!radioEnsureMemForBle()) {
             displayError("Low RAM: free WiFi/SD first", true);
             return false;
         }
@@ -3550,7 +3550,7 @@ bool FastPairExploitEngine::executeMemoryCorruption(NimBLERemoteCharacteristic *
     overflowPacket[0] = 0x00;
     overflowPacket[1] = 0x00;
     for (int i = 2; i < 67; i++) overflowPacket[i] = 0xFF;
-    for (int i = 67; i < sizeof(overflowPacket); i++) overflowPacket[i] = i % 256;
+    for (size_t i = 67; i < sizeof(overflowPacket); i++) overflowPacket[i] = i % 256;
 
     bool result = pChar->writeValue(overflowPacket, sizeof(overflowPacket), true);
     delay(100);
@@ -4531,7 +4531,7 @@ NimBLEAddress parseAddress(const String &addressInfo) {
 
     int start = -1;
     int colonCount = 0;
-    for (int i = 0; i < cleanAddr.length(); i++) {
+    for (size_t i = 0; i < cleanAddr.length(); i++) {
         char c = cleanAddr.charAt(i);
         if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F')) {
             if (start == -1) start = i;
@@ -4564,7 +4564,7 @@ NimBLEAddress parseAddress(const String &addressInfo) {
         }
     }
 
-    for (int i = 0; i < addressInfo.length() - 17; i++) {
+    for (size_t i = 0; i + 17 < addressInfo.length(); i++) {
         String substr = addressInfo.substring(i, i + 17);
         bool valid = true;
         for (int j = 0; j < 17; j++) {
@@ -5909,7 +5909,7 @@ void runProtocolFuzzer(NimBLEAddress target) {
             case 0: memset(fuzzPacket, 0xFF, sizeof(fuzzPacket)); break;
             case 1: memset(fuzzPacket, 0x00, sizeof(fuzzPacket)); break;
             case 2:
-                for (int j = 0; j < sizeof(fuzzPacket); j++) fuzzPacket[j] = random(256);
+                for (size_t j = 0; j < sizeof(fuzzPacket); j++) fuzzPacket[j] = random(256);
                 break;
             case 3:
                 fuzzPacket[0] = 0x00;

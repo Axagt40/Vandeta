@@ -165,7 +165,7 @@ void displayScrollingText(const String &text, Opt_Coord &coord, bool highlight) 
     String displayText = text + "        "; // Add spaces for smooth looping
     int scrollLen = len + 8;                // Full text plus space buffer
     static int i = 0;
-    static long _lastmillis = 0;
+    static unsigned long _lastmillis = 0;
     if (highlight) tft.setTextColor(coord.bgcolor, coord.fgcolor);
     else tft.setTextColor(coord.fgcolor, coord.bgcolor);
     if (len < coord.size) {
@@ -270,7 +270,7 @@ std::vector<String> wrapText(const String &text, int maxCharsPerLine) {
 
     String remaining = text;
     while (remaining.length() > 0) {
-        if (remaining.length() <= maxCharsPerLine) {
+        if (remaining.length() <= (size_t)maxCharsPerLine) { // maxCharsPerLine is > 0 here
             lines.push_back(remaining);
             break;
         }
@@ -311,7 +311,7 @@ void displayRedStripe(const String &text, uint16_t fgcolor, uint16_t bgcolor) {
     std::vector<String> wrappedLines;
     int boxHeight = 26; // Default height for single line
 
-    if (text.length() * LW * FM < (tftWidth - 2 * FM * LW)) {
+    if (text.length() * LW * FM < (unsigned int)(tftWidth - 2 * FM * LW)) {
         // Text fits with FM font
         size = FM;
         wrappedLines = wrapText(text, maxCharsFM);
@@ -685,10 +685,10 @@ int loopOptionsImpl(
     Opt_Coord coord;
     bool redraw = true;
     bool exit = false;
-    int menuSize = options.size();
+    int menuSize = (int)options.size(); // menus are far below INT_MAX
     int devModeCounter = 0;
     static unsigned long _clock_bat_timer = millis();
-    if (options.size() > MAX_MENU_SIZE) { menuSize = MAX_MENU_SIZE; }
+    if ((int)options.size() > MAX_MENU_SIZE) { menuSize = MAX_MENU_SIZE; }
     if (index > 0)
         tft.fillRoundRect(
             tftWidth * 0.10,
@@ -698,7 +698,7 @@ int loopOptionsImpl(
             5,
             bruceConfig.bgColor
         );
-    if (index >= options.size()) index = 0;
+    if (index >= (int)options.size()) index = 0;
     bool firstRender = true;
     unsigned long menuOpenTs =
         0; // timestamp when this menu was first rendered (per-invocation, not shared across nested menus)
@@ -951,8 +951,8 @@ Opt_Coord drawOptions(
     static int last_index = 0;
 
     Opt_Coord coord;
-    int menuSize = options.size();
-    if (options.size() > MAX_MENU_SIZE) { menuSize = MAX_MENU_SIZE; }
+    int menuSize = (int)options.size(); // menus are far below INT_MAX
+    if ((int)options.size() > MAX_MENU_SIZE) { menuSize = MAX_MENU_SIZE; }
 
     // Uncomment to update the statusBar (causes flickering)
     // drawStatusBar();
@@ -988,7 +988,7 @@ Opt_Coord drawOptions(
     }
 
     cont = 1;
-    for (i = 0; i < options.size(); i++) {
+    for (i = 0; i < (int)options.size(); i++) {
         if (i >= init) {
             int16_t cursorY = tft.getCursorY();
             // Erase previously highlited element,
@@ -1151,7 +1151,7 @@ void drawMainMenuGrid(int index, std::vector<Option> &options) {
 ***************************************************************************************/
 void drawSubmenu(int index, std::vector<Option> &options, const char *title) {
     drawStatusBar();
-    int menuSize = options.size();
+    int menuSize = (int)options.size(); // menus are far below INT_MAX
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
     tft.setTextSize(FP);
     tft.drawPixel(0, 0, 0);
@@ -1177,7 +1177,7 @@ void drawSubmenu(int index, std::vector<Option> &options, const char *title) {
     tft.drawCentreString(firstOption, tftWidth / 2, middle_up, SMOOTH_FONT);
 
     // Selected item
-    int selectedTextSize = options[index].label.length() <= tftWidth / (LW * FG) - 1 ? FG : FM;
+    int selectedTextSize = (int)options[index].label.length() <= tftWidth / (LW * FG) - 1 ? FG : FM;
     tft.setTextSize(selectedTextSize);
     tft.setTextColor(options[index].enabled ? bruceConfig.priColor : TFT_DARKGREY);
     tft.fillRect(6, middle - FG * LH / 2 - 1, tftWidth - 12, FG * LH + 5, bruceConfig.bgColor);
@@ -1605,11 +1605,11 @@ void jpegRender(int xpos, int ypos) {
         int mcu_y = JpegDec.MCUy * mcu_h + ypos;
 
         // check if the image block size needs to be changed for the right edge
-        if (mcu_x + mcu_w <= max_x) win_w = mcu_w;
+        if ((uint32_t)(mcu_x + mcu_w) <= max_x) win_w = mcu_w; // mcu_x/mcu_y are screen offsets, never negative
         else win_w = min_w;
 
         // check if the image block size needs to be changed for the bottom edge
-        if (mcu_y + mcu_h <= max_y) win_h = mcu_h;
+        if ((uint32_t)(mcu_y + mcu_h) <= max_y) win_h = mcu_h;
         else win_h = min_h;
 
         // copy pixels into a contiguous block
@@ -1617,9 +1617,9 @@ void jpegRender(int xpos, int ypos) {
             uint16_t *cImg;
             int p = 0;
             cImg = pImg + win_w;
-            for (int h = 1; h < win_h; h++) {
+            for (uint32_t h = 1; h < win_h; h++) {
                 p += mcu_w;
-                for (int w = 0; w < win_w; w++) {
+                for (uint32_t w = 0; w < win_w; w++) {
                     *cImg = *(pImg + w + p);
                     cImg++;
                 }
@@ -1630,9 +1630,9 @@ void jpegRender(int xpos, int ypos) {
         uint32_t mcu_pixels = win_w * win_h;
 
         // draw image MCU block only if it will fit on the screen
-        if ((mcu_x + win_w) <= tft.width() && (mcu_y + win_h) <= tft.height())
+        if ((uint32_t)mcu_x + win_w <= (uint32_t)tft.width() && (uint32_t)mcu_y + win_h <= (uint32_t)tft.height())
             tft.pushImage(mcu_x, mcu_y, win_w, win_h, pImg);
-        else if ((mcu_y + win_h) > tft.height())
+        else if ((uint32_t)mcu_y + win_h > (uint32_t)tft.height())
             JpegDec.abort(); // Image has run off bottom of screen so abort decoding
     }
 
@@ -1927,7 +1927,7 @@ bool showGif(
 
         if (check(AnyKeyPress, resetButtonStatus)) break;
 
-        if (playDurationMs > 0 && (millis() - timeStart) > playDurationMs) break;
+        if (playDurationMs > 0 && (millis() - timeStart) > (uint32_t)playDurationMs) break;
         if (playDurationMs == 0 && result == 0) break;
     } while (result >= 0);
 

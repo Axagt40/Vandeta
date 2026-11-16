@@ -159,7 +159,7 @@ void Timer::loop() {
         if (check(EscPress)) { break; }
 
         // Check if timer has completed
-        if (elapsedMillis >= duration) {
+        if (elapsedMillis >= (uint32_t)duration) { // durations are positive
             // Play alarm pattern only if enabled
             if (playSoundOnFinish) { playAlarmPattern(); }
             break;

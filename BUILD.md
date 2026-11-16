@@ -57,6 +57,13 @@ The board appears as `303a:1001` (console mode) and needs `303a:0002` left alone
 (USB Mass Storage mode). On Linux, no `/dev/ttyACM0` with `303a:1001` visible
 means `sudo modprobe cdc_acm`.
 
+## Tests
+
+The device test scripts live in [`tools/tests/`](tools/tests/README.md): what
+each one covers, what it needs (Developer Options on, the USB port free, the
+payloads from `sd_files/` copied to the card) and how to run it is in that
+README.
+
 ## Where the site is built from
 
 The flasher and the documentation are plain static files in `site/`, published

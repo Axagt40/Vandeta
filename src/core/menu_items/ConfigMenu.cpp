@@ -61,7 +61,7 @@ void ConfigMenu::optionsMenu() {
         int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Config", last);
 
         // Exit to Main Menu only if user pressed Back
-        if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        if (selected == -1 || selected == (int)localOptions.size() - 1) { return; }
         last = selected;
         // Otherwise rebuild Config menu after submenu returns
     }
@@ -86,7 +86,7 @@ void ConfigMenu::displayUIMenu() {
         int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Display & UI", last);
 
         // Exit only if user pressed Back or ESC
-        if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        if (selected == -1 || selected == (int)localOptions.size() - 1) { return; }
         last = selected;
         // Otherwise loop continues and menu rebuilds
     }
@@ -128,7 +128,7 @@ void ConfigMenu::ledMenu() {
         int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "LED Config", last);
 
         // Exit only if user pressed Back or ESC
-        if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        if (selected == -1 || selected == (int)localOptions.size() - 1) { return; }
         last = selected;
         // Menu rebuilds to update toggle label
     }
@@ -171,7 +171,7 @@ void ConfigMenu::audioMenu() {
         int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Audio Config", last);
 
         // Exit only if user pressed Back or ESC
-        if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        if (selected == -1 || selected == (int)localOptions.size() - 1) { return; }
         last = selected;
         // Menu rebuilds to update toggle label
     }
@@ -214,7 +214,7 @@ void ConfigMenu::systemMenu() {
         int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "System Config", last);
 
         // Exit only if user pressed Back or ESC
-        if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        if (selected == -1 || selected == (int)localOptions.size() - 1) { return; }
         last = selected;
         // Menu rebuilds to update toggle labels
     }
@@ -263,7 +263,7 @@ void ConfigMenu::advancedMenu() {
         int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Advanced", last);
 
         // Exit to System Config menu
-        if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        if (selected == -1 || selected == (int)localOptions.size() - 1) { return; }
         last = selected;
         // Menu rebuilds after each action
     }
@@ -287,7 +287,7 @@ void ConfigMenu::batteryMenu() {
         int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Battery", last);
 
         // Exit only if user pressed Back or ESC
-        if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        if (selected == -1 || selected == (int)localOptions.size() - 1) { return; }
         last = selected;
         // Menu rebuilds so the toggle/value labels stay accurate
     }
@@ -325,7 +325,7 @@ void ConfigMenu::powerMenu() {
         int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Power Menu", last);
 
         // Exit to Config menu
-        if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        if (selected == -1 || selected == (int)localOptions.size() - 1) { return; }
         last = selected;
         // Menu rebuilds after each action
     }
@@ -402,7 +402,7 @@ void ConfigMenu::usbDebugMenu() {
         int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Developer Options", last);
 
         // Exit to System Config menu
-        if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        if (selected == -1 || selected == (int)localOptions.size() - 1) { return; }
         last = selected;
         // Menu rebuilds so the toggle labels stay accurate
     }
@@ -484,7 +484,7 @@ void ConfigMenu::pinsMenu() {
         int selected = loopOptions(localOptions, MENU_TYPE_SUBMENU, "Pins Setup", last);
 
         // Exit to Config menu on Back or ESC
-        if (selected == -1 || selected == localOptions.size() - 1) { return; }
+        if (selected == -1 || selected == (int)localOptions.size() - 1) { return; }
         last = selected;
         // Menu rebuilds after each action
     }

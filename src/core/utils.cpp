@@ -297,7 +297,7 @@ String getOptionsJSON() {
         response += "{\"n\":" + String(i) + ",\"label\":\"" + opt.label + "\"}";
         if (opt.hovered) sel = i;
         i++;
-        if (i < opts.size()) response += ",";
+        if (i < (int)opts.size()) response += ",";
     }
     response += "], \"active\":" + String(sel) + "}";
     return response;

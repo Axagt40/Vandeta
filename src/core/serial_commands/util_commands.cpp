@@ -439,7 +439,7 @@ uint32_t optionsCallback(cmd *c) {
     int opt = arg.getValue().toInt();
 
     std::vector<Option> &opts = activeMenuOptions();
-    if (opt >= 0 && opt < opts.size()) {
+    if (opt >= 0 && opt < (int)opts.size()) {
         // wakeUpScreen(); // Do not wakeup screen if it is dimmed and using Remote control
         forceMenuOption = opt;
         serialDevice->printf("Selected option %d: %s\n", forceMenuOption, opts[forceMenuOption].label.c_str());
