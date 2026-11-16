@@ -192,14 +192,15 @@ static uint8_t cc1101_mode_hint = 0;
 // nested locks free; the depth counter means only the outermost pair takes (and
 // releases) the display's SPI transaction, so a render task can never be inside
 // a draw while another task is talking to the CC1101.
-static SemaphoreHandle_t rf_spi_mutex = nullptr;
+static StaticSemaphore_t rf_spi_buf;
+static SemaphoreHandle_t rf_spi_mutex = xSemaphoreCreateRecursiveMutexStatic(&rf_spi_buf);
 static int rf_spi_depth = 0;
 
 void rf_spi_lock() {
-    if (rf_spi_mutex == nullptr) {
-        rf_spi_mutex = xSemaphoreCreateRecursiveMutex();
-        if (rf_spi_mutex == nullptr) return; // out of memory: behave as before
-    }
+    // Static storage: the mutex exists before any task runs, so a lock can no
+    // longer race its own lazy allocation (two tasks used to be able to create
+    // two mutexes, one of which then guarded nothing).
+    if (rf_spi_mutex == nullptr) return; // cannot fail with static storage
     xSemaphoreTakeRecursive(rf_spi_mutex, portMAX_DELAY);
     if (rf_spi_depth == 0) {
 #ifdef HAS_SCREEN
