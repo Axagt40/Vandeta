@@ -175,7 +175,7 @@ bool ble_scan_setup() {
     // The memory guard therefore only makes sense for a REAL bring-up: with the
     // stack already up, its own buffers are what the guard would be measuring,
     // so it would refuse a scan that needs no memory at all.
-    if (!NimBLEDevice::isInitialized() && !radioHasMemForBle()) {
+    if (!NimBLEDevice::isInitialized() && !radioEnsureMemForBle()) {
         displayError("Low RAM: free WiFi/SD first", true);
         returnToMenu = true;
         return false;

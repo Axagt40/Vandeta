@@ -227,7 +227,7 @@ void Chameleon::dumpHFCardDetails() {
 
 void Chameleon::dumpScanResults() {
     for (int i = _scanned_tags.size(); i > 0; i--) {
-        if (_scanned_tags.size() > 5 && i <= _scanned_tags.size() - 5) return;
+        if (_scanned_tags.size() > 5 && i + 5 <= (int)_scanned_tags.size()) return;
         padprintln(String(i) + ": " + _scanned_tags[i - 1].tagType + " | " + _scanned_tags[i - 1].uid);
     }
 }

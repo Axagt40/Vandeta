@@ -360,7 +360,7 @@ void setUIColor() {
         addOptionToMainMenu();
 
         int selectedOption = loopOptions(options, idx);
-        if (selectedOption == -1 || selectedOption == options.size() - 1) return;
+        if (selectedOption == -1 || selectedOption == (int)options.size() - 1) return;
     }
 }
 
@@ -387,7 +387,7 @@ bool setCustomUIColorMenu() {
         };
 
         int selectedOption = loopOptions(options);
-        if (selectedOption == -1 || selectedOption == options.size() - 1) {
+        if (selectedOption == -1 || selectedOption == (int)options.size() - 1) {
             return false;
         } else if (selectedOption == 3) {
             return true;
@@ -405,7 +405,7 @@ void setCustomUIColorChoiceMenu(int colorType) {
         };
 
         int selectedOption = loopOptions(options);
-        if (selectedOption == -1 || selectedOption == options.size() - 1) return;
+        if (selectedOption == -1 || selectedOption == (int)options.size() - 1) return;
     }
 }
 
@@ -514,7 +514,7 @@ void setCustomUIColorSettingMenu(
             .c_str(),
         (rgb != 2) ? selectedIndex : (selectedIndex > 0 ? (selectedIndex + 1) / 2 : 0)
     );
-    if (selectedOption == -1 || selectedOption == options.size() - 1) {
+    if (selectedOption == -1 || selectedOption == (int)options.size() - 1) {
         if (colorType == 1) {
             bruceConfig.priColor = color;
         } else if (colorType == 2) {
@@ -1107,7 +1107,7 @@ void runClockLoop(bool showMenuHint) {
             );
             uint8_t f_size = 4;
             for (uint8_t i = 4; i > 0; i--) {
-                if (i * LW * strlen(timeStr) < (tftWidth - BORDER_PAD_X * 2)) {
+                if (i * LW * strlen(timeStr) < (size_t)(tftWidth - BORDER_PAD_X * 2)) {
                     f_size = i;
                     break;
                 }

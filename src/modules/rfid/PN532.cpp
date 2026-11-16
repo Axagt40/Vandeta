@@ -224,7 +224,7 @@ bool parseHexBytesAfterColon(const String &line, std::vector<uint8_t> &bytes) {
     if (colon < 0) return false;
 
     int hi = -1;
-    for (int i = colon + 1; i < line.length(); i++) {
+    for (int i = colon + 1; i < (int)line.length(); i++) {
         int v = hexNibble(line.charAt(i));
         if (v < 0) continue;
         if (hi < 0) {
@@ -245,7 +245,7 @@ bool extractNdefMessageFromPageDump(const String &dump, std::vector<uint8_t> &nd
     std::vector<uint8_t> lineBytes;
     int pos = 0;
 
-    while (pos < dump.length()) {
+    while (pos < (int)dump.length()) {
         int nl = dump.indexOf('\n', pos);
         if (nl < 0) nl = dump.length();
 

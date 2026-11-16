@@ -549,7 +549,7 @@ static bool pvBleStart() {
     pvBleSeen = 0;
     // NimBLE needs ~56 KB of free internal DRAM; radioHasMemForBle() also drops
     // Wi-Fi first, because only one of the two radios can be up on this board.
-    if (!BLEDevice::isInitialized() && !radioHasMemForBle()) {
+    if (!BLEDevice::isInitialized() && !radioEnsureMemForBle()) {
         Serial.printf(
             "[PktMon] not enough internal RAM for the BLE stack (free %u, largest DMA %u)\n",
             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),

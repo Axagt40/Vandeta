@@ -31,7 +31,7 @@ String xorEncryptDecryptMD5(const String &input, const String &password, const i
 }
 
 bool isValidAscii(const String &text) {
-    for (int i = 0; i < text.length(); i++) {
+    for (size_t i = 0; i < text.length(); i++) {
         char c = text[i];
         // Check if the character is within the printable ASCII range or is a newline/carriage return
         if (!(c >= 32 && c <= 126) && c != 10 && c != 13) {
@@ -111,7 +111,7 @@ String readDecryptedFile(FS &fs, String filepath) {
     uint8_t decimal = 0;
     char temp[3]; // Temporary storage for each hex pair
 
-    for (int i = 0; i < cypertextData.length(); i += 3) {
+    for (size_t i = 0; i < cypertextData.length(); i += 3) {
         // Converts two characters hex to a single byte
 
         uint8_t highNibble = hexCharToDecimal(cypertextData[i]);

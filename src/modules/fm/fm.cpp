@@ -200,7 +200,7 @@ void fm_spectrum() {
                 // Clear the display area
                 tft.fillRect(0, 40, tftWidth, tftHeight, bruceConfig.bgColor);
                 // Draw waveform based on signal strength
-                for (size_t i = 0; i < noise_level; i++) {
+                for (size_t i = 0; i < (size_t)noise_level; i++) { // noise_level is checked > 0 above
                     int lineHeight = map(noise_level, 0, SIGNAL_STRENGTH_THRESHOLD, 0, tftHeight / 2);
                     int lineX =
                         map(i, 0, noise_level - 1, 0, tftWidth - 1); // Map i to within the display width

@@ -368,7 +368,7 @@ getScriptsOptionsList(const String &currentPath, bool saveStartupScript, int rem
                      String currentFolderName = currentPath.substring(currentPath.lastIndexOf('/') + 1);
                      String searchTitle = "[ " + currentFolderName + " ]";
 
-                     for (int i = 0; i < parentOptions.size(); i++) {
+                     for (size_t i = 0; i < parentOptions.size(); i++) {
                          if (parentOptions[i].label == searchTitle) {
                              restoreIndex = i;
                              break;

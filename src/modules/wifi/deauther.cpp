@@ -1118,7 +1118,7 @@ void scanClientsOnAP(uint8_t *targetMAC, int channel) {
     delay(100);
 
     while (!check(EscPress) && millis() - startTime < 8000) {
-        if (millis() - startTime > scanCount * 1000) {
+        if (millis() - startTime > (uint32_t)scanCount * 1000) {
             sendDeauthFrames(frame, 26);
             scanCount++;
 

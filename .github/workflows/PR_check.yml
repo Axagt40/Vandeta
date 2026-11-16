@@ -2,7 +2,7 @@
 name: Build and Push OR check-PR
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 on:
@@ -22,6 +22,10 @@ on:
         - "**.json"
         - "**.csv"
 
+  push:
+    branches:
+      - main
+
   workflow_dispatch:
 
 jobs:
@@ -32,6 +36,13 @@ jobs:
       fail-fast: false
       matrix:
         board:
+          # The gate: the one board this fork is built, flashed and tested on.
+          - {
+              name: "ESP32-S3 - LilyGo T-Embed CC1101 (gate)",
+              env: "lilygo-t-embed-cc1101",
+              partitions: { bootloader_addr: "0x0" },
+              gate: true,
+            }
           - {
               name: "ESP32-S3 - M5Cardputer",
               env: "m5stack-cardputer",
@@ -96,14 +107,18 @@ jobs:
 
           cat ./platformio.ini
 
+      # A red gate build fails the workflow. Every other board is a smoke test:
+      # its result is reported but does not block, because none of them is run
+      # on hardware for this fork.
       - name: Run Compile
+        continue-on-error: ${{ !matrix.board.gate }}
         run: |
           platformio run -e ${{ matrix.board.env }}
 
       - name: Upload ${{ matrix.board.name }}
         uses: actions/upload-artifact@v4
         with:
-          name: Bruce-${{ matrix.board.env }}
-          path: Bruce-*.bin
+          name: Vandeta-${{ matrix.board.env }}
+          path: vandeta-*.bin
           retention-days: 5
           if-no-files-found: error

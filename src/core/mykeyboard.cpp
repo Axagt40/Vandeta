@@ -15,8 +15,8 @@
 #define HAS_1_BUTTON 1
 #endif
 
-int max_FM_size = tftWidth / (LW * FM) - 1;
-int max_FP_size = tftWidth / (LW)-2;
+size_t max_FM_size = tftWidth / (LW * FM) - 1; // measured in characters, compared with length()
+size_t max_FP_size = tftWidth / (LW)-2;
 
 // QWERTY KEYSET
 const int qwerty_keyboard_width = 12;
@@ -374,7 +374,7 @@ bool handleDelete(String &current_text, int &cursor_x, int &cursor_y) {
 bool handleCharacterAdd(
     String &current_text, char character, int &cursor_x, int &cursor_y, const int max_size, bool mask_input
 ) {
-    if (current_text.length() >= max_size) return false;
+    if (current_text.length() >= (size_t)max_size) return false;
 
     current_text += character;
     if (current_text.length() != (max_FP_size + 1)) {
@@ -391,7 +391,7 @@ bool handleCharacterAdd(
 
 /// Handles adding space to the text string
 bool handleSpaceAdd(String &current_text, const int max_size) {
-    if (current_text.length() >= max_size) return false;
+    if (current_text.length() >= (size_t)max_size) return false;
     current_text += ' ';
     return true;
 }
@@ -430,10 +430,10 @@ KeyboardAction handleKeyboardSelection(
             default: break;
         }
 
-    } else if (y > -1 && current_text.length() < max_size) {
+    } else if (y > -1 && current_text.length() < (size_t)max_size) {
         // add a letter to current_text
         if (handleCharacterAdd(current_text, character, cursor_x, cursor_y, max_size, mask_input)) {
-            if (current_text.length() >= max_size) { // put the Cursor at "Ok" when max size reached
+            if (current_text.length() >= (size_t)max_size) { // put the Cursor at "Ok" when max size reached
                 x = 0;
                 y = -1;
             }

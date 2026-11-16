@@ -78,7 +78,7 @@ bool st25ParseHexBytesAfterColon(const String &line, std::vector<uint8_t> &bytes
     if (colon < 0) return false;
 
     int hi = -1;
-    for (int i = colon + 1; i < line.length(); i++) {
+    for (int i = colon + 1; i < (int)line.length(); i++) {
         int v = st25HexNibble(line.charAt(i));
         if (v < 0) continue;
         if (hi < 0) {
@@ -99,7 +99,7 @@ bool st25ExtractNdefMessageFromPageDump(const String &dump, std::vector<uint8_t>
     std::vector<uint8_t> lineBytes;
     int pos = 0;
 
-    while (pos < dump.length()) {
+    while (pos < (int)dump.length()) {
         int nl = dump.indexOf('\n', pos);
         if (nl < 0) nl = dump.length();
 
@@ -959,7 +959,7 @@ int ST25R3916::_buildEmuPages() {
     _emuPageCount = 0;
     memset(_emuPages, 0, sizeof(_emuPages));
     int pos = 0;
-    while (pos < strAllPages.length() && _emuPageCount < 256) {
+    while (pos < (int)strAllPages.length() && _emuPageCount < 256) {
         int nl = strAllPages.indexOf('\n', pos);
         if (nl < 0) nl = strAllPages.length();
         String line = strAllPages.substring(pos, nl);
@@ -1665,7 +1665,7 @@ void ST25R3916::_parseNfcB(rfalNfcDevice *dev) {
     printableUID.atqa = "--";
 
     printableUID.uid = "";
-    for (int i = 0; i < RFAL_NFCB_NFCID0_LEN; i++) {
+    for (size_t i = 0; i < RFAL_NFCB_NFCID0_LEN; i++) {
         char buf[3];
         sprintf(buf, "%02X", pupi[i]);
         printableUID.uid += buf;
@@ -1704,7 +1704,7 @@ int ST25R3916::_readFeliCa(rfalNfcDevice *dev) {
     printableUID.atqa = "--";
 
     printableUID.uid = "";
-    for (int i = 0; i < RFAL_NFCF_NFCID2_LEN; i++) {
+    for (size_t i = 0; i < RFAL_NFCF_NFCID2_LEN; i++) {
         char buf[3];
         sprintf(buf, "%02X", idm[i]);
         printableUID.uid += buf;

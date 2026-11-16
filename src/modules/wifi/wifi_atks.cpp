@@ -448,7 +448,7 @@ void capture_handshake(const String &tssid, const String &mac, uint8_t channel) 
     ap_record.primary = channel;
 
     String encryptionTypeStr = "Unknown";
-    for (int i = 0; i < ap_records.size(); i++) {
+    for (size_t i = 0; i < ap_records.size(); i++) {
         if (memcmp(ap_records[i].bssid, bssid_array, 6) == 0) {
             switch (ap_records[i].authmode) {
                 case WIFI_AUTH_OPEN: encryptionTypeStr = "Open"; break;

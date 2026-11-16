@@ -343,14 +343,14 @@ void musicPlayerUI(FS *fs, const String &filepath) {
         tft.setTextSize(ui.TEXT_SIZE_LARGE);
 
         String displayText = player.filename;
-        if (displayText.length() > maxChars) {
+        if ((int)displayText.length() > maxChars) {
             String scrolled = displayText + "   " + displayText;
             displayText = scrolled.substring(player.scrollOffset, player.scrollOffset + maxChars);
 
             // Scroll every 300ms
             if (millis() - player.lastUpdate > 300) {
                 player.scrollOffset++;
-                if (player.scrollOffset >= player.filename.length() + 3) player.scrollOffset = 0;
+                if (player.scrollOffset >= (int)player.filename.length() + 3) player.scrollOffset = 0;
                 player.lastUpdate = millis();
             }
         }

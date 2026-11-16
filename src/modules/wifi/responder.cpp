@@ -172,7 +172,7 @@ void buildNTLMType2Msg(uint8_t *challenge, uint8_t *buffer, uint16_t *len) {
     *(uint32_t *)(buffer + 44) = NTLM_HEADER_SIZE + targetLen;
 
     // Copie TargetName en UTF16LE
-    for (int i = 0; i < strlen(netbiosName); i++) {
+    for (size_t i = 0; i < strlen(netbiosName); i++) {
         buffer[NTLM_HEADER_SIZE + 2 * i] = netbiosName[i];
         buffer[NTLM_HEADER_SIZE + 2 * i + 1] = 0x00;
     }
@@ -518,7 +518,7 @@ void handleSMB1(uint8_t *pkt, uint32_t len) {
         uint16_t andxOffset = *(uint16_t *)(pkt + 45); // début des données NTLM
         uint8_t *ntlm = pkt + andxOffset;
 
-        if (memcmp(ntlm, "NTLMSSP", 7) == 0 && len > andxOffset + 8) {
+        if (memcmp(ntlm, "NTLMSSP", 7) == 0 && (uint32_t)andxOffset + 8 < (uint32_t)len) {
             uint8_t type = ntlm[8];
             if (type == 1) { // Type1 → envoyer challenge
                 Serial.println(F("NTLM Type 1 (SMB1) received"));
@@ -830,7 +830,7 @@ void responder() {
                             smbState.client.stop();
                             smbState.active = false;
                         } else {
-                            if (smbState.client.read(packet, smbLength) == smbLength) {
+                            if (smbState.client.read(packet, smbLength) == (int)smbLength) {
                                 // Vérifier protocole SMB2 (header commence par 0xFE 'S' 'M' 'B')
                                 if (smbLength >= 64 && packet[0] == 0xFE && packet[1] == 'S' &&
                                     packet[2] == 'M' && packet[3] == 'B') {
@@ -932,7 +932,7 @@ void responder() {
                                                 break;
                                             }
                                         }
-                                        if (ntlmIndex >= 0 && ntlmIndex + 8 < smbLength) {
+                                        if (ntlmIndex >= 0 && (uint32_t)(ntlmIndex + 8) < smbLength) {
                                             uint8_t ntlmMsgType = packet[ntlmIndex + 8];
                                             if (ntlmMsgType == 1) {
                                                 // Type 1: NTLMSSP Negotiate

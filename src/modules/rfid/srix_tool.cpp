@@ -916,7 +916,7 @@ String SRIXTool::read_tag_headless(int timeout_seconds) {
 
     uint32_t startTime = millis();
 
-    while ((millis() - startTime) < (timeout_seconds * 1000)) {
+    while ((millis() - startTime) < (uint32_t)(timeout_seconds * 1000)) {
         // Try to detect tag
         if (!nfc->SRIX_initiate_select()) {
             delay(100);

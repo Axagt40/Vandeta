@@ -192,14 +192,15 @@ static uint8_t cc1101_mode_hint = 0;
 // nested locks free; the depth counter means only the outermost pair takes (and
 // releases) the display's SPI transaction, so a render task can never be inside
 // a draw while another task is talking to the CC1101.
-static SemaphoreHandle_t rf_spi_mutex = nullptr;
+static StaticSemaphore_t rf_spi_buf;
+static SemaphoreHandle_t rf_spi_mutex = xSemaphoreCreateRecursiveMutexStatic(&rf_spi_buf);
 static int rf_spi_depth = 0;
 
 void rf_spi_lock() {
-    if (rf_spi_mutex == nullptr) {
-        rf_spi_mutex = xSemaphoreCreateRecursiveMutex();
-        if (rf_spi_mutex == nullptr) return; // out of memory: behave as before
-    }
+    // Static storage: the mutex exists before any task runs, so a lock can no
+    // longer race its own lazy allocation (two tasks used to be able to create
+    // two mutexes, one of which then guarded nothing).
+    if (rf_spi_mutex == nullptr) return; // cannot fail with static storage
     xSemaphoreTakeRecursive(rf_spi_mutex, portMAX_DELAY);
     if (rf_spi_depth == 0) {
 #ifdef HAS_SCREEN
@@ -489,6 +490,11 @@ __attribute__((noinline, used)) void setMHZ_body(float frequency) {
     }
     if (bruceConfigPins.rfModule == CC1101_SPI_MODULE) {
 #if defined(T_EMBED)
+        // Antenna switch first, and deliberately OUTSIDE rf_spi_lock() below:
+        // SW0/SW1 are plain GPIO writes on their own pins, not SPI traffic, and
+        // the 10 ms settle must not be spent holding the bus against the render
+        // task. Only calibration and setMHZ touch the CC1101 over SPI, so those
+        // stay inside the lock.
         static uint8_t antenna =
             200; // 0=(<300), 1=(350-468), 2=(>778), 200=start to settle at the fisrt time
         bool change = true;
