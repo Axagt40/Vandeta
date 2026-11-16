@@ -64,6 +64,24 @@ WiFi, no reflash and no extra hardware.
 
 ---
 
+## What this actually does
+
+* **MITM that survives modern clients.** The engine drops QUIC, suppresses
+  IPv6/AAAA/SVCB answers and blocks 853, then restores the target's ARP entry on
+  stop - a poisoned device is online again seconds after `mitm stop`, and what a
+  client can still see is listed under *What this build does not do*.
+* **One bus, one owner.** Every radio transaction holds `rf_spi_lock()` (plus the
+  display's `busLock()`), sweeps park between hops and the noise floor adapts, so
+  a screen repaint no longer shows up as a dropped capture.
+* **A console instead of a reflash.** `ui`/`move`/`press`, `file`, `log`,
+  `errors`, `display dump` and `js run` drive and read back the board over the
+  USB cable - no Wi-Fi, no extra hardware.
+* **A dev loop that fits the board.** `tune`, `patch`, `devflash` and `autotest`
+  change a value or a code slot and verify it, and every build drops an ELF, a
+  map, an app-only image and a build ID.
+
+---
+
 ## :computer: Vandeta feature list
 
 Everything below is in Vandeta and **not** in stock Bruce. Bruce's own menus,
