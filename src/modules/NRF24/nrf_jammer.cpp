@@ -27,10 +27,17 @@
     Enchanted cover LESS of the band than a sweep whenever the scan was
     inconclusive or the target moved between scans - it measured worse than
     FHSS on a real target. It now visits every channel of the mode each
-    rotation: a quiet channel gets ENCH_BASE_DWELL_US, short enough that the
-    retune still spreads energy the way a sweep does, and a channel the scan
-    heard gets its own locked dwell. Being worse than a sweep is therefore
+    rotation: a quiet channel gets ENCH_BASE_DWELL_US, a channel the scan heard
+    gets its own longer dwell. Being worse than a sweep is therefore
     impossible; the extra dwell is pure bonus.
+
+    The base dwell used to be 40 us on the theory that retuning faster than the
+    PLL locks "spreads energy like a sweep". It does not: the PA output is on a
+    frequency the PLL has not settled to, so the carrier is a chirp that a
+    receiver tuned to any one channel only sees as a few microseconds of
+    off-frequency noise. 150 us is the first value at or above the ~130 us lock
+    time, so every channel now radiates on-frequency; a 40-channel rotation still
+    finishes in ~6 ms, well inside a BLE connection event interval.
 
     The activity map is the nRF24's own RPD bit (received power > ~-64 dBm),
     sampled per channel while the carrier is briefly down.
@@ -39,7 +46,7 @@
 #define ENCH_SCAN_MS 800          // re-scan period (carrier is off while it runs)
 #define ENCH_RPD_SETTLE_US 250    // RX settle before the RPD bit is valid
 #define ENCH_MAX_TARGETS 12       // busiest channels that get a parked dwell
-#define ENCH_BASE_DWELL_US 40     // every channel is visited this long each rotation
+#define ENCH_BASE_DWELL_US 150    // >= the nRF24 PLL re-lock (~130 us): every channel locks
 #define ENCH_TARGET_DWELL_US 300  // a hot channel parks >= nRF24 PLL re-lock (~130 us)
 #define ENCH_MAX_DWELL_US 1600    // ...and at most this long, so a rotation stays short
 
@@ -193,10 +200,16 @@ void nrf_jammer() {
 
     byte wifi_channels[] = {2, 7, 12, 17, 22, 27, 32, 37, 42, 47, 52, 57, 62, 67, 72, 77};
 
-    byte ble_channels[] = {2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-                           22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41};
+    // BLE data channel k sits at 2402 + 2k MHz, i.e. nRF24 channel 2 + 2k. The
+    // old list was 2..41 at 1 MHz spacing, which is 2402-2441 MHz - the lower
+    // half of the band only, so half of every connection's hops were never
+    // jammed. 0..39 here are the 40 data channels, 2402-2480 MHz.
+    byte ble_channels[] = {2,  4,  6,  8,  10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40,
+                           42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 62, 64, 66, 68, 70, 72, 74, 76, 78, 80};
 
-    byte ble_adv_priority[] = {37, 38, 39, 1, 2, 3, 25, 26, 27, 79, 80, 81};
+    // Advertising channels 37/38/39 are 2402/2426/2480 MHz = nRF 2/26/80; the
+    // rest are data channels near them, where a connection starts out.
+    byte ble_adv_priority[] = {2, 26, 80, 4, 6, 24, 28, 52, 54, 56, 62, 64};
 
     byte bluetooth_channels[] = {2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17,
                                  18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33,
