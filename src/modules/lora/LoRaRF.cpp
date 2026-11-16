@@ -215,7 +215,7 @@ void render() {
 
     int yPos = yStart;
     int endLine = scrollOffset + maxMessages;
-    if (endLine > messages.size()) endLine = messages.size();
+    if (endLine > (int)messages.size()) endLine = (int)messages.size();
     for (int i = scrollOffset; i < endLine; i++) {
         tft.setTextColor(bruceConfig.priColor);
         tft.drawString(messages[i], 10, yPos);
@@ -286,7 +286,7 @@ void upress() {
 
 void downpress() {
     Serial.println("Down Pressed");
-    if (scrollOffset < messages.size() - maxMessages) {
+    if ((size_t)scrollOffset + (size_t)maxMessages < messages.size()) { // both are counts, never negative
         scrollOffset++;
         update = true;
     }

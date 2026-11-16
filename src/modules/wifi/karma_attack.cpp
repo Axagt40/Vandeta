@@ -2126,7 +2126,7 @@ void handleBroadcastResponse(const String &ssid, const String &mac) {
         broadcastAttack.processProbeResponse(ssid, mac);
 
         uint32_t fingerprint = 0;
-        for (int i = 0; i < mac.length(); i++) {
+        for (size_t i = 0; i < mac.length(); i++) {
             fingerprint = ((fingerprint << 5) + fingerprint) + mac.charAt(i);
         }
 

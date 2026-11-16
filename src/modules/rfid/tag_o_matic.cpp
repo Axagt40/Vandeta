@@ -286,7 +286,7 @@ void TagOMatic::dump_ndef_details() {
 
 void TagOMatic::dump_scan_results() {
     for (int i = _scanned_tags.size(); i > 0; i--) {
-        if (_scanned_tags.size() > SCAN_DUMP_SIZE && i <= _scanned_tags.size() - SCAN_DUMP_SIZE) return;
+        if (_scanned_tags.size() > SCAN_DUMP_SIZE && i + SCAN_DUMP_SIZE <= (int)_scanned_tags.size()) return;
         padprintln(String(i) + ": " + _scanned_tags[i - 1]);
     }
 }
@@ -757,7 +757,7 @@ String TagOMatic::read_tag_headless(int timeout_seconds) {
     uint32_t startTime = millis();
     int readStatus = RFIDInterface::TAG_NOT_PRESENT;
 
-    while ((millis() - startTime) < (timeout_seconds * 1000)) {
+    while ((millis() - startTime) < (uint32_t)(timeout_seconds * 1000)) {
         readStatus = _rfid->read();
 
         if (readStatus == RFIDInterface::SUCCESS) {
@@ -786,7 +786,7 @@ String TagOMatic::read_uid_headless(int timeout_seconds) {
     uint32_t startTime = millis();
     int readStatus = RFIDInterface::TAG_NOT_PRESENT;
 
-    while ((millis() - startTime) < (timeout_seconds * 1000)) {
+    while ((millis() - startTime) < (uint32_t)(timeout_seconds * 1000)) {
         readStatus = _rfid->read();
 
         if (readStatus == RFIDInterface::SUCCESS) { return _rfid->printableUID.uid; }
@@ -806,7 +806,7 @@ int TagOMatic::write_tag_headless(int timeout_seconds) {
     uint32_t startTime = millis();
     int finalResult = RFIDInterface::TAG_NOT_PRESENT;
 
-    while (millis() - startTime < (timeout_seconds * 1000)) {
+    while (millis() - startTime < (uint32_t)(timeout_seconds * 1000)) {
         int writeStatus;
         if (_rfid->printableUID.picc_type != "FeliCa") {
             writeStatus = _rfid->write();

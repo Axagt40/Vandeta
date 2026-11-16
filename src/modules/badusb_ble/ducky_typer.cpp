@@ -1216,7 +1216,7 @@ void key_input(FS fs, const String &bad_script, HIDInterface *_hid) {
                     } else if (
                         PriCmd != nullptr && PriCmd->type == DuckyCommandType_Cmd && Argument.length() > 0
                     ) {
-                        for (int idx = 0; idx < Argument.length(); idx++) {
+                        for (size_t idx = 0; idx < Argument.length(); idx++) {
                             _hid->press(Argument.charAt(idx));
                         }
                     }
@@ -1512,7 +1512,7 @@ void sendAltChar(HIDInterface *hid, uint8_t charCode) {
         while (codeStr.length() < 3) { codeStr = "0" + codeStr; }
     }
 
-    for (int i = 0; i < codeStr.length(); i++) {
+    for (size_t i = 0; i < codeStr.length(); i++) {
         char digit = codeStr[i];
         uint8_t numpadKey = 0;
 
@@ -1541,7 +1541,7 @@ void sendAltChar(HIDInterface *hid, uint8_t charCode) {
 }
 
 void sendAltString(HIDInterface *hid, const String &text) {
-    for (int i = 0; i < text.length(); i++) {
+    for (size_t i = 0; i < text.length(); i++) {
         uint8_t charCode = (uint8_t)text[i];
         sendAltChar(hid, charCode);
         delay(bruceConfig.badUSBBLEKeyDelay);
@@ -1621,7 +1621,7 @@ void printTFTBadUSBBLE(const String &text, uint16_t color, bool newline) {
     int maxChars = availableWidth / charWidth;
 
     String textToPrint = text;
-    if (text.length() > maxChars) { textToPrint = text.substring(0, maxChars); }
+    if ((int)text.length() > maxChars) { textToPrint = text.substring(0, maxChars); }
 
     if (newline) {
         tft.println(textToPrint);

@@ -7,7 +7,7 @@ String hexStrToBinStr(const String &hexStr) {
     // Variables for decimal value
     int value;
 
-    for (int i = 0; i < hexStr.length(); i++) {
+    for (size_t i = 0; i < hexStr.length(); i++) {
         char c = hexStr.charAt(i);
 
         // Check if the character is a hexadecimal digit

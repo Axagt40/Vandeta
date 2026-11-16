@@ -739,7 +739,7 @@ bool chooseCmdIrFile(FS *fs, const String &filepath) {
             codes[total_codes]->data = txt;
         }
 
-        if (line.startsWith("#") && total_codes < codes.size() && codes[total_codes]->name != "") {
+        if (line.startsWith("#") && total_codes < (int)codes.size() && codes[total_codes]->name != "") {
             total_codes++;
             codes.push_back(new IRCode());
         }

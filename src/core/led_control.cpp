@@ -447,7 +447,7 @@ void setLedColorConfig() {
         addOptionToMainMenu();
 
         int selectedOption = loopOptions(options, idx);
-        if (selectedOption == -1 || selectedOption == options.size() - 1) {
+        if (selectedOption == -1 || selectedOption == (int)options.size() - 1) {
             ledPreviewMode(false);
             ledSetup();
             return;
@@ -465,7 +465,7 @@ void setCustomColorMenu() {
         };
 
         int selectedOption = loopOptions(options);
-        if (selectedOption == -1 || selectedOption == options.size() - 1) return;
+        if (selectedOption == -1 || selectedOption == (int)options.size() - 1) return;
     }
 }
 
@@ -518,7 +518,7 @@ void setCustomColorSettingMenu(int rgb, std::function<uint32_t(uint32_t, int)> c
     addOptionToMainMenu();
 
     int selectedOption = loopOptions(options, MENU_TYPE_SUBMENU, "", selectedIndex);
-    if (selectedOption == -1 || selectedOption == options.size() - 1) {
+    if (selectedOption == -1 || selectedOption == (int)options.size() - 1) {
         setLedColor(originalColor);
         return;
     }
@@ -639,7 +639,7 @@ void setLedEffectConfig() {
         addOptionToMainMenu();
 
         int selectedOption = loopOptions(options, bruceConfig.ledEffect);
-        if (selectedOption == -1 || selectedOption == options.size() - 1) {
+        if (selectedOption == -1 || selectedOption == (int)options.size() - 1) {
             ledPreviewMode(false);
             ledSetup();
             return;
@@ -692,7 +692,7 @@ void setLedEffectSpeedConfig() {
     addOptionToMainMenu();
 
     int selectedOption = loopOptions(options, bruceConfig.ledEffectSpeed - 1);
-    if (selectedOption == -1 || selectedOption == options.size() - 1) {
+    if (selectedOption == -1 || selectedOption == (int)options.size() - 1) {
         previewLedEffectSpeed = bruceConfig.ledEffectSpeed;
         return;
     }
@@ -719,7 +719,7 @@ void setLedEffectDirectionConfig() {
     addOptionToMainMenu();
 
     int selectedOption = loopOptions(options, (bruceConfig.ledEffectDirection == 1) ? 0 : 1);
-    if (selectedOption == -1 || selectedOption == options.size() - 1) {
+    if (selectedOption == -1 || selectedOption == (int)options.size() - 1) {
         previewLedEffectDirection = bruceConfig.ledEffectDirection;
         return;
     }

@@ -611,7 +611,7 @@ bool parseShellPromptLine(const String &line, String &context, String &prompt) {
 
     int atPos = trimmed.indexOf('@');
     int colonPos = trimmed.lastIndexOf(':');
-    if (atPos <= 0 || colonPos <= atPos || colonPos >= trimmed.length() - 1) return false;
+    if (atPos <= 0 || colonPos <= atPos || colonPos >= (int)trimmed.length() - 1) return false;
 
     String userHost = trimmed.substring(0, colonPos);
     String location = trimmed.substring(colonPos + 1);

@@ -373,7 +373,7 @@ JSValue native_httpFetch(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
         return JS_ThrowOutOfMemory(ctx);
     }
 
-    for (size_t i = 0; i < http.headers(); i++) {
+    for (size_t i = 0; i < (size_t)http.headers(); i++) { // headers() returns int
         JS_SetPropertyStr(
             ctx, *headersObj, http.headerName(i).c_str(), JS_NewString(ctx, http.header(i).c_str())
         );
