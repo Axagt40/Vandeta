@@ -500,14 +500,24 @@ Questions, builds and feedback: **Discord** — <https://discord.gg/dhPXgVerqD>
 
 ## :white_check_mark: Verified on the board
 
-The 1.4 image (`nogit-20261115-163837`) reports `vandeta 1.4` in `info`.
-On it, `t50_ble_attacks.py` scored **32 passed / 0 failed / 0 skipped**,
-`t23_wardriver_regressions.py` and `t22_wardriver_identify.py` passed every
-check (t23 with one declared skip: its Mode-row walk needs a second console),
-and `t26_mitm_menus.py` **32 passed / 4 failed** - all four are the
-`redirect-test.mitm` fixture, now published in `sd_files/BruceSpoof`.
-`t45_patch_overlay.py` **35 passed / 0 failed / 1 declared skip** and
-`t48_tasks.py` **21 passed / 0 failed** stay green. The MITM transport barrier was measured
+The 1.4 image (`nogit-20261116-083651`, 4,993,424 B, sha256
+`351a897bd33f5485477fc5344905fdf5dd3c53961049bf52ccc262442b0251b0`) reports
+`vandeta 1.4` in `info`. On it, the published harness scored:
+`t26_mitm_menus.py` **36 passed / 0 failed / 0 skipped**,
+`t50_ble_attacks.py` **32 / 0 / 0**, `t45_patch_overlay.py` **35 / 0**,
+`t48_tasks.py` **21 / 0**, `t44_tune.py` **32 / 0**, `t51_wardriver_mode.py`
+**22 / 0**, `t29_task1_settings.py` **69 / 0**, `t52_dhcp_starve.py`
+**14 / 0 / 1 declared skip** (the row is not opened: it would attack the live
+LAN), and `t22_wardriver_identify.py` / `t23_wardriver_regressions.py` passed
+every check (t23 with one declared skip: its Mode-row walk needs a second
+console). The board also booted five times in a row and answered an RF operation
+on the first try each time.
+
+`NRF Jammer` has no runtime limit of its own: a `Full`-list run held for 130 s
+with no reboot and the page still occupying the console afterwards (its tight
+loop starves the console task, which is why no command is answered while it
+runs), so it never stopped. The only 30 s safety cap in the tree belongs to the
+CC1101 RF Jammer, not this page. The MITM transport barrier was measured
 on the 2026-11-08 build, whose engine code is unchanged: a DNS-only payload arms
 it, AAAA/SVCB/HTTPS come back empty, UDP/443 is answered with ICMP, TCP/853 never
 opens, and a poisoned victim was back online 6 s after `mitm stop`
