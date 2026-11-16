@@ -37,6 +37,8 @@ import time
 import serial
 
 PORT = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyACM0"
+# tests live in <root>/tools/tests, the published fixtures in <root>/sd_files
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BAUD = 115200
 ESPTOOL = os.path.expanduser("~/.platformio/penv/bin/esptool")
 
@@ -460,11 +462,21 @@ def main():
             "redirect-test.mitm" in body and "portal-redirect.mitm" in body and "recon.mitm" in body,
             body[:200],
         )
+        # Name-exact against the published fixture tree: a substring test on the
+        # card listing made the new redirect-test.mitm fail its own check, and
+        # whatever a user copied to their own card is not this repository's
+        # fixture set.
+        fixture_dir = os.path.join(REPO_ROOT, "sd_files", "BruceSpoof")
+        shipped = {n.lower() for n in os.listdir(fixture_dir)} if os.path.isdir(fixture_dir) else set()
+        # The retired payload types are the .txt ones the firmware replaced with
+        # .mitm/.ucmitm. test.mitm is still a valid .mitm payload, and matching
+        # it as a substring made redirect-test.mitm fail its own check.
+        retired = {"mitm.txt", "dns.txt", "redirect.txt"}
+        card_names = {ln.strip().lower() for ln in body.splitlines()}
         record(
             "the old payload types are gone",
-            "mitm.txt" not in body and "test.mitm" not in body
-            and "dns.txt" not in body and "redirect.txt" not in body,
-            body[:200],
+            not (retired & shipped) and not (retired & card_names),
+            ", ".join(sorted(shipped)),
         )
         record(
             "the ucmitm payloads are on the card",

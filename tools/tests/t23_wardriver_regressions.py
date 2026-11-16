@@ -23,7 +23,9 @@ import serial
 PORT = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyACM0"
 BAUD = 115200
 BOOT_WAIT = 9.0
-USB_DEBUG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", "usb_debug.py")
+# tests live in <root>/tools/tests, the client in <root>/FREEBUFF/tools
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+USB_DEBUG = os.path.join(REPO_ROOT, "FREEBUFF", "tools", "usb_debug.py")
 FOLDER = "/bruce/subghz/wardriver"
 
 
