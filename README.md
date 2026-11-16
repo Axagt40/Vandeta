@@ -487,7 +487,7 @@ On it, `t50_ble_attacks.py` scored **32 passed / 0 failed / 0 skipped**,
 `t23_wardriver_regressions.py` and `t22_wardriver_identify.py` passed every
 check (t23 with one declared skip: its Mode-row walk needs a second console),
 and `t26_mitm_menus.py` **32 passed / 4 failed** - all four are the
-`html-rickroll.mitm` fixture, which is not in this repository.
+`redirect-test.mitm` fixture, now published in `sd_files/BruceSpoof`.
 `t45_patch_overlay.py` **35 passed / 0 failed / 1 declared skip** and
 `t48_tasks.py` **21 passed / 0 failed** stay green. The MITM transport barrier was measured
 on the 2026-11-08 build, whose engine code is unchanged: a DNS-only payload arms

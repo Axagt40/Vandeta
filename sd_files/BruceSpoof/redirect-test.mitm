@@ -1,0 +1,25 @@
+# Vandeta MITM payload - redirect test: answer every plaintext request with a
+# 302 so the client follows it on its own.
+#
+#   WiFi > Wifi Atks > MITM Attack > Payload > redirect-test.mitm > Target > phone > Start
+#
+# Sweep, forward and catch every plaintext request, point DNS at the board, then
+# answer with a 302 instead of a page - the client follows it without a click.
+# Safe to run against a lab network or a phone you own.
+#
+# Target is not set here on purpose: pick the phone on the page (or
+# `mitm target 192.168.1.167`). "All devices" sweeps one host at a time.
+#
+# page -> redirect
+#   `page *` answered with 200 + HTML; `redirect *` answers 302 + Location.
+#   The Location is an https:// URL, so the client fetches it over its own
+#   route and the engine never sees the follow-up request.
+#
+# forward auto keeps the target's internet: without it the poison cuts the
+# device off and the 302 points at a URL it cannot reach.
+#
+# Any other URL works on the same line.
+sweep 1500
+forward auto
+redirect * https://example.com/
+dns * this
