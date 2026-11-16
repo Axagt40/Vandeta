@@ -73,7 +73,7 @@ void ARPoisoner::setup(IPAddress gateway) {
 void ARPoisoner::loop() {
     long tmp = 0;
     while (!check(AnyKeyPress)) {
-        if (tmp + 5000 < millis()) { // sends frames every 5 seconds
+        if ((unsigned long)tmp + 5000 < millis()) { // sends frames every 5 seconds
             for (int i = 0; i < 6; i++) {
                 gatewayMAC[i] = random(256); // Create other random MAC to the Gateway
             }

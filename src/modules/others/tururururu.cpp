@@ -148,7 +148,7 @@ void shark_loop() {
         // Começa a desenhar o Sprite
         displayScore();
         detectInputs();
-        if (millis() - time > downTime) {
+        if (millis() - time > (uint32_t)downTime) { // downTime is a positive delay
             // Move o tubarão
             moveShark();
             // Desenha o tubarão

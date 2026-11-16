@@ -98,7 +98,7 @@ void ARPSpoofer::loop() {
     long tmp = 0;
     int count = 0;
     while (!check(AnyKeyPress)) {
-        if (tmp + 2000 < millis()) { // sends frames every 2 seconds
+        if ((unsigned long)tmp + 2000 < millis()) { // sends frames every 2 seconds
             // Sends false ARP response data to the victim (Gataway IP now sas our MAC Address)
             sendARPPacket(victimIP, victimMAC, gatewayIP, myMAC, pcapFile);
 
