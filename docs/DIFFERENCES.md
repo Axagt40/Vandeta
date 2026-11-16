@@ -21,6 +21,7 @@ build does about it is column three.
 | Board support | 18 devices | One: the LilyGo T-Embed CC1101 Plus |
 | Deliberately not | - | No new radios or protocols: the CC1101 and nRF24 cannot demodulate 802.11. No BLE relay proxy. No PEAP termination. No microphone on this board. No account, cloud or telemetry. |
 
-Screenshots of these screens are the slots at the top of the
-[README](../README.md); until they are filled, the site's
-[documentation](https://axagt40.github.io/Vandeta/docs.html) is the reference.
+The screenshots at the top of the [README](../README.md) are captured from the
+board over USB; the site's
+[documentation](https://axagt40.github.io/Vandeta/docs.html) describes each page
+in the table above.
