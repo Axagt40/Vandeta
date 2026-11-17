@@ -464,7 +464,7 @@ async function fetchSystemInfo() {
   Dialog.loading.show("Fetching system info...");
   let req = await requestGet("/systeminfo");
   let info = JSON.parse(req);
-  $(".bruce-version").textContent = info.BRUCE_VERSION;
+  $(".vandeta-version").textContent = info.BRUCE_VERSION;
   $(".free-space .free-sd span").innerHTML =
     `${info.SD.used} / ${info.SD.total}`;
   $(".free-space .free-fs span").innerHTML =
@@ -514,7 +514,27 @@ async function runNavigation(direction) {
   SCREEN_NAVIGATING = true;
   try {
     drawCanvasLoading();
-    await requestPost("/cm", { cmnd: `nav ${direction.toLowerCase()}` });
+    // Menus move on Prev/Next; UpPress/DownPress are only read by a few pages.
+    // Mapping the four arrows onto the two menu keys makes every arrow move
+    // the launcher grid instead of silently doing nothing on the main screen.
+    const language = {
+      up: "nav prev",
+      down: "nav next",
+      left: "nav prev",
+      right: "nav next",
+      prev: "nav prev",
+      next: "nav next",
+      nextpage: "nav nextpage",
+      prevpage: "nav prevpage",
+      sel: "nav sel",
+      esc: "nav esc",
+      "sel 500": "nav sel",
+    };
+    const cmd = language[direction.toLowerCase()] || "nav " + direction.toLowerCase();
+    await requestPost("/cm", { cmnd: cmd });
+    // The reply is sent once the key has been injected; let the UI settle so
+    // the grab below is the new screen, not the one being left.
+    await new Promise((r) => setTimeout(r, 150));
     await reloadScreen();
   } catch (error) {
     alert("Failed to run command: " + error.message);
@@ -664,6 +684,7 @@ async function renderTFT(data) {
       16: ["x", "y", "size", "fg", "bg", "txt"], // DRAWSTRING
       17: ["x", "y", "size", "fg", "bg", "txt"], // PRINT
       18: ["x", "y", "center", "ms", "fs", "file"], // DRAWIMAGE
+      19: ["x", "y", "fg"], // DRAWPIXEL - IR Suite and every hand-drawn page use it
       20: ["x", "y", "h", "fg"], // DRAWFASTVLINE
       21: ["x", "y", "w", "fg"], // DRAWFASTHLINE
       99: ["w", "h", "rotation"], // SCREEN_INFO
@@ -704,6 +725,12 @@ async function renderTFT(data) {
     let fn = getByteValue("int8");
     offset += size;
 
+    // An opcode this client does not know used to reach byteToObject() and
+    // throw on keysMap[fn] being undefined. The canvas had already been
+    // cleared, so a page that draws with it (IR Suite's drawPixel art) went
+    // blank instead of just missing that element. Skip the payload and keep
+    // painting the rest of the frame.
+    if (!keysMap[fn]) continue;
     let input = byteToObject(fn, size);
     // reset to default before drawing again
     ctx.lineWidth = 1;

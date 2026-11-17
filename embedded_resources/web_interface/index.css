@@ -1,7 +1,12 @@
 :root {
   --color: #ff3ec8;
+  --sec-color: #7a2ff2;
   --background: #242424;
   --light-color: color-mix(in srgb, var(--color) 20%, gray 20%);
+  /* The firmware's boot-crown ramp (pink -> purple), also used by the on-device
+     UI gradient. theme.css replaces --color/--sec-color with the active theme,
+     so the WebUI follows the same colours as the panel. */
+  --grad: linear-gradient(100deg, var(--color) 0%, var(--sec-color) 100%);
 }
 * {
   -webkit-box-sizing: border-box;
@@ -43,7 +48,7 @@ body {
 .btn-action.active,
 .btn-action:hover:not(:disabled) > *,
 .btn-action.active > * {
-  background-color: var(--color);
+  background: var(--grad);
   color: var(--background);
 }
 .btn-action:disabled {
@@ -78,7 +83,7 @@ svg > path {
   fill: transparent;
 }
 .icon-action:hover {
-  background-color: var(--color);
+  background: var(--grad);
 }
 .icon-action:hover svg > g,
 .icon-action:hover svg > path {
@@ -110,6 +115,12 @@ svg > path {
   padding: 9px 12px;
   cursor: pointer;
   text-align: center;
+  background: var(--grad);
+  font-weight: bold;
+}
+.container .header .title,
+.container .header .title * {
+  color: var(--background);
 }
 .left-part,
 .right-part {
@@ -223,6 +234,11 @@ svg > path {
   align-items: center;
   display: flex;
   gap: 5px;
+  background: var(--grad);
+}
+.dialog .dialog-head,
+.dialog .dialog-head * {
+  color: var(--background);
 }
 .dialog .dialog-head span {
   display: inline-block;
@@ -322,7 +338,7 @@ svg > path {
 }
 .dialog.navigator .navigator-canvas .nav:hover {
   color: var(--background);
-  background: var(--color);
+  background: var(--grad);
 }
 .dialog.navigator .navigator-canvas .nav:hover svg path,
 .dialog.navigator .navigator-canvas .nav:hover svg line {

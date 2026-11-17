@@ -1071,3 +1071,43 @@ details > *:not(summary) {
   text-align: center;
 }
 .hero-shot img { display: block; width: 100%; max-width: 640px; margin: 0 auto; border-radius: 10px; }
+
+/* ---------- live feature list (flasher) ---------- */
+.feature-list {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 1.2rem;
+}
+.feature-list .feat-group {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  overflow: hidden;
+}
+.feature-list .feat-group > summary {
+  cursor: pointer;
+  padding: 0.7rem 1rem;
+  font-weight: 650;
+  color: var(--text);
+  background: var(--panel-2);
+}
+.feature-list .feat-group > summary::marker {
+  color: var(--accent);
+}
+.feature-list ul {
+  margin: 0.35rem 0 0.9rem;
+  padding: 0 1.1rem 0 2rem;
+}
+.feature-list li {
+  margin: 0.35rem 0;
+  color: var(--muted);
+}
+.feature-list code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  color: var(--accent);
+}
+.feature-list p {
+  padding: 0 1rem;
+  color: var(--muted);
+}

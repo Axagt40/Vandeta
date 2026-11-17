@@ -294,7 +294,11 @@ String getOptionsJSON() {
     int i = 0;
     int sel = 0;
     for (auto opt : opts) {
-        response += "{\"n\":" + String(i) + ",\"label\":\"" + opt.label + "\"}";
+        // `tr` is the text the renderer actually paints. It equals `label` in
+        // English, so the line stays backwards compatible, and it lets a test
+        // or the console confirm a translation without a screenshot.
+        response += "{\"n\":" + String(i) + ",\"label\":\"" + opt.label + "\",\"tr\":\"" +
+                    i18n(opt.label) + "\"}";
         if (opt.hovered) sel = i;
         i++;
         if (i < (int)opts.size()) response += ",";

@@ -18,6 +18,7 @@ private:
     void ledMenu(void);
     void audioMenu(void);
     void systemMenu(void);
+    void setLanguage(void); // Config > System Config > Language
     void advancedMenu(void);
     void batteryMenu(void);
     void powerMenu(void);

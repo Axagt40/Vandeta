@@ -1,5 +1,6 @@
 #include "ConfigMenu.h"
 #include "../mykeyboard.h"
+#include "core/i18n.h"
 #include "core/dev/tunables.h" // Developer Options > Tunables (task 1)
 #include "core/display.h"
 #include "core/usb_debug/usbdebug.h"
@@ -206,6 +207,9 @@ void ConfigMenu::systemMenu() {
             {"Hide/Show Apps",                                                      [this]() { mainMenu.hideAppsMenu(); }},
             {"Clock",                                                               [this]() { setClock(); }             },
             {String("Keyboard Language: ") + bruceConfig.keyboardLang,              [this]() { setKeyboardLanguage(); }  },
+            // Firmware language: the row and every menu label it redraws come
+            // from the i18n table, and the choice is saved in bruce.conf.
+            {String("Language: ") + languageName(bruceConfig.language),             [this]() { setLanguage(); }          },
             {"Developer Options",                                                       [this]() { usbDebugMenu(); }        },
             {"Advanced",                                                            [this]() { advancedMenu(); }         },
             {"Back",                                                                []() {}                              },
@@ -217,6 +221,26 @@ void ConfigMenu::systemMenu() {
         if (selected == -1 || selected == (int)localOptions.size() - 1) { return; }
         last = selected;
         // Menu rebuilds to update toggle labels
+    }
+}
+
+/*********************************************************************
+**  Function: setLanguage
+**  Firmware language picker. The menu rebuilds after a pick, so every label
+**  on the page switches in place - no reboot and no re-entering Config.
+**********************************************************************/
+void ConfigMenu::setLanguage() {
+    int last = bruceConfig.language;
+    while (true) {
+        std::vector<Option> langs;
+        for (int i = 0; i < languageCount(); i++) {
+            langs.push_back({languageName(i), [i]() { bruceConfig.setLanguage(i); }});
+        }
+        langs.push_back({"Back", []() {}});
+        int selected = loopOptions(langs, MENU_TYPE_SUBMENU, "Language", last);
+        if (selected < 0 || selected >= languageCount()) return;
+        last = selected;
+        returnToMenu = false; // the console sets this on every command; stay here
     }
 }
 

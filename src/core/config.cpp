@@ -4,6 +4,7 @@
 #include "core/dev/tunables.h"        // task 1 tunables, stored under "tuning"
 #include "core/settings.h"            // applyBatterySaver/applyChargeLimit on change
 #include "core/usb_debug/usbdebug.h" // applyEnabled/releaseResources on toggle
+#include "core/i18n.h"
 #include "mifare_keys_manager.h"
 #include "sd_functions.h"
 #include <algorithm>
@@ -31,6 +32,7 @@ JsonDocument BruceConfig::toJson() const {
     setting["wifiHopPlan"] = wifiHopPlan;
     setting["instantBoot"] = instantBoot;
     setting["keyboardLang"] = keyboardLang;
+    setting["language"] = language;
 
 #ifdef HAS_RGB_LED
     setting["ledBright"] = ledBright;
@@ -272,6 +274,12 @@ void BruceConfig::fromFile(bool checkFS) {
         keyboardLang = setting["keyboardLang"].as<String>();
     } else {
         keyboardLang = "QWERTY";
+    }
+    // A bruce.conf written before the language existed keeps English.
+    if (!setting["language"].isNull()) {
+        language = setting["language"].as<int>();
+    } else {
+        language = 0;
     }
 
 #ifdef HAS_RGB_LED
@@ -680,6 +688,7 @@ void BruceConfig::validateConfig() {
     validateSoundVolumeValue();
     validateSoundThemeValue();
     validateWifiAtStartupValue();
+    validateLanguageValue();
 #ifdef HAS_RGB_LED
     validateLedBrightValue();
     validateLedColorValue();
@@ -814,6 +823,16 @@ void BruceConfig::setWifiHopPlan(int value) {
 
 void BruceConfig::validateWifiHopPlanValue() {
     if (wifiHopPlan < 0 || wifiHopPlan > 2) wifiHopPlan = 0;
+}
+
+void BruceConfig::setLanguage(int value) {
+    language = value;
+    validateLanguageValue();
+    saveFile();
+}
+
+void BruceConfig::validateLanguageValue() {
+    if (language < 0 || language >= LANG_COUNT) language = LANG_EN;
 }
 
 void BruceConfig::validateWifiAtStartupValue() {

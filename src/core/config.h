@@ -60,6 +60,9 @@ public:
     int wifiHopPlan = 0;
     int instantBoot = 0;
     String keyboardLang = "QWERTY"; // "QWERTY" | "AZERTY" | "QWERTZ"
+    // Firmware language (Config > System Config > Language). 0 = English; the
+    // i18n table falls back to English for any string a pack does not cover.
+    int language = 0;
 
 #ifdef HAS_RGB_LED
     // Led
@@ -208,6 +211,9 @@ public:
 
     void setWifiHopPlan(int value);
     void validateWifiHopPlanValue();
+
+    void setLanguage(int value);
+    void validateLanguageValue();
 
 #ifdef HAS_RGB_LED
     // Led
