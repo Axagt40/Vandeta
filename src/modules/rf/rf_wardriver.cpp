@@ -416,44 +416,70 @@ static bool wrCarrierSense() {
     return (status & 0x40) != 0;
 }
 
+// The frame is painted once and then only the rows that can change are
+// cleared. `full` used to mean a fillScreen(), and the run sets it on every
+// band hop - in fast hop that is the whole 320x170 panel going blank and
+// repainting several times a second, which is the constant flashing on the
+// wardriver screen. Static chrome is drawn on the first pass; every dynamic
+// field owns a small rectangle that is repainted opaque.
+static bool wrChrome = false;
+
 static void wrDraw(bool full, const WardriverStats &st, bool listening, float freqMhz, const char *modeTag) {
     // No String on this path: it redraws once a second for the whole walk, and
     // a growing String per field is exactly the heap churn this loop avoids.
     char line[64];
-    drawMainBorder(full);
+    const uint16_t bg = bruceConfig.bgColor;
+
+    if (full || !wrChrome) {
+        drawMainBorder(true);
+        tft.setTextSize(1);
+        tft.setTextColor(bruceConfig.priColor, bg);
+        tft.setCursor(10, 27);
+        tft.print("SUBGHz WARDRIVER");
+        tft.drawFastHLine(10, 38, tftWidth - 20, bruceConfig.priColor);
+        tft.drawFastHLine(10, 96, tftWidth - 20, bruceConfig.secColor);
+        tft.drawFastHLine(10, tftHeight - 24, tftWidth - 20, bruceConfig.priColor);
+        tft.setTextColor(bruceConfig.secColor, bg);
+        tft.setCursor(10, tftHeight - 10);
+        tft.print("SEL stop    BACK exit");
+        wrChrome = true;
+    }
+
+    // Frequency + mode, right-aligned. Cleared first: a hop changes the digits
+    // and the mode tag differs in length between Hop/Fast hop/Wideband.
+    tft.fillRect(tftWidth - 150, 22, 140, 14, bg);
     tft.setTextSize(1);
-    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
-    tft.setCursor(10, 27);
-    tft.print("SUBGHz WARDRIVER");
-    tft.setTextColor(bruceConfig.secColor, bruceConfig.bgColor);
+    tft.setTextColor(bruceConfig.secColor, bg);
     // dtostrf, not "%.2f": this image is linked without full printf float and a
     // fixed-point format is also the only honest way to show a nominal centre.
     char freqText[12];
     dtostrf((double)freqMhz, 0, 2, freqText);
     snprintf(line, sizeof(line), "%s MHz%s", freqText, modeTag);
     tft.drawRightString(line, tftWidth - 10, 27, 1);
-    tft.drawFastHLine(10, 38, tftWidth - 20, bruceConfig.priColor);
 
-    // The counters are the point of the screen: big, and only redrawn when the
-    // band is repainted so the number never flickers.
+    // The counters are the point of the screen. Only their own rows are
+    // repainted, so the number updates without the panel blinking.
+    tft.fillRect(8, 42, tftWidth - 16, 26, bg);
     tft.setTextSize(2);
-    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+    tft.setTextColor(bruceConfig.priColor, bg);
     tft.setCursor(12, 46);
     tft.print("SIGNALS ");
-    tft.setTextColor(bruceConfig.secColor, bruceConfig.bgColor);
+    tft.setTextColor(bruceConfig.secColor, bg);
     snprintf(line, sizeof(line), "%u", (unsigned)st.saved);
     tft.print(line);
 
     tft.setTextSize(1);
-    tft.setTextColor(bruceConfig.secColor, bruceConfig.bgColor);
+    tft.setTextColor(bruceConfig.secColor, bg);
+    tft.fillRect(8, 68, tftWidth - 16, 10, bg);
     tft.setCursor(12, 70);
     snprintf(line, sizeof(line), "duplicates skipped %u", (unsigned)st.duplicates);
     tft.print(line);
+    tft.fillRect(8, 80, tftWidth - 16, 10, bg);
     tft.setCursor(12, 82);
     snprintf(line, sizeof(line), "noise %u   chopped %u", (unsigned)st.noise, (unsigned)st.overruns);
     tft.print(line);
 
-    tft.drawFastHLine(10, 96, tftWidth - 20, bruceConfig.secColor);
+    tft.fillRect(8, 99, tftWidth - 16, 11, bg);
     tft.setCursor(10, 100);
     if (st.saved)
         snprintf(
@@ -461,15 +487,15 @@ static void wrDraw(bool full, const WardriverStats &st, bool listening, float fr
         );
     else snprintf(line, sizeof(line), "last: waiting for a signal");
     tft.print(line);
+
+    tft.fillRect(8, 111, tftWidth - 16, 10, bg);
     tft.setCursor(10, 112);
     tft.print(listening ? "listening..." : "radio stopped");
 
-    tft.drawFastHLine(10, tftHeight - 24, tftWidth - 20, bruceConfig.priColor);
+    tft.fillRect(8, tftHeight - 23, tftWidth - 16, 11, bg);
     tft.setCursor(10, tftHeight - 21);
     snprintf(line, sizeof(line), "%.50s", st.lastFile.length() ? st.lastFile.c_str() : RF_WARDRIVER_DIR);
     tft.print(line);
-    tft.setCursor(10, tftHeight - 10);
-    tft.print("SEL stop    BACK exit");
 }
 
 // ---------------------------------------------------------------------------
@@ -1091,6 +1117,7 @@ void rfWardriverRun(int maxSeconds) {
         wrHashTimes[i] = 0;
     }
     WardriverStats st;
+    wrChrome = false; // repaint the static frame on entry
 
     // Three modes, one loop (task 7). A config value outside the enum can only
     // come from a hand edit that slipped past fromFile(); treat it as Hop rather

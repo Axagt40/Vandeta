@@ -652,6 +652,8 @@ void padprintln(double n, int digits, int16_t padx) {
 **  Function: loopOptions
 **  Where you choose among the options in menu
 **********************************************************************/
+#include "core/i18n.h"
+
 int loopOptionsImpl(
     std::vector<Option> &options, uint8_t menuType, const char *subText, int index, bool interpreter
 ) {
@@ -764,7 +766,7 @@ int loopOptionsImpl(
 #endif
 
         if (menuType == MENU_TYPE_REGULAR) {
-            String txt = options[index].label;
+            String txt = i18n(options[index].label);
             displayScrollingText(txt, coord, true);
         }
 
@@ -1015,7 +1017,7 @@ Opt_Coord drawOptions(
                 coord.fgcolor = fgcolor;
                 coord.bgcolor = bgcolor;
             } else text += " ";
-            text += String(options[i].label) + "              ";
+            text += i18n(options[i].label) + "              ";
             tft.setCursor(tftWidth * 0.10 + 5, tft.getCursorY() + 4);
 
             // Draw text with appropriate colors for selection
@@ -1120,7 +1122,7 @@ void drawMainMenuGrid(int index, std::vector<Option> &options) {
         MenuItemInterface *item = static_cast<MenuItemInterface *>(options[i].hoverPointer);
         if (item) item->drawIconIn(iconCx, iconCy, iconBox, (float)iconBox / 80.0f, selected);
 
-        String label = options[i].label;
+        String label = i18n(options[i].label);
         label.toUpperCase();
         const int labelLeft = x + iconBox + 6;
         const int labelW = tileW - (iconBox + 9);
@@ -1156,7 +1158,10 @@ void drawSubmenu(int index, std::vector<Option> &options, const char *title) {
     tft.setTextSize(FP);
     tft.drawPixel(0, 0, 0);
     // Task 06 demo shell: full path breadcrumb (+ n/total) replaces the bare title.
-    drawMenuPath(index, menuSize, title);
+    // Titles go through the language table too, so "System Config" reads in the
+    // selected language while the breadcrumb crumbs keep their recorded names.
+    String menuTitle = i18n(title);
+    drawMenuPath(index, menuSize, menuTitle.c_str());
 
     // middle of the drawing area
     int middle = 25 /*status*/ + (tftHeight - 30 /*status + bottom margin*/) / 2;
@@ -1171,25 +1176,27 @@ void drawSubmenu(int index, std::vector<Option> &options, const char *title) {
 #endif
     // Previous item
     int firstIndex = index - 1 >= 0 ? index - 1 : menuSize - 1;
-    const char *firstOption = options[firstIndex].label.c_str();
+    String firstLabel = i18n(options[firstIndex].label);
+    const char *firstOption = firstLabel.c_str();
     tft.setTextColor(options[firstIndex].enabled ? bruceConfig.secColor : TFT_DARKGREY);
     tft.fillRect(6, middle_up, tftWidth - 12, 8 * FM, bruceConfig.bgColor);
     tft.drawCentreString(firstOption, tftWidth / 2, middle_up, SMOOTH_FONT);
 
     // Selected item
-    int selectedTextSize = (int)options[index].label.length() <= tftWidth / (LW * FG) - 1 ? FG : FM;
+    String selectedLabel = i18n(options[index].label);
+    int selectedTextSize = (int)selectedLabel.length() <= tftWidth / (LW * FG) - 1 ? FG : FM;
     tft.setTextSize(selectedTextSize);
     tft.setTextColor(options[index].enabled ? bruceConfig.priColor : TFT_DARKGREY);
     tft.fillRect(6, middle - FG * LH / 2 - 1, tftWidth - 12, FG * LH + 5, bruceConfig.bgColor);
-    tft.drawCentreString(options[index].label, tftWidth / 2, middle - selectedTextSize * LH / 2, SMOOTH_FONT);
-    uiGradientHLine(
-        tftWidth / 2 - strlen(options[index].label.c_str()) * selectedTextSize * LW / 2,
-        middle + selectedTextSize * LH / 2 + 1,
-        strlen(options[index].label.c_str()) * selectedTextSize * LW
-    );
+    tft.drawCentreString(selectedLabel, tftWidth / 2, middle - selectedTextSize * LH / 2, SMOOTH_FONT);
+    // A longer translation must not draw its underline past the panel edge.
+    int underlineW = (int)(selectedLabel.length() * selectedTextSize * LW);
+    if (underlineW > tftWidth - 20) underlineW = tftWidth - 20;
+    uiGradientHLine(tftWidth / 2 - underlineW / 2, middle + selectedTextSize * LH / 2 + 1, underlineW);
     // Next Item
     int thirdIndex = index + 1 < menuSize ? index + 1 : 0;
-    const char *thirdOption = options[thirdIndex].label.c_str();
+    String thirdLabel = i18n(options[thirdIndex].label);
+    const char *thirdOption = thirdLabel.c_str();
     tft.setTextSize(FM);
     tft.setTextColor(options[thirdIndex].enabled ? bruceConfig.secColor : TFT_DARKGREY);
     tft.fillRect(6, middle_down, tftWidth - 12, 8 * FM, bruceConfig.bgColor);
@@ -1318,7 +1325,7 @@ void drawMainBorderWithTitle(const String &title, bool clear) {
 }
 
 void printTitle(const String &title) {
-    String t = title;
+    String t = i18n(title);
     t.toUpperCase();
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
 

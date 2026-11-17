@@ -1,5 +1,6 @@
 #ifndef __UTILS_H__
 #define __UTILS_H__
+#include "core/i18n.h"
 #include <Arduino.h>
 #include <Wire.h>
 void backToMenu();

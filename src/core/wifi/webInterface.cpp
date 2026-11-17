@@ -26,7 +26,7 @@ const int default_webserverporthttp = 80;
 IPAddress AP_GATEWAY(172, 0, 0, 1); // Gateway
 
 AsyncWebServer *server = nullptr; // initialise webserver
-const char *host = "bruce";
+const char *host = "vandeta";
 String uploadFolder = "";
 static bool mdnsRunning = false;
 
@@ -293,7 +293,7 @@ void drawWebUiScreen(bool mode_ap) {
     }
 
     tft.setCursor(padX, currentY);
-    if (mdnsRunning) tft.print("Url: http://bruce.local");
+    if (mdnsRunning) tft.print("Url: http://vandeta.local");
     currentY += LH * FP + 6;
 
     tft.setCursor(padX, currentY);
@@ -547,16 +547,22 @@ void configureWebServer() {
             String cmnd = request->arg("cmnd");
             if (cmnd.startsWith("nav")) {
                 volatile bool *var = &SelPress;
-                if (cmnd.startsWith("nav sel")) var = &SelPress;
-                if (cmnd.startsWith("nav esc")) var = &EscPress;
-                if (cmnd.startsWith("nav up")) var = &UpPress;
-                if (cmnd.startsWith("nav down")) var = &DownPress;
-                if (cmnd.startsWith("nav next")) var = &NextPress;
-                if (cmnd.startsWith("nav prev")) var = &PrevPress;
-                request->send(200, "text/plain", "command " + cmnd + " success");
-                int time;
-                if (cmnd.endsWith("0")) time = cmnd.substring(cmnd.lastIndexOf(' ')).toInt();
-                else time = 10;
+                // Page keys first: "nav nextpage" also starts with "nav next",
+                // and the old order silently turned a page turn into one row.
+                if (cmnd.startsWith("nav nextpage")) var = &NextPagePress;
+                else if (cmnd.startsWith("nav prevpage")) var = &PrevPagePress;
+                else if (cmnd.startsWith("nav sel")) var = &SelPress;
+                else if (cmnd.startsWith("nav esc")) var = &EscPress;
+                else if (cmnd.startsWith("nav up")) var = &UpPress;
+                else if (cmnd.startsWith("nav down")) var = &DownPress;
+                else if (cmnd.startsWith("nav next")) var = &NextPress;
+                else if (cmnd.startsWith("nav prev")) var = &PrevPress;
+                int time = 10;
+                if (cmnd.endsWith("0")) {
+                    time = cmnd.substring(cmnd.lastIndexOf(' ')).toInt();
+                    if (time < 0) time = 0;
+                    if (time > 2000) time = 2000; // never stall the web server
+                }
                 auto tmp = millis() + time;
                 while (tmp > millis()) {
                     AnyKeyPress = true;
@@ -565,6 +571,14 @@ void configureWebServer() {
                     if (!LongPress) vTaskDelay(pdMS_TO_TICKS(190));
                     else vTaskDelay(pdMS_TO_TICKS(50));
                 }
+                // Release and let the UI process the key BEFORE replying. The
+                // old handler answered first, so the browser fetched
+                // /getscreen while the press was still being injected and
+                // painted the screen it was leaving - reported as broken
+                // navigation.
+                *var = false;
+                vTaskDelay(pdMS_TO_TICKS(90));
+                request->send(200, "text/plain", "command " + cmnd + " success");
             } else {
                 if (parseSerialCommand(cmnd, false)) {
                     request->send(200, "text/plain", "command " + cmnd + " queued");
