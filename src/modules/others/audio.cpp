@@ -681,14 +681,13 @@ bool isAudioFile(const String &filepath) {
            filepath.endsWith(".aac") || filepath.endsWith(".flac");
 }
 
-// allowKeyAbort is false for the sound-theme cue player: it runs on its own
-// task, and check(AnyKeyPress) there would consume the press the UI is waiting
+// allowKeyAbort is false for callers on their own task (the sound-theme cue
+// player): check(AnyKeyPress) there would consume the press the UI is waiting
 // for - a beep must never eat a button.
-// minMs/drainMs are for the UI cues only. A cue is 8-45 ms, which the I2S path
-// tears down before it is heard, so cues ask for a floor and a drain. The modem
-// sends 1 ms FSK symbols through playTone() on this same function, and giving
-// those a floor stretched every symbol to 120 ms and broke the frame - hence
-// the parameters instead of a constant inside.
+// minMs/drainMs are optional. The cue player used to need a 120 ms floor here
+// because it started one I2S session per note; it now sends a whole cue through
+// playCueSequence() instead, so nothing asks for a floor any more. The modem
+// still sends 1 ms FSK symbols through playTone() on this same function.
 static void playToneInternal(
     unsigned int frequency, unsigned long duration, short waveType, float amplitude, bool allowKeyAbort,
     unsigned long minMs = 0, uint32_t drainMs = 0
@@ -803,13 +802,101 @@ void playTone(unsigned int frequency, unsigned long duration, short waveType) {
     );
 }
 
-void playToneAtLevel(unsigned int frequency, unsigned long duration, float level) {
-    if (!bruceConfig.soundEnabled) return;
-    if (level <= 0.0f) return;
-    if (level > 1.0f) level = 1.0f;
-    // 120 ms is still a click, not a tune, and it is the shortest note this
-    // board's I2S path plays reliably; 40 ms lets the last buffers drain.
-    playToneInternal(frequency, duration, 0, level * AUDIO_CUE_SCALE, false, 120, 40);
+void playCueSequence(const AudioCueNote *notes, int count, float level) {
+    if (!bruceConfig.soundEnabled || notes == nullptr || count <= 0 || level <= 0.0f) return;
+    if (count > 8) count = 8;
+
+    double total = 0.0;
+    int used = 0;
+    for (int i = 0; i < count; i++) {
+        if (notes[i].freq == 0 || notes[i].ms == 0) break;
+        total += (notes[i].ms + notes[i].gap) / 1000.0;
+        used++;
+    }
+    if (used == 0 || total <= 0.0) return;
+
+    // Same DMA preflight as a single tone: a cue that cannot play is not worth
+    // a reboot.
+    const size_t dmaNeed = 3 * 768 + 1024;
+    size_t dmaHave = heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (dmaHave < dmaNeed) {
+        Serial.printf("[AUDIO] cue skipped: DMA block %u < %u bytes\n", (unsigned)dmaHave, (unsigned)dmaNeed);
+        return;
+    }
+
+    _setup_codec_speaker(true);
+
+    AudioOutputI2S *out = createConfiguredAudioOutput();
+    if (!out) {
+        _setup_codec_speaker(false);
+        return;
+    }
+    out->SetBuffers(3, 768);
+
+    // The generator IS the cue: it walks the note table by elapsed time, so a
+    // 50 ms note is 50 ms and the next one starts on time. Starting an I2S
+    // session per note (the old path) added a teardown silence between notes
+    // and forced every note to a 120 ms floor.
+    AudioFileSourceFunction *file = new AudioFileSourceFunction(total);
+    if (!file) {
+        delete out;
+        _setup_codec_speaker(false);
+        return;
+    }
+
+    file->addAudioGenerators([notes, used, level](const float time) -> float {
+        double t = time;
+        for (int i = 0; i < used; i++) {
+            const double dur = notes[i].ms / 1000.0;
+            if (t < dur) {
+                const double hz = notes[i].freq;
+                const double phase = TWO_PI * hz * t;
+                // A piezo square is the Momentum voice, but a raw sign(sin)
+                // aliases on a 44.1 kHz DAC and sounds like static. Keep the
+                // odd harmonics that fit under 16 kHz and normalise the sum.
+                float v = sinf(phase);
+                if (hz * 3.0 <= 16000.0) v += sinf(3.0 * phase) / 3.0f;
+                if (hz * 5.0 <= 16000.0) v += sinf(5.0 * phase) / 5.0f;
+                if (hz * 7.0 <= 16000.0) v += sinf(7.0 * phase) / 7.0f;
+                v *= 0.75f;
+                // 3 ms attack, 8 ms release: gating a tone hard is the click
+                // that made the old cues sound like pops instead of beeps.
+                const double tms = t * 1000.0;
+                const double dms = dur * 1000.0;
+                if (tms < 3.0) v *= (float)(tms / 3.0);
+                else if (dms - tms < 8.0) v *= (float)((dms - tms) / 8.0);
+                return v * level * (notes[i].level / 100.0f) * AUDIO_CUE_SCALE;
+            }
+            t -= dur;
+            const double gap = notes[i].gap / 1000.0;
+            if (t < gap) return 0.0f;
+            t -= gap;
+        }
+        return 0.0f;
+    });
+
+    AudioGeneratorWAV *wav = new AudioGeneratorWAV();
+    if (!wav || !wav->begin(file, out)) {
+        Serial.println("[AUDIO] cue begin failed");
+        delete wav;
+        delete file;
+        delete out;
+        _setup_codec_speaker(false);
+        return;
+    }
+
+    while (wav->isRunning()) {
+        if (!wav->loop()) wav->stop();
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+
+    // Let the last buffers reach the amplifier before I2S is stopped.
+    vTaskDelay(pdMS_TO_TICKS(30));
+
+    delete wav;
+    delete file;
+    delete out;
+    _setup_codec_speaker(false);
 }
 
 #endif

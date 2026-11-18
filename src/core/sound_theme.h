@@ -26,7 +26,7 @@ enum SoundTheme : uint8_t {
     // number is what bruce.conf holds, so renumbering it would switch sound
     // back on for every device that had deliberately muted its cues.
     SOUND_THEME_OFF = 2,      // silent cues; the audio player still works
-    SOUND_THEME_MOMENTUM = 3, // the Flipper Momentum feedback voice: short ticks
+    SOUND_THEME_MOMENTUM = 3, // the Flipper/Momentum sequences: success, error, semi-success
     SOUND_THEME_COUNT
 };
 

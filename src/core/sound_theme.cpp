@@ -7,19 +7,13 @@
 #include <freertos/task.h>
 #include <math.h>
 
-// One cue is a short run of notes. `level` is the note's own balance inside the
-// cue (0-100), NOT a volume setting: loudness comes from bruceConfig.soundVolume
-// alone, read at play time, so there is one volume in the firmware and no
-// second gain hiding in here.
-struct SoundNote {
-    uint16_t freq; // Hz, 0 terminates the run
-    uint16_t ms;   // length
-    uint16_t gap;  // silence after it
-    uint8_t level; // 0-100, this note against the others in the same cue
-};
-
-static const SoundNote VANDETA_CUES[CUE_COUNT][4] = {
-    /* SELECT     */ {{1800, 30, 2, 80}, {2600, 45, 0, 80}, {0, 0, 0, 0}, {0, 0, 0, 0}},
+// One cue is a short run of notes, played by playCueSequence() as a single
+// waveform so the lengths and gaps written here are the ones actually heard.
+// `level` is the note's own balance inside the cue (0-100), NOT a volume
+// setting: loudness comes from bruceConfig.soundVolume alone, read at play
+// time, so there is one volume in the firmware and no second gain hiding here.
+static const AudioCueNote VANDETA_CUES[CUE_COUNT][4] = {
+    /* SELECT     */ {{1800, 30, 0, 80}, {2600, 45, 0, 80}, {0, 0, 0, 0}, {0, 0, 0, 0}},
     /* BACK       */ {{1200, 45, 0, 70}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}},
     /* NAV_TICK   */ {{2400, 12, 0, 65}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}},
     /* ERROR      */ {{420, 90, 40, 85}, {300, 130, 0, 85}, {0, 0, 0, 0}, {0, 0, 0, 0}},
@@ -34,31 +28,29 @@ static const SoundNote VANDETA_CUES[CUE_COUNT][4] = {
     /* READ       */ {{2200, 26, 3, 80}, {3000, 38, 0, 90}, {0, 0, 0, 0}, {0, 0, 0, 0}},
 };
 
-// MOMENTUM is not a set of invented high clicks: it is the Flipper/Momentum
-// notification voice. Those sequences are real notes from Momentum's
-// notification_messages.c - success is C5 E5 G5 C6 at 50 ms each, error is C5
-// twice at 100 ms, and semi-success is C4 E4 G4 C5. The old table used 2.2-3.6
-// kHz clicks, which is why it sounded like a different device entirely.
-//
-// The four-note limit matches the longest sequence this cue player can hold;
-// the two short five-note sequences are shortened at the tail without changing
-// their opening interval, which is the part the ear identifies.
-static const SoundNote MOMENTUM_CUES[CUE_COUNT][4] = {
-    /* SELECT     */ {{523, 50, 0, 80}, {659, 50, 0, 80}, {784, 50, 0, 82}, {1047, 70, 0, 85}}, // C5 E5 G5 C6
-    /* BACK       */ {{784, 45, 0, 75}, {523, 60, 0, 78}, {0, 0, 0, 0}, {0, 0, 0, 0}},          // G5 C5
-    /* NAV_TICK   */ {{1047, 14, 0, 75}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}},             // short C6
-    /* ERROR      */ {{523, 100, 0, 85}, {523, 100, 0, 85}, {0, 0, 0, 0}, {0, 0, 0, 0}},        // C5 x2
-    /* REC_START  */ {{523, 50, 0, 80}, {659, 50, 0, 80}, {784, 70, 0, 82}, {0, 0, 0, 0}},     // C5 E5 G5
-    /* REC_STOP   */ {{784, 50, 0, 80}, {659, 50, 0, 80}, {523, 70, 0, 80}, {0, 0, 0, 0}},     // G5 E5 C5
-    /* TRACKER    */ {{523, 50, 0, 78}, {659, 50, 0, 80}, {784, 50, 0, 82}, {1047, 80, 0, 85}}, // success
-    /* REMOTE_ID  */ {{1047, 60, 30, 82}, {784, 60, 30, 82}, {1047, 90, 0, 85}, {0, 0, 0, 0}},  // C6 G5 C6
-    /* SUSPECT    */ {{523, 100, 0, 82}, {523, 100, 0, 85}, {0, 0, 0, 0}, {0, 0, 0, 0}},        // error
-    /* READ       */ {{523, 50, 0, 80}, {659, 60, 0, 85}, {0, 0, 0, 0}, {0, 0, 0, 0}},          // C5 E5
+// MOMENTUM is the Flipper/Momentum notification voice, not a set of invented
+// high clicks. These are the notes from Momentum's notification_messages.c:
+// success = C5 E5 G5 C6 at 50 ms each, error = C5 twice at 100 ms separated by
+// a 100 ms pause, semi-success = C4 E4 G4 C5. The cue player sends one waveform
+// per cue now, so those 50 ms notes really are 50 ms: the old 120 ms floor
+// stretched the 200 ms success chirp to about 640 ms, which is why it sounded
+// like a different device.
+static const AudioCueNote MOMENTUM_CUES[CUE_COUNT][4] = {
+    /* SELECT     */ {{523, 50, 0, 85}, {659, 50, 0, 85}, {784, 50, 0, 88}, {1047, 50, 0, 90}}, // success
+    /* BACK       */ {{262, 50, 0, 78}, {330, 50, 0, 78}, {392, 50, 0, 82}, {523, 50, 0, 85}},  // semi-success
+    /* NAV_TICK   */ {{1047, 12, 0, 70}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}},             // click
+    /* ERROR      */ {{523, 100, 100, 85}, {523, 100, 0, 90}, {0, 0, 0, 0}, {0, 0, 0, 0}},      // error
+    /* REC_START  */ {{523, 50, 0, 85}, {659, 50, 0, 85}, {784, 50, 0, 88}, {1047, 50, 0, 90}}, // success
+    /* REC_STOP   */ {{1047, 50, 0, 85}, {784, 50, 0, 85}, {523, 70, 0, 85}, {0, 0, 0, 0}},     // G5 E5 C5
+    /* TRACKER    */ {{523, 50, 0, 85}, {659, 50, 0, 85}, {784, 50, 0, 88}, {1047, 50, 0, 90}}, // success
+    /* REMOTE_ID  */ {{1047, 60, 30, 82}, {784, 60, 30, 82}, {1047, 90, 0, 88}, {0, 0, 0, 0}},  // C6 G5 C6
+    /* SUSPECT    */ {{523, 100, 100, 85}, {523, 100, 0, 90}, {0, 0, 0, 0}, {0, 0, 0, 0}},      // error
+    /* READ       */ {{523, 50, 0, 85}, {659, 50, 0, 88}, {0, 0, 0, 0}, {0, 0, 0, 0}},          // C5 E5
 };
 
 // CLASSIC is the blip this firmware made before the theme existed: a single
 // 5000 Hz note per event, so turning it on is exactly the old behaviour.
-static const SoundNote CLASSIC_CUES[CUE_COUNT][4] = {
+static const AudioCueNote CLASSIC_CUES[CUE_COUNT][4] = {
     /* SELECT     */ {{5000, 50, 0, 100}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}},
     /* BACK       */ {{5000, 50, 0, 100}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}},
     /* NAV_TICK   */ {{5000, 50, 0, 100}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}},
@@ -158,34 +150,35 @@ static void soundTask(void *) {
         if (cue >= CUE_COUNT) continue;
         if (!cueAllowed()) continue;
 
-        const SoundNote *notes;
+        const AudioCueNote *notes;
         switch (bruceConfig.soundTheme) {
             case SOUND_THEME_CLASSIC: notes = CLASSIC_CUES[cue]; break;
             case SOUND_THEME_MOMENTUM: notes = MOMENTUM_CUES[cue]; break;
             default: notes = VANDETA_CUES[cue]; break;
         }
 
-        for (int i = 0; i < 4 && notes[i].freq != 0; i++) {
-            if (!cueAllowed()) break; // muted or a radio started mid-cue
-            float level = volumeCurve(bruceConfig.soundVolume) * (notes[i].level / 100.0f);
-            if (level <= 0.0f) break;
+        int count = 0;
+        while (count < 4 && notes[count].freq != 0) count++;
+        if (count == 0) continue;
+
 #if defined(HAS_NS4168_SPKR)
-            // The speaker is the NS4168 over I2S, there is no buzzer pin here.
-            // This blocks for the note's length, which is why it runs on this
-            // task and never in the caller.
-            playToneAtLevel(notes[i].freq, notes[i].ms, level);
+        // One waveform for the whole cue: one I2S start and one drain, so a
+        // 50 ms note is 50 ms and the next note starts on time. Blocks for the
+        // cue's length, which is why it runs on this task and not in a caller.
+        playCueSequence(notes, count, volumeCurve(bruceConfig.soundVolume));
 #elif defined(BUZZ_PIN)
+        for (int i = 0; i < count; i++) {
+            if (!cueAllowed()) break; // muted or a radio started mid-cue
             // tone(BUZZ_PIN, ...) has no gain, so the level is ignored on these
             // boards. Do not fake one by shortening the note.
-            (void)level;
             tone(BUZZ_PIN, notes[i].freq, notes[i].ms);
             vTaskDelay(pdMS_TO_TICKS(notes[i].ms));
-#else
-            (void)level;
-            break;
-#endif
             if (notes[i].gap) vTaskDelay(pdMS_TO_TICKS(notes[i].gap));
         }
+#else
+        (void)notes;
+        (void)count;
+#endif
     }
 }
 
