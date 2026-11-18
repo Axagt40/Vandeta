@@ -102,7 +102,7 @@ check("eapolid states its limit", "outer identity only" in out, out)
 out = d.cmd("modem send hello 1200", wait=10.0)
 check("modem sends a frame", "OK sent" in out, out)
 out = d.cmd("modem recv 1")
-check("modem recv reports no mic honestly", "ERR: no microphone" in out, out)
+check("modem recv reports TX-only honestly", "ERR: audio modem RX is not implemented" in out, out)
 
 # --- Task 6: info never claims a connection without an address --------------
 out = d.cmd("info")

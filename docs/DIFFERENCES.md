@@ -19,7 +19,7 @@ build does about it is column three.
 | WiFi analysis | Attacks only, plus a raw sniffer to read them by hand | The Counter-Surv dashboard (deauth, evil-twin, KARMA, ARP and Remote ID events, BLE address rotation), EAPOL Harvest for 802.1X identities in `Target Atks`, and DHCP Starvation for a whole VLAN |
 | Developer loop | Rebuild and reflash | `tune` (19 range-checked values), `patch` (three variant tables plus an A/B code overlay), `devflash`, `autotest`, one-line `battery`/`buttons`/`clock`/`uptime` reporters, and a per-build ELF, map, app-only image and build ID |
 | Board support | 18 devices | One: the LilyGo T-Embed CC1101 Plus; the other boards' pin-outs stay in `boards/`, untested |
-| Deliberately not | - | No new radios or protocols: the CC1101 and nRF24 cannot demodulate 802.11. No BLE relay proxy. No PEAP termination. No microphone on this board. No account, cloud or telemetry. |
+| Deliberately not | - | No new radios or protocols: the CC1101 and nRF24 cannot demodulate 802.11. No BLE relay proxy. No PEAP termination. No audio-modem receive (the SPM1423 microphone stays with the Microphone app). No account, cloud or telemetry. |
 
 The screenshots at the top of the [README](../README.md) are captured from the
 board over USB; the site's

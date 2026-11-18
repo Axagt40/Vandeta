@@ -13,8 +13,9 @@ namespace AudioModem {
 
 bool send(const String &text, int baud, bool ultrasonic, String &msg);
 
-// Receive is only available where the firmware has a microphone; on this build
-// it reports that honestly instead of pretending.
+// Receive is not implemented on this build: the T-Embed CC1101 does have an
+// SPM1423 microphone (used by the Microphone app), but the modem has no FSK
+// demodulator, so receive() reports that instead of denying the hardware.
 bool receive(int seconds, String &msg);
 
 } // namespace AudioModem

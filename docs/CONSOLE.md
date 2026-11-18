@@ -65,7 +65,7 @@ modes when asked, so a mistyped command cannot leave the board unusable.
 | `ir rx <seconds>` | Records an IR frame for a timed window. |
 | `irnorm` | Learns, normalises and saves one capture as a `.ir` remote. |
 | `badusb config\|set\|layout-import\|layout-export\|layout-copy\|mouse\|click` | USB footprint, layout handling, HID device type, pointer input. |
-| `modem send <text> [baud] [ultrasonic]` | The FSK audio modem. `modem recv` reports that this board has no microphone. |
+| `modem send <text> [baud] [ultrasonic]` | The FSK audio modem. `modem recv` reports that audio-modem RX is not implemented; the modem is transmit-only. |
 
 ## WiFi and interception
 
