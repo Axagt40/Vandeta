@@ -1,3 +1,5 @@
+#pragma once
+
 #include <SPIFFS.h>
 // Keep SPIFFS first
 
@@ -32,12 +34,23 @@ bool playAudioRTTTLString(String song, PlaybackMode mode = PLAYBACK_BLOCKING);
 bool tts(String text, PlaybackMode mode = PLAYBACK_BLOCKING);
 bool isAudioFile(const String &filePath);
 void playTone(unsigned int frequency, unsigned long duration = 0UL, short waveType = 0);
-// Same generator, but at an absolute amplitude (0..1) instead of the settings
-// volume, and it never touches the button flags: it is called from a worker
-// task, where check(AnyKeyPress) would swallow the user's press. Only the
-// sound-theme cue player should use this - it derives `level` from
-// bruceConfig.soundVolume, it does not replace it.
-void playToneAtLevel(unsigned int frequency, unsigned long duration, float level);
+
+// One note of a UI cue. Shared here so the theme tables and the player agree on
+// the layout instead of keeping two copies of the same struct.
+struct AudioCueNote {
+    uint16_t freq;  // Hz, 0 terminates the run
+    uint16_t ms;    // how long the note sounds
+    uint16_t gap;   // silence after it, before the next note
+    uint8_t level;  // 0-100, this note against the others in the same cue
+};
+
+// Play a whole cue as ONE waveform: exact note lengths and gaps, a short
+// attack/release so the speaker does not click, one I2S start and one drain
+// instead of one session per note. `level` is the settings volume curve (0..1);
+// each note's own `level` is applied on top. Blocks for the cue's length, so it
+// belongs on the cue task, and it never reads the button flags.
+void playCueSequence(const AudioCueNote *notes, int count, float level);
+
 void _tone(unsigned int frequency, unsigned long duration = 0UL);
 
 // NEW: Async playback control API
