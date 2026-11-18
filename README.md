@@ -540,7 +540,9 @@ opens, and a poisoned victim was back online 6 s after `mitm stop`
 * The BLE MITM relay proxy is not implemented; PEAP stays the passive subset.
 * The CC1101 and the nRF24 cannot demodulate 802.11 - there is no client list,
   probe or deauth from either one.
-* This board has no microphone, so `modem recv` says so instead of pretending.
+* The audio modem is transmit-only: `modem recv` says RX is not implemented. The
+  board's SPM1423 microphone is real and drives `Others > Microphone` (spectrum
+  and recording); the modem simply has no FSK demodulator for it yet.
 
 ---
 

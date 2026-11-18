@@ -45,12 +45,12 @@ bool send(const String &text, int baud, bool ultrasonic, String &msg) {
 }
 
 bool receive(int seconds, String &msg) {
-#ifdef HAS_MIC
-    msg = "microphone capture is not implemented on this build";
-#else
-    msg = "no microphone in this build: the T-Embed CC1101 has a speaker only, so RX needs a "
-          "second device or an I2S mic";
-#endif
+    // The board does have an SPM1423 microphone; it is used by the Microphone
+    // app. What is missing is an FSK demodulator here, so say that instead of
+    // denying hardware the board has.
+    (void)seconds;
+    msg = "audio modem RX is not implemented on this build; the board's SPM1423 "
+          "microphone is used by Others > Microphone";
     return false;
 }
 
