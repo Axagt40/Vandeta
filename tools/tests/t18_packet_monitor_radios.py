@@ -17,7 +17,7 @@ just that no error box appeared.
 
 Stop the screen mirror first - it holds /dev/ttyACM0.
 
-    python3 FREEBUFF/tests/t18_packet_monitor_radios.py [port]
+    python3 tools/tests/t18_packet_monitor_radios.py [port]
 """
 import os
 import re

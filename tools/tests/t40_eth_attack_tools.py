@@ -23,7 +23,7 @@ It also proves the key frame: the text console is suspended while bridging, so
 each tool is started and stopped from here with remote keypresses instead of the
 physical buttons.
 
-    sudo python3 FREEBUFF/tests/t40_eth_attack_tools.py [/dev/ttyACM0]
+    sudo python3 tools/tests/t40_eth_attack_tools.py [/dev/ttyACM0]
 
 Root is needed (veth + AF_PACKET). Developer Options must be on for the console
 navigation before the bridge takes the port.

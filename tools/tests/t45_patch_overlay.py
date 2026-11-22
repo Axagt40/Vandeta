@@ -33,7 +33,7 @@ The gate refusal (`patch apply` while a radio loop runs) is not testable from
 one serial port: the console command that starts a sweep blocks the console
 until it ends. It is reported as SKIP rather than pretended.
 
-    python3 FREEBUFF/tests/t45_patch_overlay.py [port]
+    python3 tools/tests/t45_patch_overlay.py [port]
 """
 import os
 import re

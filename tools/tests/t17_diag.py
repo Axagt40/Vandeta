@@ -4,7 +4,7 @@
 Prints stream byte counts over time, any crash markers, the mem report and the
 dashboards's own text so we can tell a crash from a quiet (deduped) stream.
 
-    python3 FREEBUFF/tests/t17_diag.py [port]
+    python3 tools/tests/t17_diag.py [port]
 """
 import re
 import sys

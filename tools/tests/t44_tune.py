@@ -19,7 +19,7 @@ Checks, in the order the spec lists them:
 Reboot persistence and the corrupt-config fallback need a power cycle, so they are
 `t1_reboot.py`'s job (see the phase 1 report) rather than silently claimed here.
 
-    python3 FREEBUFF/tests/t44_tune.py [port]
+    python3 tools/tests/t44_tune.py [port]
 """
 import os
 import re

@@ -10,7 +10,7 @@ Two hard-won rules from live testing:
 Flow: fresh boot -> RF menu -> Packet Monitor (Sub-GHz) -> its menu ->
 "Change source" -> WiFi. Then sample the live table.
 
-    python3 FREEBUFF/tests/t17_wifi_source.py [port]
+    python3 tools/tests/t17_wifi_source.py [port]
 """
 import re
 import sys

@@ -25,8 +25,8 @@ Text comes from the firmware's draw ring (`display ring on` + `display dump`),
 which is the same text the mirror renders. The mirror holds `/dev/ttyACM0`, so
 this talks to its WebSocket when it is up and falls back to the serial port.
 
-    python3 FREEBUFF/tests/t37_vandeta_13_device.py [--serial /dev/ttyACM0]
-    python3 FREEBUFF/tests/t37_vandeta_13_device.py --ws ws://127.0.0.1:8737/ws
+    python3 tools/tests/t37_vandeta_13_device.py [--serial /dev/ttyACM0]
+    python3 tools/tests/t37_vandeta_13_device.py --ws ws://127.0.0.1:8737/ws
 """
 import argparse
 import asyncio

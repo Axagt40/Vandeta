@@ -3,7 +3,7 @@
 
 Run on the host with the board on USB and Developer Mode on:
 
-    ~/FREEBUFF/.venv/bin/python t46_devflash.py [/dev/ttyACM0]
+    ~/.venv/bin/python t46_devflash.py [/dev/ttyACM0]
 
 It does not flash the board: with a single-app partition table `devflash` must
 refuse with an explicit reason, and the test asserts that reason instead of

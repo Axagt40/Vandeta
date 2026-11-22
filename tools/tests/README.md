@@ -60,5 +60,5 @@ for t in tools/tests/t*.py; do python3 "$t" || echo "FAILED: $t"; done
 | `t37_vandeta_13_device.py` | The 1.3 feature set on device |
 | `t38_usb_eth_bridge.py`, `t39_eth_bridge_host.py` | The USB Ethernet bridge |
 
-Companion payloads (`.js`, `.txt`, `.lay`) stay in `FREEBUFF/tests/`, where the
+Companion payloads (`.js`, `.txt`, `.lay`) stay in `tools/tests/`, where the
 development notes that use them live.

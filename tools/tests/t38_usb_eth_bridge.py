@@ -15,7 +15,7 @@ What it proves, without needing an Ethernet cable anywhere:
 It drives the UI itself over the developer console (optionsJSON / option), so
 Developer Options must be on. Run it with the board plugged in:
 
-    python3 FREEBUFF/tests/t38_usb_eth_bridge.py [/dev/ttyACM0]
+    python3 tools/tests/t38_usb_eth_bridge.py [/dev/ttyACM0]
 
 Timing: the page opens the interface immediately, so the DHCP frames start
 before this test finishes sending the selection; the parser runs from the moment

@@ -16,7 +16,7 @@ how "the charging limiter does not work" looked. This test drives the real
 It needs no key press and no charger: the target voltage is a register value,
 not a battery state.
 
-    python3 FREEBUFF/tests/t43_charge_limit.py [port]
+    python3 tools/tests/t43_charge_limit.py [port]
 """
 import os
 import re

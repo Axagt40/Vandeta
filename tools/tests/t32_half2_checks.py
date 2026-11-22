@@ -16,7 +16,7 @@ USB only (no keypad, no second radio):
 The board must be in Developer Options (the `ui`, `mem`, `press` and `display`
 verbs are debug-only). Stop the screen mirror first - it holds /dev/ttyACM0.
 
-    python3 FREEBUFF/tests/t32_half2_checks.py [port]
+    python3 tools/tests/t32_half2_checks.py [port]
 """
 import os
 import re

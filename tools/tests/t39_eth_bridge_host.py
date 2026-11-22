@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""t39 - exercise FREEBUFF/tools/eth_bridge.py against a real interface.
+"""t39 - exercise tools/eth_bridge.py against a real interface.
 
 t38 proves the board side of the bridge by talking to it directly. This one
 proves the *host* side: the helper's raw-socket path (promiscuous capture,
@@ -9,12 +9,12 @@ It builds a veth pair, lets the helper bridge the board onto one end, and
 answers the board's DHCP from the other end - the same job their switch does on
 a real LAN, done here so the test needs no cable and no router.
 
-    sudo python3 FREEBUFF/tests/t39_eth_bridge_host.py [/dev/ttyACM0]
+    sudo python3 tools/tests/t39_eth_bridge_host.py [/dev/ttyACM0]
 
 With real hardware - the hub's RJ45 cabled to this PC's own port - name both
 ends and no veth is created:
 
-    sudo python3 FREEBUFF/tests/t39_eth_bridge_host.py \\
+    sudo python3 tools/tests/t39_eth_bridge_host.py \\
         --bridge-iface enx50a030083945 --server-iface enp1s0
 
 Root is required: `ip link` and AF_PACKET. A veth pair it created is removed

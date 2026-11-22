@@ -9,7 +9,7 @@
 3. A capture bigger than the timings ceiling is refused with a message instead of
    exhausting the heap inside replay/identify.
 
-    python3 FREEBUFF/tests/t23_wardriver_regressions.py [port]
+    python3 tools/tests/t23_wardriver_regressions.py [port]
 """
 import json
 import os
@@ -23,7 +23,7 @@ import serial
 PORT = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyACM0"
 BAUD = 115200
 BOOT_WAIT = 9.0
-# tests live in <root>/tools/tests, the client in <root>/FREEBUFF/tools
+# tests live in <root>/tools/tests, the client in <root>/tools
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 USB_DEBUG = os.path.join(REPO_ROOT, "FREEBUFF", "tools", "usb_debug.py")
 FOLDER = "/bruce/subghz/wardriver"

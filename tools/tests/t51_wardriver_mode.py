@@ -17,7 +17,7 @@ What this cannot check on a bench with no remote/keyfob: a real held press in
 fast hop, a 3 m remote captured in wideband, and a 433.60 MHz carrier. Those
 are stated as limits in the change log, not claimed here.
 
-    python3 FREEBUFF/tests/t51_wardriver_mode.py [port]
+    python3 tools/tests/t51_wardriver_mode.py [port]
 """
 import os
 import re

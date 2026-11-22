@@ -16,7 +16,7 @@ continuous 2.4 GHz source on the BLE channels, and checks three things:
 
 Every check reads the firmware's own text, so nothing here needs a camera.
 
-    python3 FREEBUFF/tests/t29_nrf_enchanted_live.py [port]
+    python3 tools/tests/t29_nrf_enchanted_live.py [port]
 """
 import os
 import re

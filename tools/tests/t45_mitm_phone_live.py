@@ -20,7 +20,7 @@ What is checked, and why each one matters:
     tests/phone/dns_raw.sh) and the payload's 0.0.0.0 rule has to answer;
   * after `mitm stop` the target is back online and no ARP pair is left.
 
-    python3 FREEBUFF/tests/t45_mitm_phone_live.py [port]
+    python3 tools/tests/t45_mitm_phone_live.py [port]
 
 The board must already have the network's credentials saved (`wifi on` inside
 Bruce), and the phone must be on the same network. Nothing outside the lab is

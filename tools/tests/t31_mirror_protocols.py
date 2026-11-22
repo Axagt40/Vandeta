@@ -28,7 +28,7 @@ What it checks
      part is a source check, because the sender itself is C++ (cast_js.cpp) and
      only a device can run it.
 
-Run:  python3 FREEBUFF/tests/t31_mirror_protocols.py
+Run:  python3 tools/tests/t31_mirror_protocols.py
 """
 
 import http.server

@@ -17,7 +17,7 @@ The board is hard-reset first and driven with the stock `option <n>` verb, so no
 Developer Options mode is needed. Stop the screen mirror first - it holds the
 port.
 
-    python3 FREEBUFF/tests/t33_vandeta_suite.py [port]
+    python3 tools/tests/t33_vandeta_suite.py [port]
 """
 import os
 import re

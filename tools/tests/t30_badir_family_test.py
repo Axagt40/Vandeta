@@ -30,7 +30,7 @@ saves cannot open the input menu, and SEL needs to be held").
    script's own ALIAS table - INPUT must reach the remote as "Input", because
    that is the name the family remotes use.
 
-Run:  python3 FREEBUFF/tests/t30_badir_family_test.py
+Run:  python3 tools/tests/t30_badir_family_test.py
 """
 
 import os

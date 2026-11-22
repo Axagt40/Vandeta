@@ -27,7 +27,7 @@ on a quiet bench: whether a carrier is parked on or reported first needs a real
 signal in the band. That limitation is stated in the summary instead of being
 claimed as measured.
 
-    python3 FREEBUFF/tests/t44b_variants.py [port]
+    python3 tools/tests/t44b_variants.py [port]
 """
 import os
 import re

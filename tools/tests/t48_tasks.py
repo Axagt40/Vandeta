@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """t48_tasks.py - device checks for the task 2-6 work.
 
-    ~/FREEBUFF/.venv/bin/python t48_tasks.py [/dev/ttyACM0]
+    ~/.venv/bin/python t48_tasks.py [/dev/ttyACM0]
 
 Covers: the `rfbits` editor and de Bruijn generator, the blue-team dashboard,
 the fingerprint capture, the audio modem, and the Task 6 `info` IP fix.

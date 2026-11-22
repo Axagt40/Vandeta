@@ -28,7 +28,7 @@ This test is deliberately hardware-free:
      HID write() implementation aborts on the first unmappable character and
      that ducky_typer has the Alt-code fallback.
 
-Run:  python3 FREEBUFF/tests/t3_badusb_layout_test.py
+Run:  python3 tools/tests/t3_badusb_layout_test.py
 """
 
 import os

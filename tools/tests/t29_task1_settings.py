@@ -16,7 +16,7 @@ Menus are read back with `ui` (the firmware's own text state), and every
 console session opens the port once - opening it resets the board, so each
 scenario runs as one `batch`.
 
-    python3 FREEBUFF/tests/t29_task1_settings.py [port]
+    python3 tools/tests/t29_task1_settings.py [port]
 
 Nothing is left on the card: the JS files are uploaded through usb_debug.py
 and deleted again, and the bindings test runs with `usb_debug.py run`, which

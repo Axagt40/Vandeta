@@ -20,7 +20,7 @@ BACK against the AP that was selected.
 
 The row's label and position are checked; the attack itself is not run here.
 
-    python3 FREEBUFF/tests/t52_dhcp_starve.py [port]
+    python3 tools/tests/t52_dhcp_starve.py [port]
 """
 import os
 import re

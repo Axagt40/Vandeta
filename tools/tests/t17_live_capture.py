@@ -4,7 +4,7 @@
 Navigates main -> RF -> Packet Monitor, then samples the streaming TFT log for a
 few seconds and prints the dashboard lines (counter + rows).
 
-    python3 FREEBUFF/tests/t17_live_capture.py [port]
+    python3 tools/tests/t17_live_capture.py [port]
 """
 import re
 import sys

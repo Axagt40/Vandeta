@@ -25,7 +25,7 @@ starts - which is why the check is cycle-to-cycle, not against a fresh boot.
 The probe script is uploaded first by this host script (upload, run, delete), so
 nothing is left on the card.
 
-    python3 FREEBUFF/tests/t35_wifi_capture_release.py [port]
+    python3 tools/tests/t35_wifi_capture_release.py [port]
 """
 import os
 import re

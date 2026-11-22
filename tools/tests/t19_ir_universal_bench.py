@@ -8,7 +8,7 @@ console (`ir uni buttons <category>`) and times it from the command byte to the
 "<cat>: N buttons" summary line, so the number is the library scan alone (boot,
 menu drawing and key polling are not in it).
 
-    python3 FREEBUFF/tests/t19_ir_universal_bench.py [port] [category...]
+    python3 tools/tests/t19_ir_universal_bench.py [port] [category...]
 
 Prints one line per category:  <category>  <buttons>  <scan ms>  (best of 3)
 Exit status is 0 only if every category answered with its button list.

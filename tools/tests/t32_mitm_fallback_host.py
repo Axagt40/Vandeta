@@ -18,7 +18,7 @@ checks the source-level wiring that only a device could otherwise exercise:
 Extraction, not a re-implementation: if the C++ changes, this test sees it.
 No device, no network.
 
-    python3 FREEBUFF/tests/t32_mitm_fallback_host.py
+    python3 tools/tests/t32_mitm_fallback_host.py
 """
 
 import os

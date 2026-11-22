@@ -4,7 +4,7 @@ actually draws, so the breadcrumb / counter / hint bar can be checked without ey
 
 Stop the screen mirror first - it holds /dev/ttyACM0.
 
-    python3 FREEBUFF/tests/t6_ui_capture.py [port]
+    python3 tools/tests/t6_ui_capture.py [port]
 """
 import re
 import sys

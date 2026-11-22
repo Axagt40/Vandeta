@@ -4,7 +4,7 @@ open it and print the text the dashboard draws.
 
 Stop the screen mirror first - it holds /dev/ttyACM0.
 
-    python3 FREEBUFF/tests/t17_ui_capture.py [port]
+    python3 tools/tests/t17_ui_capture.py [port]
 """
 import re
 import sys

@@ -17,7 +17,7 @@ records the label it selected), and the screen is read back through the
 firmware's own text stream (`display start`). Stop the screen mirror first - it
 holds /dev/ttyACM0.
 
-    python3 FREEBUFF/tests/t28_task1_ui_checks.py [port]
+    python3 tools/tests/t28_task1_ui_checks.py [port]
 """
 import os
 import re

@@ -11,7 +11,7 @@ as a wardriver-style raw .sub, uploads it to the card and then:
 The decoded copy (ward_test_dec.sub) is read back and checked for the
 Protocol/Key fields readSubFile needs, then everything is deleted again.
 
-    python3 FREEBUFF/tests/t22_wardriver_identify.py [port]
+    python3 tools/tests/t22_wardriver_identify.py [port]
 """
 import os
 import re
@@ -24,7 +24,7 @@ import serial
 PORT = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyACM0"
 BAUD = 115200
 BOOT_WAIT = 9.0
-# tests live in <root>/tools/tests, the client in <root>/FREEBUFF/tools
+# tests live in <root>/tools/tests, the client in <root>/tools
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 USB_DEBUG = os.path.join(REPO_ROOT, "FREEBUFF", "tools", "usb_debug.py")
 TMP = "/tmp/ward_test.sub"

@@ -14,7 +14,7 @@ Covers everything that can be proven from the host:
 Needs the board on USB in console mode with Developer Options on. Stop the screen
 mirror first (it holds /dev/ttyACM0).
 
-    python3 FREEBUFF/tests/t20_usb_verify_task1.py [port]
+    python3 tools/tests/t20_usb_verify_task1.py [port]
 """
 import os
 import re

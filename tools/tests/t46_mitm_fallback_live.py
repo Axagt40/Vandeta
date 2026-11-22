@@ -32,7 +32,7 @@ board's link-local address in this PC's neighbour table, and is reported as a
 SKIP when it is not there - the phone test (`t45`) is the one that scores it
 from a real victim.
 
-    python3 FREEBUFF/tests/t46_mitm_fallback_live.py [port]
+    python3 tools/tests/t46_mitm_fallback_live.py [port]
 
 Run it with an interpreter that has pyserial (the bench uses
 `~/.platformio/penv/bin/python`). Stop the screen mirror first - it holds the

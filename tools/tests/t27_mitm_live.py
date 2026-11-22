@@ -20,7 +20,7 @@ Requires `adb` and one authorised device; without them every live step is
 SKIPPED, never FAILED. The board must be able to join the phone's WiFi network
 (it uses the credentials Bruce already has, or a network the phone shares).
 
-    python3 FREEBUFF/tests/t27_mitm_live.py [port]
+    python3 tools/tests/t27_mitm_live.py [port]
 
 Stop the screen mirror first - it holds /dev/ttyACM0.
 """

@@ -17,7 +17,7 @@ drives the real functions, so what is checked is what the device will run:
 
 Nothing stays on the card: the harness deletes every file it writes.
 
-    python3 FREEBUFF/tests/t41_ir_suite_types.py [port]
+    python3 tools/tests/t41_ir_suite_types.py [port]
 """
 import os
 import re
@@ -97,7 +97,7 @@ for (var i = 0; i < CATS.length; i++) {
     // Grouping all 295 TV codes costs ~6.6 s on the board, which the USB runner
     // reads as a silent script; the first 60 are enough to prove the binding
     // walks the library (the full-library grouping is covered by the host
-    // harness in FREEBUFF/tmp/irsuite_host_check.js).
+    // harness in tools/irsuite_host_check.js).
     var probe = total > 60 ? 60 : total;
     var fams = familyIndexes(cat, trig, probe);
     c4(total > 0 && fams.length > 0, cat.label + ": " + total + " " + trig + " codes, " + fams.length + " families in the first " + probe);
